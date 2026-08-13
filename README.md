@@ -370,13 +370,21 @@ runtime controls:
 - The decoder calls `grab()` for every source frame and `retrieve()` only for
   scheduled OCR frames, avoiding unnecessary full-HD BGR copies.
 
-The full 513-second run produced 50,780 records from 5,078 processed OCR frames:
-9.90 updates/second, 85.0 ms mean end-to-end latency, 136.2 ms p95 latency, and
-104 newest-frame queue drops. Native Windows is therefore just below the strict
-10 Hz / 100 ms-p95 acceptance target. PaddleX HPI is Linux-only for this setup;
-WSL2/Ubuntu with HPI remains the recommended deployment route when that strict
-target is mandatory.
+The full 513-second run over the 12 fields this config now defines produced
+60,624 records from 5,052 processed OCR frames: 9.84 updates/second, 92.7 ms
+mean end-to-end latency, 164.0 ms p95 latency, and 130 newest-frame queue drops.
+Native Windows is therefore below the strict 10 Hz / 100 ms-p95 acceptance
+target. PaddleX HPI is Linux-only for this setup; WSL2/Ubuntu with HPI remains
+the recommended deployment route when that strict target is mandatory.
+
+An earlier figure of 9.90 Hz and 136.2 ms p95 is quoted in some notes. It was
+measured when the config still had 10 fields (50,780 records over 5,078 frames
+is exactly 10 per frame), so it is not comparable: 12 fields is 20% more OCR
+work per frame and p95 rose 20.4%, which accounts for the whole difference.
 
 These timing numbers are measured. Accuracy is not claimed from format validity:
 the delivery probe passed 79/80 sampled ROIs, but a manually labeled 1,000-crop
 validation set is still required before claiming the 97% exact-field target.
+Crops for that set are exported at `output/validation/` (996 images across the
+12 fields) and need their `expected` column filled in; rows for the `timestamp`
+field can be left blank because it is derived from source time, not recognized.
