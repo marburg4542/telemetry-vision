@@ -85,6 +85,38 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(validate_text("-2496", field).value, -24.96)
         self.assertEqual(validate_text("-3.6", field).value, -3.6)
 
+    def test_missing_decimal_point_is_resolved_only_on_evidence(self):
+        """A wrong guess here is a 10x error, so ambiguity must fail the read.
+
+        Every case below was taken from the 25,095 fixed-precision reads in
+        output/real/telemetry-9.78hz.jsonl.
+        """
+        angle = FieldConfig(
+            field_id="sensor_angle_deg",
+            box=(0.0, 0.0, 0.2, 0.1),
+            allowed_chars="+-0123456789.",
+            regex=r"^[+-]?\d{1,3}\.\d{2}$",
+            data_type="float",
+            normalizer="numeric",
+            decimals=2,
+            min_value=-180,
+            max_value=180,
+        )
+
+        # The overlay prints 0.26, never 07.26, so the leading zero decides it.
+        self.assertEqual(validate_text("0726", angle).value, 0.26)
+        self.assertEqual(validate_text("=0726", angle).value, -0.26)
+        # 527.27 is outside the field's range, so only 52.27 survives.
+        self.assertEqual(validate_text("52727", angle).value, 52.27)
+        # 17.50 and 1.50 are both well-formed and in range: refuse to choose.
+        for ambiguous in ("1750", "-2784", "8789"):
+            result = validate_text(ambiguous, angle)
+            self.assertFalse(result.valid, ambiguous)
+            self.assertIsNone(result.value, ambiguous)
+        # A digit other than 7 at the boundary was never ambiguous.
+        self.assertEqual(validate_text("-2496", angle).value, -24.96)
+        self.assertEqual(validate_text("1234", angle).value, 12.34)
+
     def test_numeric_normalizer_recovers_missing_altitude_decimal(self):
         field = FieldConfig(
             field_id="altitude",

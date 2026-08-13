@@ -92,14 +92,14 @@ def _normalize_for_field(text: str, config: FieldConfig) -> str:
                 signed_digits = re.fullmatch(r"([+-]?)(\d+)", cleaned)
                 if signed_digits:
                     sign, digits = signed_digits.groups()
-                    decimal_index = len(digits) - config.decimals - 1
-                    if decimal_index >= 0 and digits[decimal_index] == "7":
-                        cleaned = (
-                            sign
-                            + digits[:decimal_index]
-                            + "."
-                            + digits[decimal_index + 1 :]
-                        )
+                    if len(digits) > config.decimals:
+                        resolved = _resolve_missing_point(sign, digits, config)
+                        if resolved is None:
+                            # Both readings are plausible and guessing would be a
+                            # 10x error. Fail this frame instead; the temporal
+                            # layer keeps the last confirmed value.
+                            return text
+                        cleaned = resolved
         match = re.search(r"[+-]?\d+(?:\.\d+)?", cleaned)
         if not match:
             return text
@@ -111,7 +111,9 @@ def _normalize_for_field(text: str, config: FieldConfig) -> str:
                 numeric = sign + digits[: -config.decimals] + "." + digits[-config.decimals :]
         if config.decimals is not None and "." in numeric:
             whole, fraction = numeric.split(".", 1)
-            if len(fraction) > config.decimals:
+            if config.decimals == 0:
+                numeric = whole
+            elif len(fraction) > config.decimals:
                 numeric = whole + "." + fraction[: config.decimals]
             elif len(fraction) < config.decimals:
                 numeric = whole + "." + fraction.ljust(config.decimals, "0")
@@ -148,6 +150,42 @@ def _normalize_for_field(text: str, config: FieldConfig) -> str:
             seconds += "." + seconds_fraction
         return f'{degrees}°{minutes:02d}\'{seconds}"'
     return text
+
+
+def _resolve_missing_point(sign: str, digits: str, config: FieldConfig) -> str | None:
+    """Place the decimal point in a fixed-precision read that lost it.
+
+    Two readings compete. Either OCR dropped the point outright, or it decoded
+    the point as a "7" - a repeated confusion in this OSD font. They differ by a
+    factor of ten, so the choice is decided on evidence only:
+
+    * a leading zero in the integer part rules a reading out, because the
+      overlay prints `0.26`, never `07.26`
+    * a reading that fails the field's regex or range rules itself out
+
+    When both survive, the frame is genuinely ambiguous and None is returned so
+    the caller can reject the read rather than emit a coin flip.
+    """
+    decimals = config.decimals or 0
+    split = len(digits) - decimals
+    plain = f"{sign}{digits[:split]}.{digits[split:]}"
+    if digits[split - 1] != "7" or split < 2:
+        return plain
+    seven = f"{sign}{digits[: split - 1]}.{digits[split:]}"
+    plain_ok = _is_plausible_reading(plain, config)
+    seven_ok = _is_plausible_reading(seven, config)
+    if plain_ok and seven_ok:
+        return None
+    if seven_ok:
+        return seven
+    return plain
+
+
+def _is_plausible_reading(candidate: str, config: FieldConfig) -> bool:
+    whole = candidate.lstrip("+-").split(".", 1)[0]
+    if len(whole) > 1 and whole.startswith("0"):
+        return False
+    return _validate_candidate(candidate, candidate, config, corrected=False).valid
 
 
 def _validate_candidate(
