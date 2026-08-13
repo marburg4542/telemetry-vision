@@ -3,13 +3,13 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "telemetry-ocr"
-version = "0.3.3"
-description = "CPU-first real-time telemetry extraction from fixed video ROIs with PaddleOCR"
+name = "telemetry-vision"
+version = "0.4.0"
+description = "Telemetry OCR and vehicle detection for drone video: one toolchain from dataset to realtime overlay"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = {text = "MIT"}
-authors = [{name = "Telemetry OCR contributors"}]
+authors = [{name = "Telemetry Vision contributors"}]
 dependencies = [
   "numpy>=1.26,<3",
   "opencv-contrib-python==4.10.0.84",
@@ -27,11 +27,19 @@ ai = [
   # while Ultralytics declares the standard distribution.
   "opencv-python==4.10.0.84",
 ]
+# The Thai PDF report shapes its text in headless Chrome; ReportLab only
+# stamps the page numbers, which are digits and therefore safe.
+report = ["pypdf>=4,<7", "reportlab>=4,<5"]
 test = ["pytest>=8,<9", "pytest-cov>=5,<7"]
 lint = ["ruff>=0.6,<1", "mypy>=1.11,<2", "types-PyYAML>=6,<7"]
 
 [project.scripts]
+# Two entry points, one distribution. `telemetry-ocr` must never import
+# torch: PaddlePaddle and PyTorch each bundle cuDNN 9 and on Windows the
+# second one loaded fails with WinError 127, so the detection work either
+# runs in a spawn child of the OCR server or under `vision-lab`.
 telemetry-ocr = "telemetry_ocr.cli:main"
+vision-lab = "vision_lab.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -56,6 +64,8 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py310"
 src = ["src", "tests"]
+# Colab cell scripts use IPython `!` syntax and are not importable Python.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
@@ -70,7 +80,7 @@ ignore = [
 ]
 
 [tool.mypy]
-files = ["src/telemetry_ocr"]
+files = ["src/telemetry_ocr", "src/vision_lab"]
 python_version = "3.10"
 # cv2, paddleocr, torch and ultralytics have no usable stubs here, and the
 # frame/image types they exchange are deliberately Any at the boundaries.
@@ -78,3 +88,10 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# The report is one long HTML builder made of small untyped string helpers.
+# Annotating them would add noise without catching anything the browser render
+# does not already show.
+module = "vision_lab.report"
+ignore_errors = true

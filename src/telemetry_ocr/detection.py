@@ -49,7 +49,24 @@ class Detector(Protocol):
     def metadata(self) -> dict[str, Any]: ...
 
 
-def _resolve_torch_device(torch: Any, requested: str | None) -> str:
+def configure_ultralytics_home() -> Path:
+    """Point Ultralytics at a writable settings directory inside the project.
+
+    Ultralytics otherwise drops a settings folder wherever the process happens
+    to start, which is how a stray empty `Ultralytics/` directory kept appearing
+    at the repository root. Both the OCR detection worker and the offline
+    evaluation CLI call this before importing the package.
+    """
+    configured_dir = os.environ.get("TELEMETRY_OCR_YOLO_CONFIG_DIR")
+    config_dir = (
+        Path(configured_dir) if configured_dir else Path.cwd() / "output" / "ultralytics-config"
+    )
+    config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["YOLO_CONFIG_DIR"] = str(config_dir)
+    return config_dir
+
+
+def resolve_torch_device(torch: Any, requested: str | None) -> str:
     """Pick the device YOLO runs on, failing loudly when CUDA was asked for and is absent.
 
     Silently falling back to the CPU would turn a misconfiguration into a
@@ -68,14 +85,7 @@ def _resolve_torch_device(torch: Any, requested: str | None) -> str:
 
 class UltralyticsDetector:
     def __init__(self, model_path: str | Path, device: str | None = None):
-        configured_dir = os.environ.get("TELEMETRY_OCR_YOLO_CONFIG_DIR")
-        config_dir = (
-            Path(configured_dir)
-            if configured_dir
-            else Path.cwd() / "output" / "ultralytics-config"
-        )
-        config_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["YOLO_CONFIG_DIR"] = str(config_dir)
+        configure_ultralytics_home()
         try:
             import torch
             from ultralytics import YOLO
@@ -85,7 +95,7 @@ class UltralyticsDetector:
                 "Ultralytics YOLO is not installed; run `pip install -e .[ai]`."
             ) from exc
 
-        self.device = _resolve_torch_device(torch, device)
+        self.device = resolve_torch_device(torch, device)
 
         # PaddleOCR remains the primary realtime workload. Limiting PyTorch to
         # two CPU threads prevents a large YOLO model from occupying every core

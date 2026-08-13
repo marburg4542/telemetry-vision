@@ -1,0 +1,33 @@
+# Where the project finds models, videos and datasets.
+#
+# Checkpoints and training metrics live inside the repository because tooling
+# needs them on every run and they are a few hundred megabytes in total. The
+# source videos, the extracted frames and the Roboflow dataset are ~8 GB and
+# stay outside it; `asset_root` is how the CLI finds them.
+#
+# Every path is either absolute or relative to the repository root, except the
+# entries under `asset_dirs`, which are relative to `asset_root`.
+version: 1
+
+# Overridable with the TELEMETRY_VISION_ASSETS environment variable.
+asset_root: ../object_detection
+
+asset_dirs:
+  videos: data
+  frames: dataset_frames
+  dataset: car-detection-3
+  detection_runs: video_results
+
+# Short names accepted anywhere a checkpoint is expected, so that commands do
+# not carry six-segment paths. `vision-lab models` prints this table.
+models:
+  best50: models/yolo/best.pt
+  best01: models/yolo/best01.pt
+  yolov8n: models/yolo/yolov8n.pt
+  run4: runs/visdrone_custom_4th/weights/best.pt
+  run6: runs/visdrone_custom_6th/weights/best.pt
+  run7: runs/visdrone_custom_7th/weights/best.pt
+
+# best50 is the 50-epoch checkpoint. It is the default because it is the only
+# one measured to return detections on the target footage; see README.
+default_model: best50

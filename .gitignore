@@ -1,15 +1,50 @@
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .venv/
 .venv-*/
 venv/
-output/
-models/
-*.jsonl
-*.csv
-!examples/*.csv
 
+# --- Generated output ---
+output/
+
+# --- Model weights ---
+# Hundreds of megabytes per checkpoint. They live in models/ and runs/*/weights
+# on disk and are listed in configs/paths.yaml, but git never carries them.
+models/
+*.pt
+*.onnx
+*.engine
+
+# --- Training-run artefacts ---
+# The curves, confusion matrices and results.csv of each run ARE tracked: they
+# are the record of what was trained and the report renders from them.
+runs/*/weights/
+
+# --- Media and datasets ---
+# Roughly 8 GB, kept outside the repository at configs/paths.yaml `asset_root`.
+data/
+dataset_frames/
+datasets/
+car-detection-3/
+video_results/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# --- OCR results ---
+# No blanket *.csv rule: it would swallow runs/*/results.csv, the per-epoch
+# training log that has to stay in the repository. OCR writes into output/,
+# which is ignored above.
+*.jsonl
+telemetry*.csv
+
+# --- Empty directory Ultralytics drops when YOLO_CONFIG_DIR is unset ---
+Ultralytics/

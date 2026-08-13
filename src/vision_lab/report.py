@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 r"""สร้างรายงาน PDF ภาษาไทย อธิบายหลักการและทฤษฎีของโปรเจกต์ YOLOv8 vehicle detection
 
 วิธีใช้:
@@ -25,13 +24,15 @@ import base64
 import io
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
-RUN6 = PROJECT / "visdrone_custom_6th"          # โฟลเดอร์ผลการเทรนที่ใช้ดึงภาพประกอบ
-OUT = PROJECT / "output" / "pdf" / "YOLOv8_Theory_and_Dataset_Guide_TH.pdf"
+from telemetry_ocr.errors import DependencyError
+
+from .paths import ProjectPaths
+
+DEFAULT_RUN_NAME = "visdrone_custom_6th"   # รอบเทรนที่ใช้ดึงภาพประกอบ
+DEFAULT_PDF_NAME = "YOLOv8_Theory_and_Dataset_Guide_TH.pdf"
 
 BROWSER_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -49,7 +50,7 @@ def find_browser() -> str:
         found = shutil.which(name)
         if found:
             return found
-    sys.exit("ERROR: ไม่พบ Chrome หรือ Edge ในเครื่อง จำเป็นต้องมีเพื่อสร้าง PDF")
+    raise DependencyError("ไม่พบ Chrome หรือ Edge ในเครื่อง จำเป็นต้องมีเพื่อสร้าง PDF")
 
 
 # ======================================================================
@@ -81,7 +82,7 @@ def formula(t):
 
 
 def note(title, lines, kind="info"):
-    body = "".join(f"<p>{l}</p>" for l in lines)
+    body = "".join(f"<p>{line}</p>" for line in lines)
     return f'<div class="note {kind}"><div class="note-title">{title}</div>{body}</div>'
 
 
@@ -215,7 +216,7 @@ figcaption { font-size: 9pt; color: #5b6478; margin-top: 6px; }
 # ======================================================================
 # เนื้อหา
 # ======================================================================
-def build_html() -> str:
+def build_html(run_dir: Path) -> str:
     s = []
 
     # ---------------- COVER ----------------
@@ -223,7 +224,7 @@ def build_html() -> str:
     s.append('<div class="cover">')
     s.append('<h1>คู่มืออธิบายหลักการและทฤษฎี</h1>')
     s.append('<div class="sub">ระบบตรวจจับยานพาหนะจากภาพมุมสูงด้วย YOLOv8</div>')
-    s.append(figure(RUN6 / "val_batch0_pred.jpg",
+    s.append(figure(run_dir / "val_batch0_pred.jpg",
                     "ตัวอย่างผลการทำนายบนชุด Validation จากโมเดลรอบที่ 6", width="62%"))
     s.append(table([], [
         ["โมเดล", "YOLOv8m (fine-tune จาก yolov8m-visdrone)"],
@@ -252,7 +253,8 @@ def build_html() -> str:
     s.append('</div>')
     s.append(note("เอกสารนี้อ้างอิงจากอะไร", [
         "ตัวเลขทั้งหมดในเอกสารนี้ดึงมาจากไฟล์จริงของรอบเทรนที่ 6 ได้แก่ <b>args.yaml</b> "
-        "(ค่าพารามิเตอร์ที่ใช้จริง), <b>results.csv</b> (ค่าทุก epoch) และ log สรุปผลตอน validate ด้วย best.pt",
+        "(ค่าพารามิเตอร์ที่ใช้จริง), <b>results.csv</b> (ค่าทุก epoch) "
+        "และ log สรุปผลตอน validate ด้วย best.pt",
         "ส่วนที่เป็นทฤษฎีอ้างอิงจากซอร์สโค้ดของ Ultralytics เวอร์ชัน 8.0.239 ที่ติดตั้งอยู่จริง "
         "จึงตรงกับพฤติกรรมของโค้ดที่รัน ไม่ใช่ค่าทั่วไปจากเอกสารภายนอก",
     ]))
@@ -503,7 +505,7 @@ def build_html() -> str:
                "เพื่อให้โมเดลได้ปรับตัวกลับสู่ภาพเดี่ยวปกติก่อนที่จะถูกนำไปใช้งานจริง "
                "เปรียบเหมือนนักกีฬาที่ซ้อมหนักด้วยอุปกรณ์ถ่วงน้ำหนัก "
                "แล้วถอดออกก่อนแข่งจริงเพื่อปรับความรู้สึกให้เข้าที่"))
-    s.append(figure(RUN6 / "train_batch0.jpg",
+    s.append(figure(run_dir / "train_batch0.jpg",
                     "ตัวอย่างภาพเทรนที่ผ่าน Mosaic แล้ว จะเห็นว่าหนึ่งภาพประกอบจากหลายฉาก "
                     "และมีการหมุนภาพจาก degrees=180", width="88%"))
     s.append(page_break())
@@ -675,7 +677,7 @@ def build_html() -> str:
          "<b>เข้มงวดมาก</b> — ที่เกณฑ์ 0.95 กรอบต้องทับกันเกือบสนิท "
          "จึงวัดว่า 'วางกรอบได้แม่นยำแค่ไหน' ค่านี้จะต่ำกว่า mAP50 เสมอ"],
     ], widths=["16%", "42%", "42%"]))
-    s.append(figure(RUN6 / "PR_curve.png",
+    s.append(figure(run_dir / "PR_curve.png",
                     "กราฟ Precision-Recall ของรอบที่ 6 พื้นที่ใต้เส้นแต่ละเส้นคือค่า AP ของคลาสนั้น",
                     width="72%"))
     s.append(h2("7.4 ประเด็นสำคัญที่สุด: mAP เป็นค่าเฉลี่ยแบบให้น้ำหนักเท่ากันทุกคลาส"))
@@ -711,7 +713,7 @@ def build_html() -> str:
                "การคลาดเคลื่อนของกรอบเพียงไม่กี่พิกเซลส่งผลต่อค่า IoU มากกว่าวัตถุขนาดใหญ่"
                "อย่างมีนัยสำคัญ ประการที่สองคือจำนวนตัวอย่างที่ยังน้อย "
                "ทำให้โมเดลยังเรียนรู้ขอบเขตที่แน่นอนของวัตถุประเภทนี้ได้ไม่ดีพอ"))
-    s.append(figure(RUN6 / "results.png",
+    s.append(figure(run_dir / "results.png",
                     "กราฟการเทรนทั้ง 100 epoch ค่า loss ทั้งฝั่ง train และ validation "
                     "ลดลงสอดคล้องกันตลอด แสดงว่าไม่เกิด overfitting", width="100%"))
     s.append(h2("8.3 การเปรียบเทียบกับรอบก่อนหน้า และข้อควรระวัง"))
@@ -740,7 +742,7 @@ def build_html() -> str:
                "วิธีเดียวที่จะตัดสินได้อย่างเป็นธรรมคือ<b>นำทั้งสองโมเดลไปรันกับวิดีโอชุดเดียวกัน</b> "
                "แล้วเปรียบเทียบจำนวนการตรวจจับแต่ละคลาส โดยเฉพาะ motorcycle "
                "ซึ่งเป็นเป้าหมายหลักของการปรับปรุงครั้งนี้"))
-    s.append(figure(RUN6 / "confusion_matrix_normalized.png",
+    s.append(figure(run_dir / "confusion_matrix_normalized.png",
                     "Confusion Matrix แบบ normalize แสดงสัดส่วนการทำนายถูกและสับสนระหว่างคลาส",
                     width="76%"))
     s.append(page_break())
@@ -877,7 +879,7 @@ def html_to_pdf(html: str, out_pdf: Path) -> None:
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         if not raw_pdf.is_file():
-            sys.exit(f"ERROR: เบราว์เซอร์สร้าง PDF ไม่สำเร็จ\n{r.stdout}\n{r.stderr}")
+            raise DependencyError(f"เบราว์เซอร์สร้าง PDF ไม่สำเร็จ\n{r.stdout}\n{r.stderr}")
         stamp_page_numbers(raw_pdf, out_pdf)
 
 
@@ -909,7 +911,20 @@ def stamp_page_numbers(src: Path, dst: Path) -> None:
         writer.write(f)
 
 
-if __name__ == "__main__":
-    html_to_pdf(build_html(), OUT)
-    print(f"OK -> {OUT}")
-    print(f"size = {OUT.stat().st_size / 1024:.0f} KB")
+def build_report(
+    paths: ProjectPaths,
+    *,
+    output: Path | None = None,
+    run_name: str | None = None,
+) -> Path:
+    """สร้าง PDF อธิบายทฤษฎี โดยดึงภาพประกอบจากโฟลเดอร์ผลการเทรนใน runs/"""
+    runs_root = paths.root / "runs"
+    run_dir = runs_root / (run_name or DEFAULT_RUN_NAME)
+    if not run_dir.is_dir():
+        available = ", ".join(sorted(d.name for d in runs_root.glob("*") if d.is_dir()))
+        raise DependencyError(
+            f"ไม่พบโฟลเดอร์ผลการเทรน: {run_dir}\nที่มีอยู่: {available or 'ไม่มี'}"
+        )
+    destination = output or paths.output_dir("pdf") / DEFAULT_PDF_NAME
+    html_to_pdf(build_html(run_dir), destination)
+    return destination
