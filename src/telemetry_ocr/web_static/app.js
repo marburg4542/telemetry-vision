@@ -200,13 +200,21 @@ function applyDetectionModelState(payload) {
 
   if (workerStatus === "ready") {
     stopModelStatusPolling();
+    state.detectionTrainedImageSize = Number(payload.trained_image_size) || null;
+    state.detectionDevice = String(payload.device || "");
+    adoptTrainedImageSize();
     const classes = Array.isArray(payload.classes) ? payload.classes.join(", ") : "";
     const training = [
       payload.architecture,
       payload.epochs ? `${payload.epochs} epochs` : "",
       payload.trained_image_size ? `trained ${payload.trained_image_size}px` : "",
     ].filter(Boolean).join(" · ");
-    setModelStatus(`BoT-SORT พร้อมใช้งาน · ${classes || "โหลด class labels แล้ว"}${training ? ` · ${training}` : ""}`);
+    const mismatch = imageSizeMismatchWarning();
+    setModelStatus(
+      `BoT-SORT พร้อมใช้งาน · ${classes || "โหลด class labels แล้ว"}${training ? ` · ${training}` : ""}`
+      + (mismatch ? ` · ${mismatch}` : ""),
+      Boolean(mismatch),
+    );
   } else if (workerStatus === "loading") {
     setModelStatus(`กำลังเริ่ม Detection worker สำหรับ ${payload.filename || "โมเดล"}…`);
     scheduleModelStatusPolling();
@@ -223,6 +231,51 @@ function applyDetectionModelState(payload) {
     setModelStatus("เลือกไฟล์ best.pt เพื่อวาดกรอบตรวจจับทับวิดีโอ");
     resetDetectionFrame();
   }
+}
+
+async function applyImageSizeChange() {
+  ++state.detectionGeneration;
+  state.detectionSequence = 0;
+  await resetDetectionTracker();
+  if (state.detectorLoaded && ui.video.readyState >= 2) submitDetectionFrame(true);
+}
+
+function adoptTrainedImageSize() {
+  const trained = state.detectionTrainedImageSize;
+  if (!trained) return;
+
+  // Always make the trained size selectable, even when it is not one of the
+  // three the page ships with.
+  const options = Array.from(ui.modelImageSize.options);
+  if (!options.some((option) => Number(option.value) === trained)) {
+    const option = document.createElement("option");
+    option.value = String(trained);
+    option.textContent = `${trained} px`;
+    const insertBefore = options.find((candidate) => Number(candidate.value) > trained);
+    ui.modelImageSize.insertBefore(option, insertBefore || null);
+  }
+
+  if (state.detectionImageSizeTouched) return;
+
+  // Running below the trained size costs small-object accuracy, but running a
+  // 960 px model on the CPU costs well over a second per frame. Cap the
+  // automatic choice where the README's own benchmark stops being usable.
+  const onCpu = state.detectionDevice.toLowerCase().startsWith("cpu");
+  const target = onCpu ? Math.min(trained, 640) : trained;
+  if (Number(ui.modelImageSize.value) === target) return;
+
+  ui.modelImageSize.value = String(target);
+  // Assigning .value does not fire "change", so the reset the handler would
+  // have done has to happen here. Not awaited, matching handleFile: the
+  // generation bump already invalidates anything in flight.
+  applyImageSizeChange();
+}
+
+function imageSizeMismatchWarning() {
+  const trained = state.detectionTrainedImageSize;
+  const selected = Number(ui.modelImageSize.value);
+  if (!trained || !selected || trained === selected) return "";
+  return `โมเดลเทรนที่ ${trained}px แต่กำลังรันที่ ${selected}px — ตำแหน่งกรอบจะคลาดเคลื่อน`;
 }
 
 function scheduleModelStatusPolling() {
@@ -609,9 +662,14 @@ function applyDetectionPayload(payload) {
     `transport ${formatMs(timing.transport_ms)}`,
     `wait ${formatMs(timing.harvest_ms)}`,
   ].join(" · ");
+  // Re-stated on every result: this line is rewritten continuously, so a
+  // warning shown once at load time would vanish the moment boxes arrive.
+  const mismatch = imageSizeMismatchWarning();
   setModelStatus(
     `${ui.modelName.textContent} · BoT-SORT · ${detectionSummary} · ${fps.toFixed(1)} FPS`
-    + ` · lag ${Math.round(lagMs)} ms · ${breakdown}`,
+    + ` · lag ${Math.round(lagMs)} ms · ${breakdown}`
+    + (mismatch ? ` · ${mismatch}` : ""),
+    Boolean(mismatch),
   );
 }
 
@@ -1035,10 +1093,9 @@ ui.modelConfidence.addEventListener("change", async () => {
   if (state.detectorLoaded && ui.video.readyState >= 2) submitDetectionFrame(true);
 });
 ui.modelImageSize.addEventListener("change", async () => {
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  await resetDetectionTracker();
-  if (state.detectorLoaded && ui.video.readyState >= 2) submitDetectionFrame(true);
+  // A deliberate choice wins over the trained-size default from then on.
+  state.detectionImageSizeTouched = true;
+  await applyImageSizeChange();
 });
 ui.restartWorkerButton.addEventListener("click", restartDetectionWorker);
 ui.clearModelButton.addEventListener("click", clearDetectionModel);
