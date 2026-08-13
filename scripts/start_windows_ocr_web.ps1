@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $PSScriptRoot
 $ocrExe = Join-Path $projectDir ".venv\Scripts\telemetry-ocr.exe"
-$ocrConfig = Join-Path $projectDir "output\real\roi_calibrated.yaml"
+$ocrConfig = Join-Path $projectDir "configs\roi_calibrated.yaml"
 $healthUrl = "http://127.0.0.1:8765/api/health"
 
 try {

@@ -207,7 +207,7 @@ Service worker เก็บเฉพาะหน้าแอปและ static 
 
 ```powershell
 .\.venv\Scripts\telemetry-ocr.exe web `
-  --config output\real\roi_calibrated.yaml `
+  --config configs\roi_calibrated.yaml `
   --open-browser
 ```
 
@@ -313,7 +313,9 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 ## Real-video CPU tuning (15-31-25-0.mp4)
 
 The calibrated configuration for the supplied 1920x1080 flight video is
-`output/real/roi_calibrated.yaml`. It uses the following runtime controls:
+`configs/roi_calibrated.yaml`. It is tracked in git because the Windows
+auto-start task depends on it and `output/` is ignored. It uses the following
+runtime controls:
 
 - `recognizer_workers: 2` with one CPU thread per independent Paddle model.
 - `derive_from_source_time: true` for the clock after its first valid OCR anchor.
