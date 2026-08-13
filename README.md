@@ -1,8 +1,13 @@
-# Telemetry OCR
+# Telemetry Vision
 
-ระบบถอด telemetry ที่อยู่ตำแหน่งคงที่ในวิดีโอด้วย PaddleOCR โดยเน้น CPU, latency ต่ำ และผลลัพธ์ที่นิ่งกว่าการ OCR เต็มเฟรมทุกเฟรม
+โปรเจกต์นี้ครอบคลุมงานวิดีโอโดรนสองด้านที่ใช้ข้อมูลชุดเดียวกัน:
 
-Pipeline หลักคือ:
+- **`telemetry-ocr`** — ถอด telemetry ที่อยู่ตำแหน่งคงที่ในวิดีโอด้วย PaddleOCR
+  เน้น latency ต่ำและผลลัพธ์ที่นิ่งกว่าการ OCR เต็มเฟรมทุกเฟรม
+- **`vision-lab`** — เตรียม dataset, ประเมินผล YOLO checkpoint กับวิดีโอทั้งไฟล์
+  และสร้างรายงาน ซึ่งเป็นฝั่งที่ **ผลิต** โมเดลที่ web UI ของ OCR เอาไปใช้วาดกรอบ
+
+Pipeline ของ OCR คือ:
 
 ```text
 video decoder (30 FPS)
@@ -16,6 +21,34 @@ video decoder (30 FPS)
 ```
 
 เพราะตำแหน่งข้อความคงที่ ระบบจะไม่โหลด text detection, document orientation หรือ unwarping model
+
+## โครงสร้างโปรเจกต์
+
+```text
+src/telemetry_ocr/     realtime OCR + web UI + detection worker (ห้าม import torch)
+src/vision_lab/        dataset, evaluation, report (import torch ได้)
+configs/               ROI configs และ paths.yaml
+configs/paths.yaml     ทะเบียน checkpoint และตำแหน่งของสื่อขนาดใหญ่
+models/yolo/           YOLO checkpoints (~150 MB, ไม่เข้า git)
+models/paddlex/        PaddleOCR model cache
+runs/                  ผลการเทรนแต่ละรอบ — curve, results.csv, args.yaml เข้า git; weights ไม่เข้า
+notebooks/             train_colab.py สำหรับรันบน Google Colab
+output/                ผลลัพธ์ทั้งหมดที่ generate ได้ใหม่
+```
+
+วิดีโอต้นฉบับ, เฟรมที่สกัดแล้วและ Roboflow dataset รวมกันราว 8 GB จึงไม่ได้อยู่ในโปรเจกต์
+แต่อยู่ที่ `asset_root` ใน [configs/paths.yaml](configs/paths.yaml) ซึ่งชี้ไปที่
+`../object_detection` ตามเดิม ย้ายที่เก็บได้โดยแก้ไฟล์นั้นหรือตั้ง environment variable
+`TELEMETRY_VISION_ASSETS`
+
+ตรวจว่าเครื่องนี้เห็นอะไรบ้างด้วยคำสั่งเดียว:
+
+```powershell
+.\.venv-cuda\Scripts\vision-lab.exe check
+```
+
+คำสั่งนี้รายงานทั้ง torch/CUDA, paddle/CUDA, checkpoint ที่มีจริงบนดิสก์ และโฟลเดอร์สื่อที่หาเจอ
+โดย probe paddle ใน child process เพื่อไม่ให้ cuDNN ของสองฝั่งชนกันในตัว diagnostic เอง
 
 ## ความต้องการระบบ
 
@@ -39,7 +72,7 @@ wsl --install -d Ubuntu-24.04
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-venv
-cd /mnt/c/Users/Lenovo/Documents/ChatGPT/ocr
+cd /mnt/c/Users/Lenovo/Documents/Personal_Projects/telemetry-vision
 python3 --version  # ต้องอยู่ในช่วง 3.10–3.12
 python3 -m venv .venv
 source .venv/bin/activate
@@ -273,13 +306,13 @@ Service worker เก็บเฉพาะหน้าแอปและ static 
 ### วาดกรอบจากโมเดล YOLO บนวิดีโอ
 
 ในแผง **AI ANNOTATION** กด **Browse .pt** แล้วเลือก Ultralytics YOLO checkpoint เช่น
-`object_detection\best.pt` จาก Explorer ระบบจะตอบรับการอัปโหลดทันทีและแสดง
+`models\yolo\best.pt` จาก Explorer ระบบจะตอบรับการอัปโหลดทันทีและแสดง
 `loading` ระหว่าง child process โหลดโมเดล เมื่อสถานะเป็น `ready` จึงเริ่มส่งเฟรมและวาดกรอบ
 ทับบนวิดีโอต้นฉบับ โดยไม่แก้ไขไฟล์วิดีโอจริง
 
-จากการทดสอบกับ `15-31-25-0.mp4` checkpoint `object_detection\best.pt` รุ่น 50 epochs
+จากการทดสอบกับ `15-31-25-0.mp4` checkpoint `models\yolo\best.pt` (ชื่อย่อ `best50`) รุ่น 50 epochs
 ตรวจพบวัตถุที่ค่าเริ่มต้น `0.45` และรักษา Track ID ต่อเนื่องได้ ส่วน
-`visdrone_custom_6th\weights\best.pt` รุ่น 100 epochs ไม่คืน detection แม้ลด confidence เป็น
+`runs\visdrone_custom_6th\weights\best.pt` (ชื่อย่อ `run6`) รุ่น 100 epochs ไม่คืน detection แม้ลด confidence เป็น
 `0.10` และสุ่มตรวจตลอดวิดีโอ จึงไม่แนะนำ checkpoint 100 epochs ตัวนั้นสำหรับวิดีโอนี้
 
 YOLO/BoT-SORT ทำงานใน Windows child process ที่สร้างด้วย `spawn` แยกจาก web server และ
@@ -341,6 +374,74 @@ header ที่ไม่อยู่ใน safelist บังคับให้
 จึงยังอยู่ภายในเกณฑ์แสดงกรอบ 750 ms ส่วน 640 px เมื่อมี OCR ทำงานพร้อมกันวัด lag ได้ประมาณ
 1.15 วินาทีและหน้าเว็บจะซ่อนกรอบเพื่อไม่ให้วาดผิดตำแหน่ง หากต้องการทั้ง 640 px และกรอบที่ลื่นจริง
 ควรพิจารณา GPU ในรุ่นถัดไป
+
+## ฝั่ง detection: เตรียมข้อมูล วัดผล และเทรน
+
+คำสั่งชุดนี้อยู่ใต้ `vision-lab` แยกจาก `telemetry-ocr` เพราะมันโหลด torch ตรงๆ ซึ่งเป็นสิ่งที่
+process ของ PaddleOCR ทำไม่ได้ (ดูหัวข้อ cuDNN ด้านบน) ทั้งสองคำสั่งติดตั้งมาจาก package
+เดียวกันและใช้ venv เดียวกันได้
+
+### ทะเบียน checkpoint
+
+`configs/paths.yaml` ตั้งชื่อย่อให้ checkpoint เพื่อไม่ต้องพิมพ์ path ยาวทุกครั้ง:
+
+```powershell
+.\.venv-cuda\Scripts\vision-lab.exe models
+```
+
+| ชื่อย่อ | ไฟล์ | หมายเหตุ |
+|---|---|---|
+| `best50` | `models/yolo/best.pt` | 50 epochs — ค่าเริ่มต้น เป็นตัวเดียวที่วัดแล้วคืน detection บนวิดีโอเป้าหมาย |
+| `best01` | `models/yolo/best01.pt` | |
+| `yolov8n` | `models/yolo/yolov8n.pt` | pretrained baseline |
+| `run4` / `run6` / `run7` | `runs/visdrone_custom_*/weights/best.pt` | ผลจากแต่ละรอบเทรน |
+
+ที่ไหนก็ตามที่รับ `--model` จะรับได้ทั้งชื่อย่อและ path เต็ม
+
+### สกัดเฟรมไปทำ dataset
+
+```powershell
+.\.venv-cuda\Scripts\vision-lab.exe extract-frames --interval 1.0
+```
+
+อ่านวิดีโอทุกไฟล์จากโฟลเดอร์ `videos` ของ asset root แล้วเขียน JPEG แยกโฟลเดอร์ตามชื่อวิดีโอ
+ลงในโฟลเดอร์ `frames` ระบุ `--source`/`--output` เพื่อ override ได้
+
+### วัดผล checkpoint กับวิดีโอทั้งไฟล์
+
+```powershell
+.\.venv-cuda\Scripts\vision-lab.exe evaluate 15-31-25-0.mp4 --track --imgsz 640
+```
+
+ชื่อไฟล์เปล่าๆ จะถูกค้นในโฟลเดอร์ `videos` ของ asset root แต่ละรอบเขียนโฟลเดอร์ใหม่ที่มี:
+
+- `frame_summary.csv` — จำนวน detection และ inference latency รายเฟรม แยกตามคลาส
+- `summary.json` — ค่า setting ที่ใช้จริง, throughput และจำนวน track ID ไม่ซ้ำเมื่อเปิด `--track`
+- วิดีโอที่วาดกรอบแล้ว (ปิดด้วย `--no-save-video`)
+
+`--imgsz` ควรตรงกับ image size ตอนเทรน มิฉะนั้นความแม่นยำจะลดลง ส่วน `--vid-stride 3`
+ช่วยให้สำรวจวิดีโอยาวได้เร็วขึ้น
+
+ต่างจาก overlay ใน web UI ตรงที่คำสั่งนี้เดินทั้งไฟล์แบบไม่ต้องทัน realtime จึงใช้ image size
+เต็มและได้ตัวเลขที่เทียบ checkpoint กันได้ ส่วน web UI ตอบคำถามว่ากรอบทันวิดีโอหรือไม่
+
+### เทรนรอบใหม่
+
+`notebooks/train_colab.py` เป็นสคริปต์แบบแบ่งเซลล์สำหรับ Google Colab (ใช้ syntax `!pip`
+จึงไม่ใช่ Python ที่ import ได้ และถูกกันออกจาก ruff/mypy ไว้แล้ว) เมื่อเทรนเสร็จให้ก๊อป
+โฟลเดอร์ผลลัพธ์มาไว้ใน `runs/` แล้วเพิ่มชื่อย่อลง `configs/paths.yaml`
+โดย curve และ `results.csv` จะเข้า git ส่วน `weights/` ไม่เข้า
+
+### รายงาน PDF ภาษาไทย
+
+```powershell
+.\.venv-cuda\Scripts\vision-lab.exe report --run visdrone_custom_6th
+```
+
+สร้าง PDF อธิบายทฤษฎีและ dataset โดยฝังภาพจากโฟลเดอร์ผลการเทรนที่ระบุ ต้องมี Chrome หรือ
+Edge ในเครื่องเพราะ ReportLab ไม่มี complex text shaping จึงวางวรรณยุกต์ไทยที่ซ้อนบนสระทับกัน
+(`ที่` กลายเป็น `ที`) ส่วน ReportLab ยังใช้ประทับเลขหน้าซึ่งเป็นตัวเลขล้วน ติดตั้ง dependency
+ด้วย `pip install -e ".[report]"`
 
 ## ทดสอบ
 
