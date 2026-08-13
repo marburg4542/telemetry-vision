@@ -88,6 +88,16 @@ class ParallelRecognizer:
         ]
         return [result for future in futures for result in future.result()]
 
+    def close(self) -> None:
+        self.executor.shutdown(wait=True)
+
+
+def close_recognizer(recognizer: Recognizer) -> None:
+    """Release whatever a recognizer holds open, if it holds anything."""
+    close = getattr(recognizer, "close", None)
+    if callable(close):
+        close()
+
 
 def create_recognizer(config: RuntimeConfig) -> Recognizer:
     if config.recognizer_workers == 1:

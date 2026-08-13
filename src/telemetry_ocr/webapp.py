@@ -43,6 +43,8 @@ GUARD_HEADER = "X-Telemetry-OCR"
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+SESSION_TTL_SECONDS = 3600.0
+
 
 def create_app(
     config: AppConfig,
@@ -65,12 +67,19 @@ def create_app(
     if not (assets / "index.html").is_file():
         raise FileNotFoundError(f"Web assets not found: {assets}")
 
+    if max_sessions < 1:
+        raise ValueError("max_sessions must be at least 1")
+
     # The browser UI deliberately omits the OSD clock. It is not telemetry and
-    # recognizing it consumes one ROI from every realtime batch.
+    # recognizing it consumes one ROI from every realtime batch. The clock is
+    # whichever field derives itself from source time, not whatever happens to
+    # be named "timestamp".
     web_config = clone_config(config)
-    web_config.fields = [field for field in web_config.fields if field.field_id != "timestamp"]
+    web_config.fields = [
+        field for field in web_config.fields if not field.derive_from_source_time
+    ]
     if not web_config.fields:
-        raise ValueError("The web UI needs at least one non-timestamp telemetry field")
+        raise ValueError("The web UI needs at least one field that is not the OSD clock")
 
     configured_origins = {origin.rstrip("/") for origin in allowed_origins if origin}
     configured_hosts = LOOPBACK_HOSTS | {
@@ -220,7 +229,12 @@ def create_app(
 
     async def create_session(_: Any) -> Any:
         sessions: dict[str, BrowserSession] = app[sessions_key]
-        if len(sessions) >= app[max_sessions_key]:
+        # A closed tab never says so, and each session pins a pipeline with its
+        # own temporal history, so idle ones are dropped on their own schedule.
+        cutoff = time.monotonic() - SESSION_TTL_SECONDS
+        for stale in [key for key, item in sessions.items() if item.last_access < cutoff]:
+            del sessions[stale]
+        if sessions and len(sessions) >= app[max_sessions_key]:
             oldest = min(sessions, key=lambda key: sessions[key].last_access)
             sessions.pop(oldest, None)
         session_id = uuid.uuid4().hex

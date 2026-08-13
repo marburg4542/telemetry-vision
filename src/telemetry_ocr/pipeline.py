@@ -228,7 +228,13 @@ class TelemetryPipeline:
         finally:
             stop_event.set()
             decoder.join()
-            writer.close()
+            try:
+                writer.close()
+            except Exception as exc:
+                # Reporting a flush failure instead of the error that stopped the
+                # run would hide the reason the run stopped.
+                if caught is None:
+                    caught = exc
         if caught is not None:
             raise caught
         if decoder.error is not None:
@@ -384,7 +390,12 @@ class TelemetryPipeline:
         return records, latency_ms
 
     def _set_time_anchor(self, field_id: str, text: str, source_time_ms: float) -> None:
-        hours, minutes, seconds = (int(part) for part in text.split(":"))
+        # validate_config only proves the field's regex accepts "00:00:00"; a
+        # wider regex can still deliver something else here.
+        parts = text.split(":")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts):
+            return
+        hours, minutes, seconds = (int(part) for part in parts)
         self._time_anchors[field_id] = (hours * 3600 + minutes * 60 + seconds, source_time_ms)
 
     def _derived_timestamp(self, field_id: str, source_time_ms: float) -> str:

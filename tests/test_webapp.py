@@ -120,6 +120,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                     allowed_chars="0123456789:",
                     regex=r"^\d{2}:\d{2}:\d{2}$",
                     data_type="string",
+                    derive_from_source_time=True,
                     profile="fast",
                 ),
                 FieldConfig(
@@ -185,6 +186,25 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
 
         reset = await self.client.post(f"/api/session/{session_id}/reset")
         self.assertEqual(reset.status, 200)
+
+    async def test_idle_sessions_are_evicted_before_the_cap_applies(self):
+        """A closed tab never says so, and each session pins its own pipeline."""
+        from telemetry_ocr import webapp
+
+        first = (await (await self.client.post("/api/session")).json())["session_id"]
+        original_ttl = webapp.SESSION_TTL_SECONDS
+        webapp.SESSION_TTL_SECONDS = -1.0
+        try:
+            second = (await (await self.client.post("/api/session")).json())["session_id"]
+        finally:
+            webapp.SESSION_TTL_SECONDS = original_ttl
+
+        self.assertEqual(
+            (await self.client.post(f"/api/session/{first}/reset")).status, 404
+        )
+        self.assertEqual(
+            (await self.client.post(f"/api/session/{second}/reset")).status, 200
+        )
 
     async def test_rejects_invalid_frame_and_unknown_session(self):
         missing = await self.client.post(

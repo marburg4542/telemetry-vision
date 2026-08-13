@@ -11,7 +11,7 @@ from typing import Any
 
 from .config import AppConfig, RecipeConfig, clone_config, dump_config
 from .errors import DependencyError, VideoError
-from .ocr import Recognizer
+from .ocr import Recognizer, close_recognizer
 from .pipeline import recognize_grouped
 from .preprocess import apply_recipe, default_calibration_recipes, extract_roi
 from .validation import validate_text
@@ -216,13 +216,18 @@ def benchmark_threads(
         runtime = clone_config(config).runtime
         runtime.cpu_threads = threads
         recognizer = recognizer_factory(runtime)
-        for _ in range(warmup):
-            recognize_grouped(recognizer, images, runtime.aspect_bucket_base)
-        timings = []
-        for _ in range(iterations):
-            started = time.perf_counter()
-            recognize_grouped(recognizer, images, runtime.aspect_bucket_base)
-            timings.append((time.perf_counter() - started) * 1000.0)
+        try:
+            for _ in range(warmup):
+                recognize_grouped(recognizer, images, runtime.aspect_bucket_base)
+            timings = []
+            for _ in range(iterations):
+                started = time.perf_counter()
+                recognize_grouped(recognizer, images, runtime.aspect_bucket_base)
+                timings.append((time.perf_counter() - started) * 1000.0)
+        finally:
+            # Each pass builds its own models and thread pool; holding every
+            # one of them open skews the later thread counts being measured.
+            close_recognizer(recognizer)
         ordered = sorted(timings)
         p95_index = min(len(ordered) - 1, max(0, round(0.95 * (len(ordered) - 1))))
         report["threads"][str(threads)] = {
