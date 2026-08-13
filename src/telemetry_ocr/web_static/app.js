@@ -145,8 +145,14 @@ function showToast(message) {
   state.toastTimer = window.setTimeout(() => { ui.toast.hidden = true; }, 5000);
 }
 
+// The server refuses mutating /api/ calls without this header, so that a
+// cross-origin request can never reach a handler as a CORS "simple" request.
+const API_GUARD_HEADER = "X-Telemetry-OCR";
+
 async function jsonFetch(url, options = {}) {
-  const response = await fetch(url, options);
+  const headers = new Headers(options.headers || {});
+  headers.set(API_GUARD_HEADER, "1");
+  const response = await fetch(url, { ...options, headers });
   let payload = {};
   try { payload = await response.json(); } catch (_) { /* response may be empty */ }
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);

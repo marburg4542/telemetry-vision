@@ -21,7 +21,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         from telemetry_ocr.config import AppConfig, FieldConfig, RuntimeConfig
         from telemetry_ocr.detection import Detection
         from telemetry_ocr.ocr import OCRResult
-        from telemetry_ocr.webapp import create_app
+        from telemetry_ocr.webapp import GUARD_HEADER, create_app
 
         class FakeRecognizer:
             def recognize(self, images):
@@ -132,23 +132,27 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.client = TestClient(
-            TestServer(
-                create_app(
-                    config,
-                    FakeRecognizer(),
-                    allowed_origins={"https://marburg4542.github.io"},
-                    detection_worker_factory=lambda: self.fake_detection_worker,
-                )
+        server = TestServer(
+            create_app(
+                config,
+                FakeRecognizer(),
+                allowed_origins={"https://marburg4542.github.io"},
+                detection_worker_factory=lambda: self.fake_detection_worker,
             )
         )
+        # The real page sends the guard header on every API call, so the default
+        # client does too. `raw_client` omits it to stand in for a foreign site.
+        self.client = TestClient(server, headers={GUARD_HEADER: "1"})
         await self.client.start_server()
+        self.raw_client = TestClient(server)
+        await self.raw_client.start_server()
         frame = np.zeros((90, 160, 3), dtype=np.uint8)
         ok, encoded = cv2.imencode(".jpg", frame)
         self.assertTrue(ok)
         self.jpeg = encoded.tobytes()
 
     async def asyncTearDown(self):
+        await self.raw_client.close()
         await self.client.close()
 
     async def test_page_health_config_and_frame_session(self):
@@ -345,7 +349,66 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get(
             "/api/health", headers={"Origin": "https://example.com"}
         )
+        self.assertEqual(response.status, 403)
         self.assertNotIn("Access-Control-Allow-Origin", response.headers)
+
+        allowed = await self.client.options(
+            "/api/detection/model",
+            headers={
+                "Origin": "https://marburg4542.github.io",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-telemetry-ocr",
+            },
+        )
+        self.assertIn(
+            "X-Telemetry-OCR", allowed.headers.get("Access-Control-Allow-Headers", "")
+        )
+
+    async def test_mutating_api_requires_the_guard_header(self):
+        """A cross-origin multipart upload must never reach the .pt loader.
+
+        multipart/form-data is CORS-safelisted, so without a header that forces a
+        preflight any page the user has open could POST a pickle-backed model.
+        """
+        form = self.FormData()
+        form.add_field(
+            "model", b"payload", filename="evil.pt", content_type="application/octet-stream"
+        )
+        blocked = await self.raw_client.post("/api/detection/model", data=form)
+        self.assertEqual(blocked.status, 403)
+        self.assertIn("X-Telemetry-OCR", (await blocked.json())["error"])
+        self.assertEqual(self.loaded_model_paths, [])
+
+        for path in ("/api/session", "/api/detection/reset?source_id=a&generation=0"):
+            self.assertEqual((await self.raw_client.post(path)).status, 403)
+        self.assertEqual(
+            (await self.raw_client.delete("/api/detection/model")).status, 403
+        )
+
+        # Read-only endpoints stay reachable without it.
+        self.assertEqual((await self.raw_client.get("/api/health")).status, 200)
+
+    async def test_rejects_a_disallowed_origin_before_the_handler_runs(self):
+        evil = {"Origin": "https://evil.example.com"}
+        created = await self.client.post("/api/session", headers=evil)
+        self.assertEqual(created.status, 403)
+        self.assertEqual((await created.json())["error"], "Origin is not allowed")
+
+        form = self.FormData()
+        form.add_field(
+            "model", b"payload", filename="evil.pt", content_type="application/octet-stream"
+        )
+        upload = await self.client.post("/api/detection/model", data=form, headers=evil)
+        self.assertEqual(upload.status, 403)
+        self.assertEqual(self.loaded_model_paths, [])
+
+    async def test_rejects_a_rebound_host_header(self):
+        for path in ("/", "/api/health"):
+            response = await self.client.get(path, headers={"Host": "attacker.example.com"})
+            self.assertEqual(response.status, 403)
+            self.assertEqual((await response.json())["error"], "Host is not allowed")
+
+        self.assertEqual((await self.client.get("/api/health")).status, 200)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,17 @@ class DetectionState:
     size_bytes: int = 0
 
 
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# A request carrying this header can never be a CORS-safelisted "simple" request,
+# so the browser must send a preflight the guard below can reject. Without it a
+# multipart POST from any site the user has open would reach /api/detection/model,
+# and that model is loaded by a pickle-based torch.load in the worker process.
+GUARD_HEADER = "X-Telemetry-OCR"
+
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
 def create_app(
     config: AppConfig,
     recognizer: Recognizer,
@@ -40,6 +51,7 @@ def create_app(
     static_dir: str | Path | None = None,
     max_sessions: int = 4,
     allowed_origins: Iterable[str] = (),
+    allowed_hosts: Iterable[str] = (),
     detection_worker_factory: Callable[[], DetectionWorker] | None = None,
 ) -> Any:
     try:
@@ -61,15 +73,44 @@ def create_app(
         raise ValueError("The web UI needs at least one non-timestamp telemetry field")
 
     configured_origins = {origin.rstrip("/") for origin in allowed_origins if origin}
+    configured_hosts = LOOPBACK_HOSTS | {
+        hostname for hostname in (_hostname(host) for host in allowed_hosts) if hostname
+    }
 
     def is_loopback_origin(origin: str) -> bool:
         try:
-            return urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}
+            return urlsplit(origin).hostname in LOOPBACK_HOSTS
         except ValueError:
             return False
 
     def is_allowed_origin(origin: str) -> bool:
         return is_loopback_origin(origin) or origin.rstrip("/") in configured_origins
+
+    def is_allowed_host(request: Any) -> bool:
+        return _hostname(request.headers.get("Host", "")) in configured_hosts
+
+    @web.middleware
+    async def guard_middleware(request: Any, handler: Any) -> Any:
+        """Reject requests a browser must not be able to make on the user's behalf.
+
+        The CORS middleware below only decides what a caller may *read*. Every
+        endpoint here has side effects that happen before that, so the request
+        itself has to be refused rather than merely hidden.
+        """
+        # A request whose Host is not this loopback server was routed here by a
+        # rebound DNS name, not by the user typing the address.
+        if not is_allowed_host(request):
+            return web.json_response({"error": "Host is not allowed"}, status=403)
+        if not request.path.startswith("/api/"):
+            return await handler(request)
+        origin = request.headers.get("Origin", "")
+        if request.method != "OPTIONS" and origin and not is_allowed_origin(origin):
+            return web.json_response({"error": "Origin is not allowed"}, status=403)
+        if request.method in _MUTATING_METHODS and GUARD_HEADER not in request.headers:
+            return web.json_response(
+                {"error": f"{GUARD_HEADER} header is required"}, status=403
+            )
+        return await handler(request)
 
     @web.middleware
     async def cors_middleware(request: Any, handler: Any) -> Any:
@@ -81,7 +122,7 @@ def create_app(
         if origin and request.path.startswith("/api/") and is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            response.headers["Access-Control-Allow-Headers"] = f"Content-Type, {GUARD_HEADER}"
             response.headers["Vary"] = "Origin"
             if request.headers.get("Access-Control-Request-Private-Network") == "true":
                 response.headers["Access-Control-Allow-Private-Network"] = "true"
@@ -108,7 +149,7 @@ def create_app(
     detection_state_key = web.AppKey("detection_state", DetectionState)
     app = web.Application(
         client_max_size=model_upload_limit,
-        middlewares=[cors_middleware, error_middleware],
+        middlewares=[guard_middleware, cors_middleware, error_middleware],
     )
     app[sessions_key] = {}
     app[ocr_lock_key] = asyncio.Lock()
@@ -430,7 +471,9 @@ def run_web_app(
         raise DependencyError(
             "The web UI requires aiohttp; install the project with `pip install -e .[web]`."
         ) from exc
-    app = create_app(config, recognizer, allowed_origins=allowed_origins)
+    app = create_app(
+        config, recognizer, allowed_origins=allowed_origins, allowed_hosts=(host,)
+    )
     url = f"http://{host}:{port}"
     if open_browser:
 
@@ -455,6 +498,17 @@ def _decode_image(payload: bytes) -> Any:
     if width > 4096 or height > 2160:
         raise ValueError("Frame dimensions exceed 4096x2160")
     return frame
+
+
+def _hostname(value: str) -> str:
+    """Extract the hostname from a `Host` header or a bare host string."""
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    try:
+        return (urlsplit(f"//{candidate}").hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def _source_id(value: str) -> str:

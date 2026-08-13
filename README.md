@@ -264,6 +264,24 @@ Detection API ที่หน้าเว็บใช้งานมี lifecycl
 - `POST /api/detection/reset` — reset tracker เมื่อ source หรือเวลาเล่นเปลี่ยน
 - `POST /api/detection/restart` — เริ่ม worker ใหม่หลัง process ล่ม
 
+### การป้องกัน API
+
+Server ตรวจสามชั้นก่อนเข้า handler เพราะทุก endpoint มี side effect ที่เกิดขึ้นก่อนที่
+CORS จะตัดสินว่าใครอ่าน response ได้:
+
+- `Host` ต้องเป็น `127.0.0.1`, `localhost`, `::1` หรือค่าที่ส่งผ่าน `--host` มิฉะนั้นตอบ `403`
+  เพื่อกัน DNS rebinding
+- request ที่มี `Origin` แต่ไม่ผ่าน allowlist ถูก **ปฏิเสธ** ที่ `403` ไม่ใช่แค่ไม่ใส่ CORS header
+- ทุก `POST`/`DELETE` ใต้ `/api/` ต้องมี header `X-Telemetry-OCR: 1`
+
+ข้อสุดท้ายสำคัญที่สุด: `multipart/form-data` เป็น CORS-safelisted content type จึงไม่เกิด
+preflight ถ้าไม่บังคับ header นี้ เว็บใดก็ตามที่ผู้ใช้เปิดอยู่จะ POST ไฟล์ `.pt` เข้า
+`/api/detection/model` ได้ และ worker โหลด checkpoint ด้วย pickle จึงเท่ากับรันโค้ดได้ทันที
+header ที่ไม่อยู่ใน safelist บังคับให้ browser ส่ง preflight ที่ guard ปฏิเสธได้
+
+หากเรียก API จาก web app อื่นต้องใส่ทั้ง `--allow-origin` ตอนเปิด server และส่ง header
+`X-Telemetry-OCR: 1` ทุก request ที่เปลี่ยนสถานะ
+
 ผลทดสอบพร้อม OCR บน laptop เครื่องนี้ด้วยโมเดล YOLOv8m 50 epochs ที่ 416 px ได้ประมาณ
 2.2 detection results/วินาที, inference ราว 0.3–0.45 วินาที และ result lag ราว 0.37–0.58 วินาที
 จึงยังอยู่ภายในเกณฑ์แสดงกรอบ 750 ms ส่วน 640 px เมื่อมี OCR ทำงานพร้อมกันวัด lag ได้ประมาณ
