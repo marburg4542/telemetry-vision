@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#070b0e" />
+    <meta name="application-name" content="Telemetry OCR" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Telemetry OCR — Flight Data Lab</title>
+    <meta
+      name="description"
+      content="เล่นวิดีโอต้นฉบับและอ่าน flight telemetry แบบ realtime ด้วย PaddleOCR บนเครื่อง"
+    />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/assets/icons/icon-192.png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/assets/icons/icon-192.png" />
+    <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true"><span></span></div>
+          <div>
+            <p class="eyebrow">FLIGHT DATA LAB</p>
+            <h1>Telemetry OCR</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button class="install-button" id="installAppButton" type="button" hidden>
+            ติดตั้งแอป
+          </button>
+          <div class="engine-status is-loading" id="engineStatus" role="status" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="engineStatusText">กำลังเตรียม OCR</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="video-column" aria-label="วิดีโอต้นฉบับ">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">SOURCE VIDEO</p>
+              <h2>วิดีโอต้นฉบับ</h2>
+            </div>
+            <label class="file-button" for="videoInput">
+              <span>เลือกวิดีโอ</span>
+              <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
+            </label>
+          </div>
+
+          <div class="video-stage" id="videoStage">
+            <video id="sourceVideo" controls playsinline preload="metadata"></video>
+            <canvas id="detectionOverlay" class="detection-overlay" aria-hidden="true"></canvas>
+            <div class="drop-state" id="dropState">
+              <div class="drop-orbit" aria-hidden="true"><span></span></div>
+              <h3>เลือกไฟล์เที่ยวบินเพื่อเริ่มทดสอบ</h3>
+              <p>รองรับไฟล์วิดีโอที่ browser เล่นได้ เช่น MP4, MOV และ WebM</p>
+              <button class="primary-button" id="chooseVideoButton" type="button">
+                Browse from Explorer
+              </button>
+              <small>หรือวางไฟล์วิดีโอลงในพื้นที่นี้</small>
+            </div>
+            <div class="processing-badge" id="processingBadge" hidden>
+              <span></span> OCR LIVE
+            </div>
+          </div>
+
+          <section class="ai-model-panel" aria-labelledby="aiModelHeading">
+            <div class="ai-model-heading">
+              <div>
+                <p class="eyebrow">AI ANNOTATION</p>
+                <h3 id="aiModelHeading">Ultralytics YOLO model</h3>
+              </div>
+              <label class="model-file-button" for="modelInput">
+                Browse .pt
+                <input id="modelInput" type="file" accept=".pt,application/octet-stream" />
+              </label>
+            </div>
+            <div class="ai-model-controls">
+              <label class="toggle-control compact-toggle">
+                <input id="detectionToggle" type="checkbox" checked disabled />
+                <span class="toggle-track"><span></span></span>
+                <span>
+                  <strong>Bounding boxes</strong>
+                  <small id="modelName">ยังไม่ได้เลือกโมเดล</small>
+                </span>
+              </label>
+              <label class="rate-control" for="detectionRate">
+                <span>Frame submit</span>
+                <select id="detectionRate" disabled>
+                  <option value="5">5 Hz</option>
+                  <option value="10" selected>10 Hz</option>
+                  <option value="15">15 Hz</option>
+                </select>
+              </label>
+              <label class="confidence-control" for="modelConfidence">
+                <span>Confidence</span>
+                <input id="modelConfidence" type="number" value="0.45" min="0.05" max="1" step="0.05" disabled />
+              </label>
+              <label class="rate-control" for="modelImageSize">
+                <span>Image size</span>
+                <select id="modelImageSize" disabled>
+                  <option value="416" selected>416 px</option>
+                  <option value="640">640 px</option>
+                  <option value="960">960 px</option>
+                </select>
+              </label>
+              <button class="ghost-button" id="restartWorkerButton" type="button" hidden>Restart worker</button>
+              <button class="ghost-button" id="clearModelButton" type="button" disabled>ล้างโมเดล</button>
+            </div>
+            <p class="model-status" id="modelStatus">เลือกไฟล์ `best.pt` เพื่อวาดกรอบตรวจจับทับวิดีโอ</p>
+            <div class="ai-runtime-metrics" aria-label="สถานะ Object Detection">
+              <span>Track <strong id="detectionFps">0.0</strong> FPS</span>
+              <span>Inference <strong id="detectionLatency">—</strong> ms</span>
+              <span>Lag <strong id="detectionLag">—</strong> ms</span>
+              <span>Dropped <strong id="detectionDropped">0</strong></span>
+            </div>
+            <p class="model-warning">โหลดเฉพาะไฟล์ `.pt` ที่เชื่อถือได้เท่านั้น โมเดลจะถูกเก็บชั่วคราวและลบเมื่อปิด OCR server</p>
+          </section>
+
+          <div class="source-meta">
+            <div class="file-summary">
+              <span class="file-glyph" aria-hidden="true">VID</span>
+              <div>
+                <strong id="fileName">ยังไม่ได้เลือกไฟล์</strong>
+                <span id="fileDetails">วิดีโอจะเล่นจากเครื่องโดยตรง</span>
+              </div>
+            </div>
+            <div class="playback-time">
+              <span id="currentTime">00:00.000</span>
+              <span class="time-separator">/</span>
+              <span id="durationTime">00:00.000</span>
+            </div>
+          </div>
+
+          <div class="control-strip">
+            <label class="toggle-control">
+              <input id="ocrToggle" type="checkbox" checked disabled />
+              <span class="toggle-track"><span></span></span>
+              <span>
+                <strong>Realtime OCR</strong>
+                <small>ประมวลผลเฉพาะ ROI ที่กำหนดไว้</small>
+              </span>
+            </label>
+            <label class="rate-control" for="rateSelect">
+              <span>Sampling rate</span>
+              <select id="rateSelect" disabled>
+                <option value="5">5 Hz</option>
+                <option value="8">8 Hz</option>
+                <option value="10" selected>10 Hz</option>
+                <option value="12">12 Hz</option>
+                <option value="15">15 Hz</option>
+              </select>
+            </label>
+            <button class="ghost-button" id="resetButton" type="button" disabled>Reset session</button>
+          </div>
+
+          <div class="privacy-note">
+            <span class="privacy-icon" aria-hidden="true">LOCAL</span>
+            <p><strong>Local processing</strong> ไฟล์เต็มไม่ถูกอัปโหลด — browser ส่งเฉพาะภาพบริเวณ ROI ของเฟรมที่กำลังเล่นไปยัง OCR server ในเครื่อง</p>
+          </div>
+        </section>
+
+        <aside class="telemetry-panel" aria-label="ผล OCR realtime">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">LIVE EXTRACTION</p>
+              <h2>Telemetry stream</h2>
+            </div>
+            <span class="record-count" id="recordCount">0 records</span>
+          </div>
+
+          <div class="metric-grid" aria-label="สถิติ OCR">
+            <div class="metric-card">
+              <span>OCR rate</span>
+              <strong id="ocrRate">0.0</strong>
+              <small>Hz</small>
+            </div>
+            <div class="metric-card">
+              <span>Latency</span>
+              <strong id="latency">—</strong>
+              <small>ms</small>
+            </div>
+            <div class="metric-card">
+              <span>Confirmed</span>
+              <strong id="confirmedRate">0</strong>
+              <small>%</small>
+            </div>
+          </div>
+
+          <div class="telemetry-list" id="telemetryList" aria-live="polite"></div>
+
+          <div class="panel-actions">
+            <button class="secondary-button" id="downloadJsonButton" type="button" disabled>
+              Download JSONL
+            </button>
+            <button class="secondary-button" id="downloadCsvButton" type="button" disabled>
+              Download CSV
+            </button>
+            <button class="text-button" id="clearLogButton" type="button" disabled>Clear log</button>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <canvas id="captureCanvas" hidden></canvas>
+    <canvas id="detectionCaptureCanvas" hidden></canvas>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+frame_index,field_id,expected
+0,speed,0.0
+0,rpm,850
+0,gear,N
+30,speed,12.5
+30,rpm,1400
+30,gear,1
+
