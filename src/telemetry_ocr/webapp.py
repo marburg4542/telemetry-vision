@@ -394,13 +394,16 @@ def create_app(
         worker_status = state.worker.status()
         latest = state.worker.latest()
         result_age_ms = None
+        timing = None
         if latest is not None:
             result_age_ms = max(0.0, source_time_ms - float(latest["source_time_ms"]))
+            latest, timing = _split_detection_timing(latest)
         payload = {
             "accepted": False,
             "worker": worker_status,
             "latest_result": latest,
             "result_age_ms": result_age_ms,
+            "timing": timing,
             "dropped_frames": int(worker_status.get("dropped_frames", 0)),
         }
         return payload, 200 if latest is not None else 202
@@ -570,3 +573,39 @@ def _non_negative_int(value: str, label: str) -> int:
     if parsed < 0:
         raise ValueError(f"{label} must be non-negative")
     return parsed
+
+
+def _split_detection_timing(result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Turn the worker's raw spans into a breakdown, and drop the raw clocks.
+
+    `enqueued_at` and `available_at` are readings of this machine's monotonic
+    clock. They mean nothing to a browser, so they are removed rather than
+    serialised; only the differences leave the process.
+    """
+    trimmed = dict(result)
+    available_at = trimmed.pop("available_at", None)
+    trimmed.pop("enqueued_at", None)
+    pipeline_ms = trimmed.pop("pipeline_ms", None)
+    worker_total_ms = trimmed.get("worker_total_ms")
+
+    transport_ms = None
+    if pipeline_ms is not None and worker_total_ms is not None:
+        # Everything the worker did not spend on the frame itself: queue wait
+        # plus both IPC hops.
+        transport_ms = max(0.0, float(pipeline_ms) - float(worker_total_ms))
+
+    timing = {
+        "decode_ms": trimmed.get("decode_ms"),
+        "track_ms": trimmed.get("track_ms"),
+        "worker_total_ms": worker_total_ms,
+        "pipeline_ms": pipeline_ms,
+        "transport_ms": transport_ms,
+        # How long a finished result sat here unread. This is the delivery
+        # delay the background pump exists to remove.
+        "harvest_ms": (
+            None
+            if available_at is None
+            else max(0.0, (time.perf_counter() - available_at) * 1000.0)
+        ),
+    }
+    return trimmed, timing

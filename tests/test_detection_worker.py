@@ -41,6 +41,12 @@ def _fake_worker(model_path, filename, tracker, frames, results):
                     "width": 640,
                     "height": 360,
                     "inference_ms": 5.0,
+                    "decode_ms": 1.0,
+                    "track_ms": 4.0,
+                    "worker_total_ms": 6.0,
+                    # Echoed back exactly as received; the parent's clock has no
+                    # meaning in this process.
+                    "enqueued_at": float(packet.get("enqueued_at", 0.0)),
                     "completed_at": time.time(),
                     "detections": [],
                 },
@@ -100,6 +106,50 @@ class DetectionWorkerQueueTests(unittest.TestCase):
                 self.assertEqual(worker.status()["status"], "stopped")
                 worker.restart()
                 self.assertEqual(_wait_for_status(worker, "ready")["status"], "ready")
+            finally:
+                worker.stop()
+
+    def test_drain_publishes_a_result_without_any_other_call(self):
+        """The background pump relies on drain() alone doing the collection.
+
+        Before it existed, a finished result waited in the IPC queue until some
+        HTTP request happened to call status(), latest() or submit() — which is
+        the delivery delay the pump removes. This guards that premise: nothing
+        here calls status() or latest() until after drain() has run.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory) / "best.pt"
+            model_path.write_bytes(b"fake")
+            worker = ProcessDetectionWorker(worker_target=_fake_worker)
+            try:
+                worker.start(model_path, "best.pt")
+                _wait_for_status(worker, "ready")
+                worker.reset("video-a", 1)
+                worker.submit(
+                    DetectionFrame(
+                        payload=b"jpeg",
+                        source_id="video-a",
+                        generation=1,
+                        sequence=4,
+                        source_time_ms=400.0,
+                        confidence=0.45,
+                        iou=0.45,
+                        image_size=640,
+                    )
+                )
+                deadline = time.monotonic() + 10.0
+                collected = None
+                while time.monotonic() < deadline:
+                    worker.drain()
+                    collected = worker._latest_result
+                    if collected is not None:
+                        break
+                    time.sleep(0.02)
+                self.assertIsNotNone(collected, "drain() never collected the result")
+                self.assertEqual(collected["sequence"], 4)
+                # The parent measures the round trip against its own clock.
+                self.assertGreaterEqual(collected["pipeline_ms"], 0.0)
+                self.assertIn("available_at", collected)
             finally:
                 worker.stop()
 

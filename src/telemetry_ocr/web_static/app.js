@@ -21,6 +21,8 @@ const ui = {
   detectionFps: $("detectionFps"),
   detectionLatency: $("detectionLatency"),
   detectionLag: $("detectionLag"),
+  detectionCapture: $("detectionCapture"),
+  detectionHarvest: $("detectionHarvest"),
   detectionDropped: $("detectionDropped"),
   restartWorkerButton: $("restartWorkerButton"),
   clearModelButton: $("clearModelButton"),
@@ -98,6 +100,11 @@ const state = {
   detectionRenderFrame: null,
   detectionSourceWidth: 0,
   detectionSourceHeight: 0,
+  detectionCaptureMs: null,
+  detectionPostMs: null,
+  detectionTrainedImageSize: null,
+  detectionDevice: "",
+  detectionImageSizeTouched: false,
 };
 
 const DETECTION_MAX_EXTRAPOLATION_MS = 250;
@@ -469,7 +476,9 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
   state.detectionInFlight = true;
   state.lastDetectionMs = sourceTimeMs;
   try {
+    const captureStarted = performance.now();
     const blob = await captureDetectionFrame();
+    state.detectionCaptureMs = performance.now() - captureStarted;
     const confidence = Math.min(1, Math.max(0.05, Number(ui.modelConfidence.value) || 0.45));
     const params = new URLSearchParams({
       source_id: state.detectionSourceId,
@@ -480,11 +489,13 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
       iou: "0.45",
       image_size: ui.modelImageSize.value,
     });
+    const postStarted = performance.now();
     const payload = await jsonFetch(`/api/detection/frame?${params}`, {
       method: "POST",
       headers: { "Content-Type": "image/jpeg" },
       body: blob,
     });
+    state.detectionPostMs = performance.now() - postStarted;
     if (generation !== state.detectionGeneration) return;
     applyDetectionPayload(payload);
     if (force || ui.video.paused) pollDetectionResult(sequence, generation);
@@ -525,9 +536,13 @@ function resetDetectionFrame() {
   state.detectionCompletions = [];
   state.detectionSourceWidth = 0;
   state.detectionSourceHeight = 0;
+  state.detectionCaptureMs = null;
+  state.detectionPostMs = null;
   ui.detectionFps.textContent = "0.0";
   ui.detectionLatency.textContent = "—";
   ui.detectionLag.textContent = "—";
+  ui.detectionCapture.textContent = "—";
+  ui.detectionHarvest.textContent = "—";
   drawDetections();
 }
 
@@ -571,9 +586,12 @@ function applyDetectionPayload(payload) {
     ? (state.detectionCompletions.length - 1) * 1000 / durationMs
     : 0;
   const lagMs = Math.max(0, ui.video.currentTime * 1000 - Number(result.source_time_ms));
+  const timing = payload.timing || {};
   ui.detectionFps.textContent = fps.toFixed(1);
   ui.detectionLatency.textContent = String(Math.round(Number(result.inference_ms) || 0));
   ui.detectionLag.textContent = String(Math.round(lagMs));
+  ui.detectionCapture.textContent = formatMs(state.detectionCaptureMs);
+  ui.detectionHarvest.textContent = formatMs(timing.harvest_ms);
   applyDetectionResult(result, completedNow);
   const objectCount = Array.isArray(result.detections) ? result.detections.length : 0;
   let detectionSummary = `ไม่พบวัตถุในเฟรมล่าสุดที่ confidence ${ui.modelConfidence.value}`;
@@ -582,7 +600,24 @@ function applyDetectionPayload(payload) {
   } else if (objectCount > 0) {
     detectionSummary = `พบ ${objectCount} วัตถุ`;
   }
-  setModelStatus(`${ui.modelName.textContent} · BoT-SORT · ${detectionSummary} · ${fps.toFixed(1)} FPS · lag ${Math.round(lagMs)} ms`);
+  // The breakdown has to reconcile with lag, which is the ground truth; it is
+  // the only way to tell where the delay actually lives.
+  const breakdown = [
+    `cap ${formatMs(state.detectionCaptureMs)}`,
+    `post ${formatMs(state.detectionPostMs)}`,
+    `infer ${formatMs(result.inference_ms)}`,
+    `transport ${formatMs(timing.transport_ms)}`,
+    `wait ${formatMs(timing.harvest_ms)}`,
+  ].join(" · ");
+  setModelStatus(
+    `${ui.modelName.textContent} · BoT-SORT · ${detectionSummary} · ${fps.toFixed(1)} FPS`
+    + ` · lag ${Math.round(lagMs)} ms · ${breakdown}`,
+  );
+}
+
+function formatMs(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(Math.round(number)) : "—";
 }
 
 function applyDetectionResult(result, completedNow) {

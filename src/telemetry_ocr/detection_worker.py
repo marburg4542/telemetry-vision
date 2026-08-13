@@ -43,6 +43,8 @@ class DetectionWorker(Protocol):
 
     def reset(self, source_id: str, generation: int) -> None: ...
 
+    def drain(self) -> None: ...
+
 
 class ProcessDetectionWorker:
     """Owns an Ultralytics model in an isolated spawn process.
@@ -164,6 +166,10 @@ class ProcessDetectionWorker:
         packet = asdict(frame)
         packet["kind"] = "frame"
         packet["reset_tracker"] = bool(frame.reset_tracker or self._pending_reset)
+        # Stamped in this process's clock and echoed back untouched by the
+        # worker, so the round trip can be measured without the two processes
+        # ever having to agree on an epoch.
+        packet["enqueued_at"] = time.perf_counter()
         dropped = put_latest(self._frames, packet)
         self._dropped_frames += dropped
         self._pending_reset = False
@@ -172,6 +178,16 @@ class ProcessDetectionWorker:
     def latest(self) -> dict[str, Any] | None:
         self._drain_results()
         return self._latest_result
+
+    def drain(self) -> None:
+        """Collect whatever the worker has published.
+
+        Public so that a background task can keep the IPC queue empty. Without
+        one, a finished result waits in the queue until the next HTTP request
+        happens to call status(), latest() or submit() — and the queue holds
+        only four, after which the worker silently discards the oldest.
+        """
+        self._drain_results()
 
     def reset(self, source_id: str, generation: int) -> None:
         self._active_source_id = source_id
@@ -209,6 +225,13 @@ class ProcessDetectionWorker:
                     and int(result.get("generation", -1)) == self._active_generation
                 ):
                     result["dropped_frames"] = self._dropped_frames
+                    # Both ends of this span were taken in this process, so the
+                    # echoed enqueued_at is comparable here and nowhere else.
+                    available_at = time.perf_counter()
+                    result["available_at"] = available_at
+                    result["pipeline_ms"] = (
+                        available_at - float(result.get("enqueued_at", available_at))
+                    ) * 1000.0
                     self._latest_result = result
                     self._error = None
 
@@ -285,6 +308,7 @@ def _worker_main(
             packet = frames.get(timeout=0.25)
         except queue.Empty:
             continue
+        dequeued_at = time.perf_counter()
         if packet.get("kind") == "shutdown":
             return
         if packet.get("kind") != "frame":
@@ -317,6 +341,7 @@ def _worker_main(
         started_at = time.perf_counter()
         try:
             frame = _decode_image(packet["payload"])
+            decoded_at = time.perf_counter()
             detections = detector.track(
                 frame,
                 confidence=options[0],
@@ -324,7 +349,12 @@ def _worker_main(
                 image_size=options[2],
                 tracker=tracker,
             )
-            inference_ms = (time.perf_counter() - started_at) * 1000.0
+            finished_at = time.perf_counter()
+            decode_ms = (decoded_at - started_at) * 1000.0
+            track_ms = (finished_at - decoded_at) * 1000.0
+            # Unchanged meaning so the status panel and the README timings still
+            # describe the same span; decode_ms and track_ms break it down.
+            inference_ms = (finished_at - started_at) * 1000.0
             _publish(
                 results,
                 {
@@ -337,6 +367,12 @@ def _worker_main(
                         "width": int(frame.shape[1]),
                         "height": int(frame.shape[0]),
                         "inference_ms": inference_ms,
+                        "decode_ms": decode_ms,
+                        "track_ms": track_ms,
+                        "worker_total_ms": (finished_at - dequeued_at) * 1000.0,
+                        # Opaque to this process: the parent's clock, echoed so
+                        # it can measure the full round trip on its own side.
+                        "enqueued_at": float(packet.get("enqueued_at", 0.0)),
                         "completed_at": time.time(),
                         "detections": [asdict(detection) for detection in detections],
                     },

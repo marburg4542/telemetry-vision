@@ -1,4 +1,5 @@
 import importlib.util
+import time
 import unittest
 from dataclasses import asdict
 
@@ -81,6 +82,14 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                     "width": 160,
                     "height": 90,
                     "inference_ms": 12.5,
+                    "decode_ms": 2.5,
+                    "track_ms": 10.0,
+                    "worker_total_ms": 14.0,
+                    # Monotonic readings of this machine's clock; the webapp has
+                    # to turn them into spans and drop them from the response.
+                    "enqueued_at": time.perf_counter() - 0.05,
+                    "available_at": time.perf_counter(),
+                    "pipeline_ms": 50.0,
                     "completed_at": 1.0,
                     "dropped_frames": worker_self.dropped_frames,
                     "detections": [
@@ -107,6 +116,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 worker_self.latest_result = None
                 worker_self.source_id = source_id
                 worker_self.generation = generation
+
+            def drain(worker_self):
+                worker_self.drain_calls = getattr(worker_self, "drain_calls", 0) + 1
 
         self.fake_detection_worker = FakeDetectionWorker()
 
@@ -298,6 +310,16 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(latest["detections"][0]["label"], "aircraft")
         self.assertEqual(latest["detections"][0]["track_id"], 7)
         self.assertAlmostEqual(latest["detections"][0]["confidence"], 0.91)
+
+        # Raw monotonic clock readings are meaningless off this machine, so the
+        # response carries only the differences.
+        self.assertNotIn("available_at", latest)
+        self.assertNotIn("enqueued_at", latest)
+        self.assertNotIn("pipeline_ms", latest)
+        timing = detection_payload["timing"]
+        self.assertAlmostEqual(timing["worker_total_ms"], 14.0)
+        self.assertAlmostEqual(timing["transport_ms"], 36.0)
+        self.assertGreaterEqual(timing["harvest_ms"], 0.0)
 
         latest_response = await self.client.get(
             "/api/detection/result?source_time_ms=650"
