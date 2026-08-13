@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import os
 import queue
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .detection import load_ultralytics_detector
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,11 +188,14 @@ class ProcessDetectionWorker:
                 self._metadata = dict(message.get("metadata") or {})
                 self._state = "ready"
                 self._error = None
+                _LOG.info("Detection worker ready: %s", self._metadata.get("classes"))
             elif kind == "fatal_error":
                 self._state = "error"
                 self._error = str(message.get("error") or "Detection worker failed")
+                _LOG.error("Detection worker failed to start: %s", self._error)
             elif kind == "frame_error":
                 self._error = str(message.get("error") or "Detection frame failed")
+                _LOG.warning("Detection frame failed: %s", self._error)
             elif kind == "result":
                 result = dict(message["result"])
                 if (
@@ -241,6 +247,12 @@ def _worker_main(
     results: Any,
 ) -> None:
     del filename
+    # A spawned process starts with no logging configuration, so anything this
+    # side reports would otherwise be discarded.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s yolo-worker %(message)s",
+    )
     cpu_threads = max(1, int(os.environ.get("TELEMETRY_OCR_YOLO_THREADS", "2")))
     os.environ.setdefault("OMP_NUM_THREADS", str(cpu_threads))
     os.environ.setdefault("MKL_NUM_THREADS", str(cpu_threads))
@@ -251,6 +263,7 @@ def _worker_main(
         detector = load_ultralytics_detector(model_path)
         _publish(results, {"kind": "ready", "metadata": detector.metadata()})
     except Exception as exc:
+        _LOG.exception("Cannot load the YOLO checkpoint")
         _publish(
             results,
             {"kind": "fatal_error", "error": f"{type(exc).__name__}: {exc}"},
@@ -328,6 +341,7 @@ def _worker_main(
             previous_source_time_ms = source_time_ms
             previous_options = options
         except Exception as exc:
+            _LOG.exception("Detection failed on sequence %s", packet.get("sequence"))
             _publish(
                 results,
                 {

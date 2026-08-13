@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 import time
 import uuid
@@ -32,6 +33,8 @@ class DetectionState:
     filename: str | None = None
     size_bytes: int = 0
 
+
+_LOG = logging.getLogger(__name__)
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
@@ -109,13 +112,23 @@ def create_app(
         # A request whose Host is not this loopback server was routed here by a
         # rebound DNS name, not by the user typing the address.
         if not is_allowed_host(request):
+            _LOG.warning(
+                "Refused %s %s carrying Host %r",
+                request.method,
+                request.path,
+                request.headers.get("Host", ""),
+            )
             return web.json_response({"error": "Host is not allowed"}, status=403)
         if not request.path.startswith("/api/"):
             return await handler(request)
         origin = request.headers.get("Origin", "")
         if request.method != "OPTIONS" and origin and not is_allowed_origin(origin):
+            _LOG.warning("Refused %s %s from origin %r", request.method, request.path, origin)
             return web.json_response({"error": "Origin is not allowed"}, status=403)
         if request.method in _MUTATING_METHODS and GUARD_HEADER not in request.headers:
+            _LOG.warning(
+                "Refused %s %s without %s", request.method, request.path, GUARD_HEADER
+            )
             return web.json_response(
                 {"error": f"{GUARD_HEADER} header is required"}, status=403
             )
@@ -144,8 +157,12 @@ def create_app(
         except web.HTTPException:
             raise
         except (DependencyError, TypeError, ValueError) as exc:
+            _LOG.warning("%s %s rejected: %s", request.method, request.path, exc)
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
+            # The client only receives the exception type, so without this the
+            # reason for a 500 is lost entirely.
+            _LOG.exception("%s %s failed", request.method, request.path)
             return web.json_response(
                 {"error": f"OCR request failed: {type(exc).__name__}"}, status=500
             )
@@ -490,6 +507,12 @@ def run_web_app(
         raise DependencyError(
             "The web UI requires aiohttp; install the project with `pip install -e .[web]`."
         ) from exc
+    # The scheduled task runs this hidden, so refusals and 500s need somewhere
+    # to go besides a dropped stderr.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     app = create_app(
         config, recognizer, allowed_origins=allowed_origins, allowed_hosts=(host,)
     )
