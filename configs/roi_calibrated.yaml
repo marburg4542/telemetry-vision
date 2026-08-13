@@ -138,7 +138,7 @@ fields:
   dms_degrees_digits: null
   dms_decimal_places: 2
   hemisphere: null
-  min_value: 0
+  min_value: 15
   max_value: 9999
   profile: fast
   max_delta_per_second: null
@@ -236,8 +236,8 @@ fields:
   dms_degrees_digits: null
   dms_decimal_places: 2
   hemisphere: null
-  min_value: -90
-  max_value: 90
+  min_value: -46
+  max_value: 46
   profile: fast
   max_delta_per_second: null
   padding: null

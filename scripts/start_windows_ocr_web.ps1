@@ -3,9 +3,14 @@ param()
 
 $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $PSScriptRoot
-$ocrExe = Join-Path $projectDir ".venv\Scripts\telemetry-ocr.exe"
-$ocrConfig = Join-Path $projectDir "configs\roi_calibrated.yaml"
 $healthUrl = "http://127.0.0.1:8765/api/health"
+
+# CUDA is roughly three times faster for OCR and seven for YOLO on this machine,
+# so it is preferred, but a CPU-only install still has to start.
+$candidates = @(
+    @{ Name = "CUDA"; Exe = ".venv-cuda\Scripts\telemetry-ocr.exe"; Config = "configs\roi_calibrated_cuda.yaml" },
+    @{ Name = "CPU";  Exe = ".venv\Scripts\telemetry-ocr.exe";      Config = "configs\roi_calibrated.yaml" }
+)
 $logDir = Join-Path $projectDir "output\logs"
 $logFile = Join-Path $logDir "ocr-web-autostart.log"
 
@@ -30,23 +35,31 @@ try {
     # Nothing is listening yet; start the local OCR web server below.
 }
 
-$missing = @()
-if (-not (Test-Path -LiteralPath $ocrExe)) {
-    $missing += "virtual environment executable: $ocrExe (create it with: py -3.12 -m venv .venv; .venv\Scripts\python.exe -m pip install -e `".[ocr,web,ai]`")"
-}
-if (-not (Test-Path -LiteralPath $ocrConfig)) {
-    $missing += "calibrated ROI config: $ocrConfig"
-}
-if ($missing.Count -gt 0) {
-    foreach ($item in $missing) {
-        Write-StartupLog "MISSING $item"
+$selected = $null
+foreach ($candidate in $candidates) {
+    $exe = Join-Path $projectDir $candidate.Exe
+    $config = Join-Path $projectDir $candidate.Config
+    if ((Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath $config)) {
+        $selected = @{ Name = $candidate.Name; Exe = $exe; Config = $config }
+        break
     }
-    Write-StartupLog "Startup aborted. Fix the items above, then run this script again."
+    Write-StartupLog "$($candidate.Name) build unavailable (need $exe and $config)"
+}
+
+if ($null -eq $selected) {
+    Write-StartupLog "MISSING every known build. Create one with:"
+    Write-StartupLog "  py -3.12 -m venv .venv-cuda"
+    Write-StartupLog "  .venv-cuda\Scripts\python.exe -m pip install paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+    Write-StartupLog "  .venv-cuda\Scripts\python.exe -m pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126"
+    Write-StartupLog "  .venv-cuda\Scripts\python.exe -m pip install -e `".[ocr,web,ai]`" nvidia-cudnn-cu12==9.9.0.52"
+    Write-StartupLog "Startup aborted."
     exit 1
 }
 
+$ocrExe = $selected.Exe
+$ocrConfig = $selected.Config
 Set-Location -LiteralPath $projectDir
-Write-StartupLog "Starting $ocrExe with $ocrConfig"
+Write-StartupLog "Starting the $($selected.Name) build: $ocrExe with $ocrConfig"
 & $ocrExe web `
     --config $ocrConfig `
     --host 127.0.0.1 `

@@ -144,7 +144,9 @@ class ProcessDetectionWorker:
             "filename": self._filename,
             "worker_pid": process.pid if process is not None and process.is_alive() else None,
             "tracker": "BoT-SORT" if self._tracker == "botsort.yaml" else self._tracker,
-            "device": "cpu",
+            # Replaced by the worker's real device once it reports ready; until
+            # then this is only what was requested.
+            "device": os.environ.get("TELEMETRY_OCR_YOLO_DEVICE", "auto"),
             "error": self._error,
             "dropped_frames": self._dropped_frames,
             **self._metadata,

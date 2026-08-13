@@ -21,6 +21,35 @@ class Recognizer(Protocol):
     def recognize(self, images: Sequence[Any]) -> list[OCRResult]: ...
 
 
+_TORCH_CONFLICT = (
+    "torch must not be imported into the PaddleOCR process while Paddle is on CUDA: "
+    "both ship cuDNN 9 and whichever loads second fails with WinError 127. YOLO "
+    "already runs in a separate worker process, which is where torch belongs."
+)
+
+
+def _hide_torch_from_this_process() -> None:
+    """Make torch look uninstalled to the process that owns Paddle's CUDA context.
+
+    Paddle and PyTorch each bundle their own cuDNN 9, and the second one loaded
+    into a process fails. paddleocr reaches torch transitively through
+    paddlex -> modelscope, which breaks Paddle before the OCR model is built.
+
+    Binding the name to None in sys.modules is the standard idiom for this:
+    `importlib.util.find_spec("torch")` then returns None, so libraries probing
+    for torch treat it as absent, and a real `import torch` raises ImportError.
+    paddleocr itself works fine either way.
+    """
+    import sys
+
+    if sys.modules.get("torch") is not None and "torch" in sys.modules:
+        raise RecognitionError(
+            "torch was already imported in this process, so Paddle can no longer "
+            "load cuDNN. " + _TORCH_CONFLICT
+        )
+    sys.modules["torch"] = None  # type: ignore[assignment]
+
+
 class PaddleRecognizer:
     def __init__(self, config: RuntimeConfig):
         # PaddleX reads these values while paddleocr is imported, so configure
@@ -30,6 +59,8 @@ class PaddleRecognizer:
         os.environ.setdefault(
             "PADDLE_PDX_CACHE_HOME", str(Path(config.model_cache_dir).resolve())
         )
+        if config.device != "cpu":
+            _hide_torch_from_this_process()
         try:
             from paddleocr import TextRecognition
         except ImportError as exc:

@@ -117,6 +117,70 @@ class DetectionWorkerQueueTests(unittest.TestCase):
                 worker.stop()
 
 
+class DetectionBoundaryTests(unittest.TestCase):
+    """The result queue must carry builtins only.
+
+    On CUDA, Paddle and Torch each ship their own cuDNN and the second one
+    loaded into a process fails. The worker keeps them apart by living in a
+    spawned process, but unpickling a value in the parent imports whatever
+    module defines its class. torch.__version__, for instance, is a str
+    subclass, so returning it would drag Torch into the Paddle process and
+    break OCR. Everything crossing the boundary is therefore coerced to a
+    builtin, and this test is what keeps it that way.
+    """
+
+    ALLOWED = (bool, int, float, str, type(None))
+
+    def assert_only_builtins(self, value, path="result"):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                self.assertIs(type(key), str, f"{path}: key {key!r} is {type(key).__name__}")
+                self.assert_only_builtins(item, f"{path}.{key}")
+            return
+        if isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                self.assert_only_builtins(item, f"{path}[{index}]")
+            return
+        self.assertIn(type(value), self.ALLOWED, f"{path} is {type(value).__name__}")
+
+    def test_detection_converts_to_builtins(self):
+        from dataclasses import asdict
+
+        from telemetry_ocr.detection import Detection
+
+        self.assert_only_builtins(asdict(Detection(1.0, 2.0, 3.0, 4.0, 0.9, 0, "car", 7)))
+        self.assert_only_builtins(asdict(Detection(1.0, 2.0, 3.0, 4.0, 0.9, 0, "car", None)))
+
+    def test_worker_results_reach_the_parent_as_builtins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory) / "best.pt"
+            model_path.write_bytes(b"fake")
+            worker = ProcessDetectionWorker(worker_target=_fake_worker)
+            try:
+                worker.start(model_path, "best.pt")
+                status = _wait_for_status(worker, "ready")
+                self.assert_only_builtins(
+                    {key: value for key, value in status.items() if key != "worker_pid"},
+                    "status",
+                )
+                worker.reset("video-a", 1)
+                worker.submit(
+                    DetectionFrame(
+                        payload=b"jpeg",
+                        source_id="video-a",
+                        generation=1,
+                        sequence=0,
+                        source_time_ms=0.0,
+                        confidence=0.45,
+                        iou=0.45,
+                        image_size=640,
+                    )
+                )
+                self.assert_only_builtins(_wait_for_result(worker))
+            finally:
+                worker.stop()
+
+
 def _wait_for_status(worker, expected, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

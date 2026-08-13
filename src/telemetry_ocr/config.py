@@ -232,6 +232,12 @@ def validate_config(config: AppConfig) -> None:
         raise ConfigError("warmup_iterations must be between 0 and 10")
     if not runtime.model_name or not runtime.model_source or not runtime.model_cache_dir:
         raise ConfigError("model_name, model_source and model_cache_dir cannot be empty")
+    if not re.fullmatch(r"cpu|gpu(:\d+)?", runtime.device):
+        raise ConfigError(f"runtime.device must be cpu, gpu or gpu:N, not {runtime.device!r}")
+    if runtime.device != "cpu" and runtime.enable_mkldnn:
+        # oneDNN is a CPU library; leaving it on with a GPU device is a
+        # contradiction that Paddle resolves silently and confusingly.
+        raise ConfigError("runtime.enable_mkldnn must be false when device is a GPU")
     if not 0 <= runtime.confidence_threshold <= 1:
         raise ConfigError("confidence_threshold must be between 0 and 1")
     if not 0 <= runtime.padding <= 0.5:

@@ -63,6 +63,7 @@ class UltralyticsDetectorAdapterTests(unittest.TestCase):
     def setUp(self):
         self.detector = object.__new__(UltralyticsDetector)
         self.detector.model = _Model()
+        self.detector.device = "cpu"
 
     def test_track_matches_the_realtime_test_settings_and_returns_ids(self):
         frame = object()
@@ -105,8 +106,14 @@ class UltralyticsDetectorAdapterTests(unittest.TestCase):
                 "epochs": 100,
                 "trained_image_size": 640,
                 "task": "detect",
+                "device": "cpu",
             },
         )
+
+    def test_track_follows_the_configured_device(self):
+        self.detector.device = "cuda:0"
+        self.detector.track(object(), confidence=0.4, iou=0.5, image_size=416)
+        self.assertEqual(self.detector.model.options["device"], "cuda:0")
 
 
 if __name__ == "__main__":

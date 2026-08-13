@@ -49,8 +49,25 @@ class Detector(Protocol):
     def metadata(self) -> dict[str, Any]: ...
 
 
+def _resolve_torch_device(torch: Any, requested: str | None) -> str:
+    """Pick the device YOLO runs on, failing loudly when CUDA was asked for and is absent.
+
+    Silently falling back to the CPU would turn a misconfiguration into a
+    tenfold latency regression that only shows up as dropped frames.
+    """
+    choice = (requested or os.environ.get("TELEMETRY_OCR_YOLO_DEVICE", "auto")).strip().lower()
+    if choice in {"", "auto"}:
+        return "cuda:0" if torch.cuda.is_available() else "cpu"
+    if choice.startswith("cuda") and not torch.cuda.is_available():
+        raise DependencyError(
+            f"YOLO device {choice!r} was requested but this PyTorch build reports no CUDA "
+            "device. Install the CUDA build of torch, or set TELEMETRY_OCR_YOLO_DEVICE=cpu."
+        )
+    return choice
+
+
 class UltralyticsDetector:
-    def __init__(self, model_path: str | Path):
+    def __init__(self, model_path: str | Path, device: str | None = None):
         configured_dir = os.environ.get("TELEMETRY_OCR_YOLO_CONFIG_DIR")
         config_dir = (
             Path(configured_dir)
@@ -68,9 +85,12 @@ class UltralyticsDetector:
                 "Ultralytics YOLO is not installed; run `pip install -e .[ai]`."
             ) from exc
 
+        self.device = _resolve_torch_device(torch, device)
+
         # PaddleOCR remains the primary realtime workload. Limiting PyTorch to
         # two CPU threads prevents a large YOLO model from occupying every core
-        # and starving telemetry recognition. The value remains configurable
+        # and starving telemetry recognition. This still applies on CUDA, where
+        # letterboxing and NMS run on the CPU. The value remains configurable
         # for machines with more cores or a dedicated GPU.
         try:
             cpu_threads = max(
@@ -116,6 +136,7 @@ class UltralyticsDetector:
             iou=iou,
             imgsz=image_size,
             max_det=300,
+            device=self.device,
             verbose=False,
         )
         return self._parse_results(results)
@@ -137,7 +158,10 @@ class UltralyticsDetector:
             max_det=300,
             persist=True,
             tracker=tracker,
-            device="cpu",
+            device=self.device,
+            # This GTX-class card has no tensor cores, so FP16 buys little and
+            # costs accuracy; keep the maths in FP32 until a benchmark says
+            # otherwise.
             half=False,
             verbose=False,
         )
@@ -162,6 +186,7 @@ class UltralyticsDetector:
             "epochs": _optional_int(train_args.get("epochs")),
             "trained_image_size": _optional_int(trained_size),
             "task": str(getattr(self.model, "task", "detect")),
+            "device": self.device,
         }
 
     def _parse_results(self, results: Any) -> list[Detection]:

@@ -32,6 +32,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.runtime.model_cache_dir, "models/paddlex")
         self.assertEqual(config.temporal.fast.required, 2)
 
+    def test_gpu_device_requires_mkldnn_off(self):
+        data = minimal_data()
+        data["runtime"]["device"] = "gpu"
+        with self.assertRaises(ConfigError):
+            parse_config(data)
+
+        data["runtime"]["enable_mkldnn"] = False
+        self.assertEqual(parse_config(data).runtime.device, "gpu")
+
+        data["runtime"]["device"] = "gpu:0"
+        self.assertEqual(parse_config(data).runtime.device, "gpu:0")
+
+    def test_rejects_an_unknown_device(self):
+        data = minimal_data()
+        data["runtime"]["device"] = "cuda"
+        with self.assertRaises(ConfigError):
+            parse_config(data)
+
     def test_rejects_box_outside_frame(self):
         data = minimal_data()
         data["fields"][0]["box"] = [0.9, 0.2, 0.2, 0.1]
