@@ -108,7 +108,10 @@ const state = {
   detectionImageSizeTouched: false,
 };
 
-const DETECTION_MAX_EXTRAPOLATION_MS = 250;
+const DETECTION_MAX_EXTRAPOLATION_MS = 600;
+const DETECTION_MIN_EXTRAPOLATION_MS = 250;
+const DETECTION_MIN_SAMPLE_GAP_MS = 30;
+const DETECTION_MAX_SAMPLE_GAP_MS = 400;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
 
@@ -811,21 +814,42 @@ function drawDetections(renderNow = performance.now()) {
     const detection = track.current;
     const mediaAgeMs = currentMediaTimeMs - detection.sourceTimeMs;
     if (mediaAgeMs > DETECTION_STALE_MS || mediaAgeMs < -100) continue;
-    const extrapolationMs = ui.video.paused || reduceMotion
-      ? 0
-      : Math.min(DETECTION_MAX_EXTRAPOLATION_MS, Math.max(0, mediaAgeMs));
     const previous = track.previous;
     const sampleDeltaMs = previous ? detection.sourceTimeMs - previous.sourceTimeMs : 0;
-    const predict = (field) => {
-      const velocity = previous && sampleDeltaMs > 0
+    // Two samples support a linear guess for about two sample intervals. Past
+    // that the box overshoots on every turn, which reads worse than trailing,
+    // so the reach is tied to the observed cadence rather than to the lag.
+    const reach = Math.min(
+      DETECTION_MAX_EXTRAPOLATION_MS,
+      Math.max(DETECTION_MIN_EXTRAPOLATION_MS, 2 * sampleDeltaMs),
+    );
+    const extrapolationMs = ui.video.paused || reduceMotion
+      ? 0
+      : Math.min(reach, Math.max(0, mediaAgeMs));
+    // Outside this window the estimate is noise: two results a few ms apart
+    // divide by a tiny number and produce a velocity far too large, and a gap
+    // longer than the ceiling no longer says anything about current motion.
+    const usable = Boolean(previous)
+      && sampleDeltaMs >= DETECTION_MIN_SAMPLE_GAP_MS
+      && sampleDeltaMs <= DETECTION_MAX_SAMPLE_GAP_MS;
+    const velocity = (field) => (
+      usable
         ? (Number(detection[field]) - Number(previous[field])) / sampleDeltaMs
-        : 0;
-      return Number(detection[field]) + velocity * extrapolationMs;
-    };
-    const x1 = Math.min(sourceWidth, Math.max(0, predict("x1")));
-    const y1 = Math.min(sourceHeight, Math.max(0, predict("y1")));
-    const x2 = Math.min(sourceWidth, Math.max(x1 + 1, predict("x2")));
-    const y2 = Math.min(sourceHeight, Math.max(y1 + 1, predict("y2")));
+        : 0
+    );
+    // Only the centre is extrapolated. BoT-SORT's jitter is mostly in the box
+    // dimensions, so predicting the corners independently amplified exactly the
+    // noisiest signal and made boxes pulse while they drifted.
+    const rawWidth = Number(detection.x2) - Number(detection.x1);
+    const rawHeight = Number(detection.y2) - Number(detection.y1);
+    const centreX = (Number(detection.x1) + Number(detection.x2)) / 2
+      + (velocity("x1") + velocity("x2")) / 2 * extrapolationMs;
+    const centreY = (Number(detection.y1) + Number(detection.y2)) / 2
+      + (velocity("y1") + velocity("y2")) / 2 * extrapolationMs;
+    const x1 = Math.min(sourceWidth, Math.max(0, centreX - rawWidth / 2));
+    const y1 = Math.min(sourceHeight, Math.max(0, centreY - rawHeight / 2));
+    const x2 = Math.min(sourceWidth, Math.max(x1 + 1, centreX + rawWidth / 2));
+    const y2 = Math.min(sourceHeight, Math.max(y1 + 1, centreY + rawHeight / 2));
     const x = offsetX + x1 * scaleX;
     const y = offsetY + y1 * scaleY;
     const width = Math.max(1, (x2 - x1) * scaleX);
