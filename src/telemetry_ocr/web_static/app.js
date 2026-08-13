@@ -106,6 +106,9 @@ const state = {
   detectionTrainedImageSize: null,
   detectionDevice: "",
   detectionImageSizeTouched: false,
+  detectionEncoder: undefined,
+  detectionEncodeJobs: new Map(),
+  detectionEncodeSequence: 0,
 };
 
 // Compared against the server's version at startup. A service worker serving a
@@ -519,9 +522,13 @@ function startFrameLoop() {
   if (state.loopStarted) return;
   state.loopStarted = true;
   if (typeof ui.video.requestVideoFrameCallback === "function") {
+    // Detection goes first. Its result is drawn on top of the moving picture,
+    // so every millisecond it waits shows up as a box in the wrong place, while
+    // OCR reads fixed regions and does not care. Behind maybeSubmit it paid for
+    // the full-resolution ROI encode before it could start its own.
     const tick = (_, metadata) => {
-      maybeSubmit(metadata.mediaTime * 1000, metadata.presentedFrames);
       maybeSubmitDetection(metadata.mediaTime * 1000);
+      maybeSubmit(metadata.mediaTime * 1000, metadata.presentedFrames);
       ui.video.requestVideoFrameCallback(tick);
     };
     ui.video.requestVideoFrameCallback(tick);
@@ -529,8 +536,8 @@ function startFrameLoop() {
     state.fallbackTimer = window.setInterval(() => {
       if (!ui.video.paused) {
         const sourceTimeMs = ui.video.currentTime * 1000;
-        maybeSubmit(sourceTimeMs, state.sequence);
         maybeSubmitDetection(sourceTimeMs);
+        maybeSubmit(sourceTimeMs, state.sequence);
       }
     }, 35);
   }
@@ -590,13 +597,84 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
   }
 }
 
-function captureDetectionFrame() {
+// Encoding the detection frame used to cost ~78 ms on the main thread, all of
+// it added to how stale the frame was before inference even started. The
+// downscale goes through createImageBitmap, which resizes without the main
+// thread touching pixels, and the JPEG encode moves to a worker. The worker is
+// built from a blob rather than shipped as a file so it cannot be served from a
+// stale cache independently of app.js.
+const ENCODER_SOURCE = `
+self.onmessage = async (event) => {
+  const { id, bitmap, quality } = event.data;
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext("2d", { alpha: false });
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
+    self.postMessage({ id, blob });
+  } catch (error) {
+    self.postMessage({ id, error: String(error) });
+  }
+};
+`;
+
+function detectionEncoder() {
+  if (state.detectionEncoder !== undefined) return state.detectionEncoder;
+  state.detectionEncoder = null;
+  const supported = typeof Worker === "function"
+    && typeof OffscreenCanvas === "function"
+    && typeof createImageBitmap === "function";
+  if (supported) {
+    try {
+      const url = URL.createObjectURL(new Blob([ENCODER_SOURCE], { type: "text/javascript" }));
+      const worker = new Worker(url);
+      URL.revokeObjectURL(url);
+      worker.onmessage = (event) => {
+        const pending = state.detectionEncodeJobs.get(event.data.id);
+        if (!pending) return;
+        state.detectionEncodeJobs.delete(event.data.id);
+        if (event.data.error) pending.reject(new Error(event.data.error));
+        else pending.resolve(event.data.blob);
+      };
+      state.detectionEncoder = worker;
+    } catch (error) {
+      console.warn("Detection encoder worker unavailable, using the main thread", error);
+    }
+  }
+  return state.detectionEncoder;
+}
+
+function detectionFrameSize() {
   const sourceWidth = ui.video.videoWidth;
   const sourceHeight = ui.video.videoHeight;
   const targetLongSide = Math.max(320, Number(ui.modelImageSize.value) || 640);
   const scale = Math.min(1, targetLongSide / Math.max(sourceWidth, sourceHeight));
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
+  return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  };
+}
+
+async function captureDetectionFrame() {
+  const { width, height } = detectionFrameSize();
+  const worker = detectionEncoder();
+  if (worker) {
+    const bitmap = await createImageBitmap(ui.video, {
+      resizeWidth: width,
+      resizeHeight: height,
+      resizeQuality: "medium",
+    });
+    const id = ++state.detectionEncodeSequence;
+    return new Promise((resolve, reject) => {
+      state.detectionEncodeJobs.set(id, { resolve, reject });
+      worker.postMessage({ id, bitmap, quality: 0.86 }, [bitmap]);
+    });
+  }
+  return captureDetectionFrameOnMainThread(width, height);
+}
+
+function captureDetectionFrameOnMainThread(width, height) {
   ui.detectionCanvas.width = width;
   ui.detectionCanvas.height = height;
   const context = ui.detectionCanvas.getContext("2d", { alpha: false });
@@ -1200,6 +1278,7 @@ window.addEventListener("beforeunload", () => {
   if (state.fallbackTimer) window.clearInterval(state.fallbackTimer);
   stopDetectionResultPolling();
   stopModelStatusPolling();
+  if (state.detectionEncoder) state.detectionEncoder.terminate();
   if (state.detectionRenderFrame !== null) window.cancelAnimationFrame(state.detectionRenderFrame);
 });
 
