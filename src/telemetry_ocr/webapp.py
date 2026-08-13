@@ -7,6 +7,7 @@ import time
 import uuid
 import webbrowser
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -173,6 +174,13 @@ def create_app(
     ocr_lock_key = web.AppKey("ocr_lock", asyncio.Lock)
     max_sessions_key = web.AppKey("max_sessions", int)
     detection_state_key = web.AppKey("detection_state", DetectionState)
+    detection_pump_key = web.AppKey("detection_pump", asyncio.Task)
+    # Holds the newest sequence the pump has seen and the event waiters block
+    # on. Kept outside app state because aiohttp deprecates mutating that after
+    # startup, and the event is replaced rather than cleared on every result:
+    # that releases each waiter on the old object exactly once and leaves no
+    # window for a waiter to arrive between a set and a clear.
+    pump_state: dict[str, Any] = {"sequence": -1, "ready": asyncio.Event()}
     app = web.Application(
         client_max_size=model_upload_limit,
         middlewares=[guard_middleware, cors_middleware, error_middleware],
@@ -463,13 +471,72 @@ def create_app(
         source_time_ms = float(request.query.get("source_time_ms", "0"))
         if not 0 <= source_time_ms < 86_400_000:
             raise ValueError("source_time_ms is outside the supported range")
+        after_sequence = _non_negative_int(
+            request.query.get("after_sequence", "0"), "after_sequence"
+        )
+        wait_ms = _non_negative_int(request.query.get("wait_ms", "0"), "wait_ms")
+        # Capped so a poll cannot outlive shutdown, and so a client cannot pin a
+        # connection open indefinitely.
+        wait_ms = min(wait_ms, 1000)
+
+        if wait_ms and request.query.get("after_sequence") is not None:
+            deadline = time.monotonic() + wait_ms / 1000.0
+            while pump_state["sequence"] <= after_sequence:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready = pump_state["ready"]
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(ready.wait(), remaining)
+
         payload, status = detection_result_payload(source_time_ms)
         return web.json_response(payload, status=status)
 
     async def options(_: Any) -> Any:
         return web.Response(status=204)
 
+    async def pump_detection_results(_: Any) -> None:
+        """Collect finished results instead of waiting for a request to do it.
+
+        Without this the worker's output sits in the IPC queue until some
+        handler calls status(), latest() or submit(), which adds a whole
+        submission interval to every frame's latency — and the queue holds only
+        four before the worker starts discarding the oldest.
+
+        It runs on the event loop rather than in a thread on purpose: the
+        worker's bookkeeping is read by handlers on this loop, so a second
+        thread mutating it would reintroduce the race that moving the drain out
+        of submit() removed.
+        """
+        state = app[detection_state_key]
+        while True:
+            try:
+                state.worker.drain()
+                latest = state.worker.latest()
+                sequence = -1 if latest is None else int(latest.get("sequence", -1))
+                if sequence > pump_state["sequence"]:
+                    pump_state["sequence"] = sequence
+                    pump_state["ready"].set()
+                    pump_state["ready"] = asyncio.Event()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A worker that is unloaded, stopped or mid-restart must not be
+                # able to kill the pump; the next tick picks it up again.
+                _LOG.exception("Detection result pump failed")
+            await asyncio.sleep(0.01)
+
+    async def start_pump(_: Any) -> None:
+        app[detection_pump_key] = asyncio.create_task(pump_detection_results(None))
+
     async def cleanup(_: Any) -> None:
+        pump = app.get(detection_pump_key)
+        if pump is not None:
+            pump.cancel()
+            with suppress(asyncio.CancelledError):
+                await pump
+        # Released after the pump stops so a long poll cannot outlive it.
+        pump_state["ready"].set()
         state = app[detection_state_key]
         await asyncio.to_thread(state.worker.stop)
         state.temp_dir.cleanup()
@@ -491,6 +558,7 @@ def create_app(
     app.router.add_get("/api/detection/result", latest_detection_result)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     app.router.add_static("/assets/", assets, show_index=False)
+    app.on_startup.append(start_pump)
     app.on_cleanup.append(cleanup)
     return app
 

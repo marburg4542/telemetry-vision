@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import importlib.util
 import time
 import unittest
@@ -343,6 +345,72 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cleared.status, 200)
         self.assertFalse((await cleared.json())["loaded"])
         self.assertFalse(self.loaded_model_paths[0].exists())
+
+    async def test_result_long_poll_returns_early_and_times_out_cleanly(self):
+        form = self.FormData()
+        form.add_field(
+            "model", b"fake", filename="best.pt", content_type="application/octet-stream"
+        )
+        await self.client.post("/api/detection/model", data=form)
+        await self.client.post(
+            "/api/detection/frame?source_id=video-a&generation=1&sequence=5"
+            "&source_time_ms=500&confidence=0.4&iou=0.5&image_size=640",
+            data=self.jpeg,
+            headers={"Content-Type": "image/jpeg"},
+        )
+
+        # A result newer than after_sequence already exists, so this must not
+        # wait out the full window.
+        started = time.monotonic()
+        early = await self.client.get(
+            "/api/detection/result?source_time_ms=650&after_sequence=0&wait_ms=1000"
+        )
+        self.assertEqual(early.status, 200)
+        self.assertLess(time.monotonic() - started, 0.9)
+        self.assertEqual((await early.json())["latest_result"]["sequence"], 5)
+
+        # Nothing newer than sequence 5 will arrive, so this one times out and
+        # still answers with the current payload rather than an error.
+        timed_out = await self.client.get(
+            "/api/detection/result?source_time_ms=700&after_sequence=99&wait_ms=60"
+        )
+        self.assertEqual(timed_out.status, 200)
+
+    async def test_result_long_poll_does_not_starve_the_ocr_path(self):
+        """OCR shares this event loop and must stay responsive during a poll.
+
+        A long poll that blocked the loop rather than awaiting would stall the
+        frames the page keeps sending, which is the one regression this change
+        must not cause.
+        """
+        session = await (await self.client.post("/api/session")).json()
+        poll = asyncio.ensure_future(
+            self.client.get(
+                "/api/detection/result?source_time_ms=100&after_sequence=99&wait_ms=1000"
+            )
+        )
+        await asyncio.sleep(0)
+        try:
+            recognized = await asyncio.wait_for(
+                self.client.post(
+                    f"/api/session/{session['session_id']}/frame"
+                    "?source_time_ms=120&frame_index=1",
+                    data=self.jpeg,
+                    headers={"Content-Type": "image/jpeg"},
+                ),
+                timeout=5,
+            )
+            self.assertEqual(recognized.status, 200)
+        finally:
+            poll.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await poll
+
+    async def test_result_long_poll_rejects_a_bad_wait(self):
+        response = await self.client.get(
+            "/api/detection/result?source_time_ms=100&after_sequence=0&wait_ms=abc"
+        )
+        self.assertEqual(response.status, 400)
 
     async def test_yolo_upload_rejects_non_pt_files(self):
         form = self.FormData()

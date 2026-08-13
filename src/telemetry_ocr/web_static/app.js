@@ -96,6 +96,7 @@ const state = {
   detectionResultSequence: -1,
   detectionCompletions: [],
   detectionPollTimer: null,
+  detectionPolling: false,
   detectionModelPollTimer: null,
   detectionRenderFrame: null,
   detectionSourceWidth: 0,
@@ -188,6 +189,8 @@ async function initializeDetectionModel() {
 function applyDetectionModelState(payload) {
   const workerStatus = payload.status || (payload.loaded ? "ready" : "unloaded");
   state.detectorLoaded = workerStatus === "ready";
+  if (state.detectorLoaded) startDetectionResultPolling();
+  else stopDetectionResultPolling();
   const hasModel = Boolean(payload.filename);
   ui.detectionToggle.disabled = !state.detectorLoaded;
   ui.detectionRate.disabled = !state.detectorLoaded;
@@ -551,7 +554,7 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
     state.detectionPostMs = performance.now() - postStarted;
     if (generation !== state.detectionGeneration) return;
     applyDetectionPayload(payload);
-    if (force || ui.video.paused) pollDetectionResult(sequence, generation);
+    // The polling loop delivers results now, whether or not playback is running.
   } catch (error) {
     if (generation === state.detectionGeneration) {
       setModelStatus(`AI detection ขัดข้อง: ${error.message}`, true);
@@ -601,7 +604,9 @@ function resetDetectionFrame() {
 
 async function resetDetectionTracker() {
   resetDetectionFrame();
-  window.clearTimeout(state.detectionPollTimer);
+  // The running loop is pinned to the previous generation and would exit on
+  // its own; restarting it now avoids waiting out its in-flight long poll.
+  restartDetectionResultPolling();
   if (!state.detectorLoaded || !state.detectionSourceId) return;
   const params = new URLSearchParams({
     source_id: state.detectionSourceId,
@@ -706,26 +711,51 @@ function applyDetectionResult(result, completedNow) {
   }
 }
 
-function pollDetectionResult(targetSequence, generation, attempts = 0) {
+// Results used to arrive only piggy-backed on the next frame POST, which meant
+// a finished detection waited a whole submission interval before it could be
+// drawn. This loop runs independently of submission and blocks on the server
+// until a newer result exists, so a result reaches the canvas as soon as the
+// worker publishes it.
+function startDetectionResultPolling() {
+  if (state.detectionPolling) return;
+  state.detectionPolling = true;
+  pollDetectionResultLoop(state.detectionGeneration);
+}
+
+function stopDetectionResultPolling() {
+  state.detectionPolling = false;
   window.clearTimeout(state.detectionPollTimer);
-  if (generation !== state.detectionGeneration || !state.detectorLoaded) return;
-  state.detectionPollTimer = window.setTimeout(async () => {
+  state.detectionPollTimer = null;
+}
+
+async function pollDetectionResultLoop(generation) {
+  while (
+    state.detectionPolling
+    && state.detectorLoaded
+    && generation === state.detectionGeneration
+  ) {
     try {
       const params = new URLSearchParams({
         source_time_ms: (ui.video.currentTime * 1000).toFixed(3),
+        after_sequence: String(Math.max(0, state.detectionResultSequence)),
+        wait_ms: "250",
       });
       const payload = await jsonFetch(`/api/detection/result?${params}`);
       if (generation !== state.detectionGeneration) return;
       applyDetectionPayload(payload);
-      if (state.detectionResultSequence < targetSequence && attempts < 24) {
-        pollDetectionResult(targetSequence, generation, attempts + 1);
-      }
     } catch (error) {
-      if (generation === state.detectionGeneration && attempts < 8) {
-        pollDetectionResult(targetSequence, generation, attempts + 1);
-      }
+      if (generation !== state.detectionGeneration) return;
+      // Back off briefly so a server that is down does not become a busy loop.
+      await new Promise((resolve) => {
+        state.detectionPollTimer = window.setTimeout(resolve, 500);
+      });
     }
-  }, 120);
+  }
+}
+
+function restartDetectionResultPolling() {
+  stopDetectionResultPolling();
+  if (state.detectorLoaded) startDetectionResultPolling();
 }
 
 function startDetectionRenderLoop() {
@@ -1122,7 +1152,7 @@ else window.addEventListener("resize", drawDetections);
 window.addEventListener("beforeunload", () => {
   if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
   if (state.fallbackTimer) window.clearInterval(state.fallbackTimer);
-  window.clearTimeout(state.detectionPollTimer);
+  stopDetectionResultPolling();
   stopModelStatusPolling();
   if (state.detectionRenderFrame !== null) window.cancelAnimationFrame(state.detectionRenderFrame);
 });

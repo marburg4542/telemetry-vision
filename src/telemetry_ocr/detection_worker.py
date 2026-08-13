@@ -155,7 +155,10 @@ class ProcessDetectionWorker:
         }
 
     def submit(self, frame: DetectionFrame) -> bool:
-        self._drain_results()
+        # Deliberately does not drain. submit() runs in a worker thread via
+        # asyncio.to_thread, so draining here mutated _latest_result, _state and
+        # _metadata while handlers read them on the event loop. The background
+        # pump owns collection now, and it runs on the loop.
         if self._state != "ready" or self._frames is None:
             return False
         if (
