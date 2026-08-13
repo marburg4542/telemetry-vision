@@ -110,6 +110,9 @@ const state = {
   detectionEncoder: undefined,
   detectionEncodeJobs: new Map(),
   detectionEncodeSequence: 0,
+  detectionCameraVelocity: null,
+  detectionResultGapMs: 0,
+  detectionLastResultMs: null,
 };
 
 // Compared against the server's version at startup. A service worker serving a
@@ -121,6 +124,13 @@ const DETECTION_MAX_EXTRAPOLATION_MS = 600;
 const DETECTION_MIN_EXTRAPOLATION_MS = 250;
 const DETECTION_MIN_SAMPLE_GAP_MS = 30;
 const DETECTION_MAX_SAMPLE_GAP_MS = 400;
+// Weight of each new velocity sample. Detection boxes jitter by a few pixels
+// between frames; without smoothing that jitter is divided by the gap and
+// multiplied by the extrapolation window, which throws the box around.
+const DETECTION_VELOCITY_SMOOTHING = 0.45;
+// Source pixels per millisecond. Nothing real crosses a 640 px frame in under
+// half a second, so anything faster is a tracker mistake, not motion.
+const DETECTION_MAX_SPEED = 1.5;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
 
@@ -707,6 +717,11 @@ function resetDetectionFrame() {
   state.detectionSourceHeight = 0;
   state.detectionCaptureMs = null;
   state.detectionPostMs = null;
+  // Motion learned from the previous video, model or seek position says nothing
+  // about the next one.
+  state.detectionCameraVelocity = null;
+  state.detectionResultGapMs = 0;
+  state.detectionLastResultMs = null;
   ui.detectionFps.textContent = "0.0";
   ui.detectionLatency.textContent = "—";
   ui.detectionLag.textContent = "—";
@@ -796,27 +811,108 @@ function formatMs(value) {
   return Number.isFinite(number) ? String(Math.round(number)) : "—";
 }
 
+function boxCentre(box, axis) {
+  return axis === "x"
+    ? (Number(box.x1) + Number(box.x2)) / 2
+    : (Number(box.y1) + Number(box.y2)) / 2;
+}
+
+function clampSpeed(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-DETECTION_MAX_SPEED, Math.min(DETECTION_MAX_SPEED, value));
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function smooth(previousValue, nextValue) {
+  return Number.isFinite(previousValue)
+    ? previousValue + (nextValue - previousValue) * DETECTION_VELOCITY_SMOOTHING
+    : nextValue;
+}
+
 function applyDetectionResult(result, completedNow) {
   const activeKeys = new Set();
+  const sourceTimeMs = Number(result.source_time_ms);
+  const sampled = [];
+
+  // How far apart results actually land, in media time. Used to decide how far
+  // forward a linear guess can be trusted.
+  if (Number.isFinite(state.detectionLastResultMs)) {
+    const gap = sourceTimeMs - state.detectionLastResultMs;
+    if (gap >= DETECTION_MIN_SAMPLE_GAP_MS && gap <= DETECTION_MAX_SAMPLE_GAP_MS) {
+      state.detectionResultGapMs = smooth(state.detectionResultGapMs, gap);
+    }
+  }
+  state.detectionLastResultMs = sourceTimeMs;
+
   (result.detections || []).forEach((detection, index) => {
-    const key = detection.track_id === null || detection.track_id === undefined
+    const untracked = detection.track_id === null || detection.track_id === undefined;
+    const key = untracked
       ? `untracked:${result.sequence}:${index}`
       : `track:${detection.track_id}`;
     activeKeys.add(key);
     const existing = state.detectionTracks.get(key);
-    const current = {
-      ...detection,
-      sourceTimeMs: Number(result.source_time_ms),
-    };
+    const current = { ...detection, sourceTimeMs };
+    const previous = existing?.current && existing.current.sourceTimeMs < current.sourceTimeMs
+      ? existing.current
+      : existing?.previous || null;
+
+    let velocityX = null;
+    let velocityY = null;
+    const gap = previous ? current.sourceTimeMs - previous.sourceTimeMs : 0;
+    if (gap >= DETECTION_MIN_SAMPLE_GAP_MS && gap <= DETECTION_MAX_SAMPLE_GAP_MS) {
+      velocityX = smooth(
+        existing?.velocityX,
+        clampSpeed((boxCentre(current, "x") - boxCentre(previous, "x")) / gap),
+      );
+      velocityY = smooth(
+        existing?.velocityY,
+        clampSpeed((boxCentre(current, "y") - boxCentre(previous, "y")) / gap),
+      );
+      sampled.push([velocityX, velocityY]);
+    }
+
     state.detectionTracks.set(key, {
-      previous: existing?.current && existing.current.sourceTimeMs < current.sourceTimeMs
-        ? existing.current
-        : existing?.previous || null,
+      previous,
       current,
       missingSince: null,
-      untracked: detection.track_id === null || detection.track_id === undefined,
+      untracked,
+      velocityX,
+      velocityY,
     });
   });
+
+  // When the aircraft moves, every object in frame translates together, so the
+  // median across objects estimates that shared motion far more reliably than
+  // two samples of any single box. The median rather than the mean so that a
+  // genuinely moving vehicle among stationary ones does not drag the estimate.
+  if (sampled.length) {
+    state.detectionCameraVelocity = {
+      x: smooth(state.detectionCameraVelocity?.x, median(sampled.map((v) => v[0]))),
+      y: smooth(state.detectionCameraVelocity?.y, median(sampled.map((v) => v[1]))),
+    };
+  }
+
+  // A box seen only once has no velocity of its own and would sit still while
+  // everything around it moved. That is every newly assigned track id, and every
+  // detection the tracker never identified at all -- those get a fresh key each
+  // result and so can never accumulate a second sample. The camera estimate is
+  // the best available guess for them.
+  const camera = state.detectionCameraVelocity;
+  if (camera) {
+    for (const key of activeKeys) {
+      const track = state.detectionTracks.get(key);
+      if (track && !Number.isFinite(track.velocityX)) {
+        track.velocityX = camera.x;
+        track.velocityY = camera.y;
+      }
+    }
+  }
+
   for (const [key, track] of state.detectionTracks) {
     if (!activeKeys.has(key) && track.missingSince === null) {
       track.missingSince = completedNow;
@@ -924,38 +1020,27 @@ function drawDetections(renderNow = performance.now()) {
     const detection = track.current;
     const mediaAgeMs = currentMediaTimeMs - detection.sourceTimeMs;
     if (mediaAgeMs > DETECTION_STALE_MS || mediaAgeMs < -100) continue;
-    const previous = track.previous;
-    const sampleDeltaMs = previous ? detection.sourceTimeMs - previous.sourceTimeMs : 0;
-    // Two samples support a linear guess for about two sample intervals. Past
-    // that the box overshoots on every turn, which reads worse than trailing,
-    // so the reach is tied to the observed cadence rather than to the lag.
+    // A linear guess holds for roughly two result intervals; past that the box
+    // overshoots on every turn, which reads worse than trailing. The reach is
+    // therefore tied to the observed cadence rather than to the lag.
     const reach = Math.min(
       DETECTION_MAX_EXTRAPOLATION_MS,
-      Math.max(DETECTION_MIN_EXTRAPOLATION_MS, 2 * sampleDeltaMs),
+      Math.max(DETECTION_MIN_EXTRAPOLATION_MS, 2 * (state.detectionResultGapMs || 0)),
     );
     const extrapolationMs = ui.video.paused || reduceMotion
       ? 0
       : Math.min(reach, Math.max(0, mediaAgeMs));
-    // Outside this window the estimate is noise: two results a few ms apart
-    // divide by a tiny number and produce a velocity far too large, and a gap
-    // longer than the ceiling no longer says anything about current motion.
-    const usable = Boolean(previous)
-      && sampleDeltaMs >= DETECTION_MIN_SAMPLE_GAP_MS
-      && sampleDeltaMs <= DETECTION_MAX_SAMPLE_GAP_MS;
-    const velocity = (field) => (
-      usable
-        ? (Number(detection[field]) - Number(previous[field])) / sampleDeltaMs
-        : 0
-    );
-    // Only the centre is extrapolated. BoT-SORT's jitter is mostly in the box
-    // dimensions, so predicting the corners independently amplified exactly the
-    // noisiest signal and made boxes pulse while they drifted.
+    // Velocity is smoothed as results arrive, and falls back to the shared
+    // camera motion for boxes with only one sample. Only the centre moves:
+    // BoT-SORT's jitter is mostly in the box dimensions, so predicting the
+    // corners separately amplified the noisiest signal and made boxes pulse
+    // while they drifted.
     const rawWidth = Number(detection.x2) - Number(detection.x1);
     const rawHeight = Number(detection.y2) - Number(detection.y1);
-    const centreX = (Number(detection.x1) + Number(detection.x2)) / 2
-      + (velocity("x1") + velocity("x2")) / 2 * extrapolationMs;
-    const centreY = (Number(detection.y1) + Number(detection.y2)) / 2
-      + (velocity("y1") + velocity("y2")) / 2 * extrapolationMs;
+    const velocityX = Number.isFinite(track.velocityX) ? track.velocityX : 0;
+    const velocityY = Number.isFinite(track.velocityY) ? track.velocityY : 0;
+    const centreX = boxCentre(detection, "x") + velocityX * extrapolationMs;
+    const centreY = boxCentre(detection, "y") + velocityY * extrapolationMs;
     const x1 = Math.min(sourceWidth, Math.max(0, centreX - rawWidth / 2));
     const y1 = Math.min(sourceHeight, Math.max(0, centreY - rawHeight / 2));
     const x2 = Math.min(sourceWidth, Math.max(x1 + 1, centreX + rawWidth / 2));
