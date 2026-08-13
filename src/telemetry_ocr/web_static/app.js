@@ -20,6 +20,7 @@ const ui = {
   modelStatus: $("modelStatus"),
   detectionFps: $("detectionFps"),
   detectionLatency: $("detectionLatency"),
+  trackIdToggle: $("trackIdToggle"),
   detectionLag: $("detectionLag"),
   detectionCapture: $("detectionCapture"),
   detectionHarvest: $("detectionHarvest"),
@@ -224,6 +225,7 @@ function applyDetectionModelState(payload) {
   ui.detectionRate.disabled = !state.detectorLoaded;
   ui.modelConfidence.disabled = !state.detectorLoaded;
   ui.modelImageSize.disabled = !state.detectorLoaded;
+  ui.trackIdToggle.disabled = !state.detectorLoaded;
   ui.clearModelButton.disabled = !hasModel;
   ui.restartWorkerButton.hidden = !hasModel || !["error", "stopped"].includes(workerStatus);
   ui.modelName.textContent = hasModel ? payload.filename : "ยังไม่ได้เลือกโมเดล";
@@ -247,6 +249,10 @@ function applyDetectionModelState(payload) {
       Boolean(mismatch),
     );
   } else if (workerStatus === "loading") {
+    // Spawning the worker takes seconds. Without this the boxes from the
+    // previous model stay on screen the whole time, over a video that has moved
+    // on, attributed to a model that is no longer loaded.
+    resetDetectionFrame();
     setModelStatus(`กำลังเริ่ม Detection worker สำหรับ ${payload.filename || "โมเดล"}…`);
     scheduleModelStatusPolling();
   } else if (workerStatus === "error") {
@@ -348,6 +354,10 @@ async function uploadDetectionModel(file) {
   }
   const generation = ++state.detectionModelGeneration;
   state.detectorLoaded = false;
+  // An image size chosen for the outgoing model says nothing about the incoming
+  // one, which may well have been trained at a different size. Clearing this
+  // lets the new model's trained size be adopted the way a first load would.
+  state.detectionImageSizeTouched = false;
   ui.detectionToggle.disabled = true;
   ui.detectionRate.disabled = true;
   ui.modelConfidence.disabled = true;
@@ -956,7 +966,13 @@ function drawDetections(renderNow = performance.now()) {
     const height = Math.max(1, (y2 - y1) * scaleY);
     const hue = (Number(detection.class_id) * 67 + 88) % 360;
     const color = `hsl(${hue} 88% 62%)`;
-    const trackLabel = detection.track_id === null || detection.track_id === undefined
+    // The track id is BoT-SORT's identity for this object across frames. It is
+    // off by default because it is debugging information: it matters when you
+    // are checking whether the tracker is holding on to an object, and is
+    // noise the rest of the time.
+    const trackLabel = !ui.trackIdToggle.checked
+      || detection.track_id === null
+      || detection.track_id === undefined
       ? ""
       : ` #${detection.track_id}`;
     const label = `${detection.label}${trackLabel} ${(Number(detection.confidence) * 100).toFixed(0)}%`;
@@ -1251,6 +1267,9 @@ ui.modelImageSize.addEventListener("change", async () => {
   state.detectionImageSizeTouched = true;
   await applyImageSizeChange();
 });
+// Only changes what the overlay writes, so no tracker reset and no need to wait
+// for another detection result -- the render loop picks it up on the next frame.
+ui.trackIdToggle.addEventListener("change", () => drawDetections());
 ui.restartWorkerButton.addEventListener("click", restartDetectionWorker);
 ui.clearModelButton.addEventListener("click", clearDetectionModel);
 ui.resetButton.addEventListener("click", () => resetSession(true));

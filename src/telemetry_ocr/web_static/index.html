@@ -77,10 +77,19 @@
                 <p class="eyebrow">AI ANNOTATION</p>
                 <h3 id="aiModelHeading">Ultralytics YOLO model</h3>
               </div>
-              <label class="model-file-button" for="modelInput">
-                Browse .pt
-                <input id="modelInput" type="file" accept=".pt,application/octet-stream" />
-              </label>
+              <div class="ai-model-actions">
+                <span class="hint" tabindex="0" role="note" aria-describedby="modelHint">
+                  <span class="hint-icon" aria-hidden="true">?</span>
+                  <span class="hint-body" id="modelHint" role="tooltip">
+                    โหลดเฉพาะไฟล์ <strong>.pt</strong> ที่เชื่อถือได้เท่านั้น checkpoint ของ PyTorch
+                    รันโค้ดได้ตอนโหลด โมเดลถูกเก็บชั่วคราวและลบเมื่อปิด OCR server
+                  </span>
+                </span>
+                <label class="model-file-button" for="modelInput">
+                  Browse .pt
+                  <input id="modelInput" type="file" accept=".pt,application/octet-stream" />
+                </label>
+              </div>
             </div>
             <div class="ai-model-controls">
               <label class="toggle-control compact-toggle">
@@ -111,6 +120,10 @@
                   <option value="960">960 px</option>
                 </select>
               </label>
+              <label class="check-control" for="trackIdToggle" title="เลขประจำตัวที่ tracker ใช้ไล่ตามวัตถุคันเดิมข้ามเฟรม; ถ้าเลขกระโดดแปลว่า tracker หลุด">
+                <input id="trackIdToggle" type="checkbox" disabled />
+                <span>Track ID</span>
+              </label>
               <button class="ghost-button" id="restartWorkerButton" type="button" hidden>Restart worker</button>
               <button class="ghost-button" id="clearModelButton" type="button" disabled>ล้างโมเดล</button>
             </div>
@@ -123,10 +136,9 @@
               <span>Wait <strong id="detectionHarvest">—</strong> ms</span>
               <span>Dropped <strong id="detectionDropped">0</strong></span>
             </div>
-            <p class="model-warning">โหลดเฉพาะไฟล์ `.pt` ที่เชื่อถือได้เท่านั้น โมเดลจะถูกเก็บชั่วคราวและลบเมื่อปิด OCR server</p>
           </section>
 
-          <div class="source-meta">
+          <div class="source-strip">
             <div class="file-summary">
               <span class="file-glyph" aria-hidden="true">VID</span>
               <div>
@@ -139,9 +151,6 @@
               <span class="time-separator">/</span>
               <span id="durationTime">00:00.000</span>
             </div>
-          </div>
-
-          <div class="control-strip">
             <label class="toggle-control">
               <input id="ocrToggle" type="checkbox" checked disabled />
               <span class="toggle-track"><span></span></span>
@@ -161,11 +170,13 @@
               </select>
             </label>
             <button class="ghost-button" id="resetButton" type="button" disabled>Reset session</button>
-          </div>
-
-          <div class="privacy-note">
-            <span class="privacy-icon" aria-hidden="true">LOCAL</span>
-            <p><strong>Local processing</strong> ไฟล์เต็มไม่ถูกอัปโหลด — browser ส่งเฉพาะภาพบริเวณ ROI ของเฟรมที่กำลังเล่นไปยัง OCR server ในเครื่อง</p>
+            <span class="hint" tabindex="0" role="note" aria-describedby="privacyHint">
+              <span class="hint-icon" aria-hidden="true">LOCAL</span>
+              <span class="hint-body" id="privacyHint" role="tooltip">
+                <strong>Local processing</strong> ไฟล์เต็มไม่ถูกอัปโหลด — browser ส่งเฉพาะภาพบริเวณ ROI
+                ของเฟรมที่กำลังเล่นไปยัง OCR server ในเครื่อง
+              </span>
+            </span>
           </div>
         </section>
 
