@@ -2,7 +2,6 @@ import importlib.util
 import unittest
 from dataclasses import asdict
 
-
 HAS_WEB_DEPS = bool(
     importlib.util.find_spec("aiohttp")
     and importlib.util.find_spec("cv2")

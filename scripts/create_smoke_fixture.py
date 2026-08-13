@@ -40,12 +40,27 @@ def main() -> int:
                 )
             )
             cv2.rectangle(frame, (650, 730), (1590, 930), (55, 65, 75), -1)
-            cv2.putText(frame, "SPEED", (710, 775), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (130, 130, 130), 2)
-            cv2.putText(frame, "123.4", (700, 875), cv2.FONT_HERSHEY_SIMPLEX, 2.3, (205, 205, 205), 5, cv2.LINE_AA)
-            cv2.putText(frame, "RPM", (1065, 775), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (130, 130, 130), 2)
-            cv2.putText(frame, "2450", (1040, 875), cv2.FONT_HERSHEY_SIMPLEX, 2.3, (190, 205, 215), 5, cv2.LINE_AA)
-            cv2.putText(frame, "GEAR", (1390, 775), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (130, 130, 130), 2)
-            cv2.putText(frame, "D", (1425, 875), cv2.FONT_HERSHEY_SIMPLEX, 2.3, (190, 215, 190), 5, cv2.LINE_AA)
+            cv2.putText(
+                frame, "SPEED", (710, 775), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (130, 130, 130), 2
+            )
+            cv2.putText(
+                frame, "123.4", (700, 875), cv2.FONT_HERSHEY_SIMPLEX, 2.3,
+                (205, 205, 205), 5, cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame, "RPM", (1065, 775), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (130, 130, 130), 2
+            )
+            cv2.putText(
+                frame, "2450", (1040, 875), cv2.FONT_HERSHEY_SIMPLEX, 2.3,
+                (190, 205, 215), 5, cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame, "GEAR", (1390, 775), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (130, 130, 130), 2
+            )
+            cv2.putText(
+                frame, "D", (1425, 875), cv2.FONT_HERSHEY_SIMPLEX, 2.3,
+                (190, 215, 190), 5, cv2.LINE_AA,
+            )
             writer.write(frame)
     finally:
         writer.release()

@@ -6,7 +6,6 @@ from typing import Any
 
 from .config import FieldConfig
 
-
 CONFUSION_MAP = str.maketrans(
     {
         "O": "0",
@@ -196,7 +195,12 @@ def _validate_candidate(
     invalid_chars = sorted(set(candidate) - set(config.allowed_chars))
     if invalid_chars:
         return ValidatedValue(
-            raw_text, candidate, None, False, corrected, f"characters_not_allowed:{''.join(invalid_chars)}"
+            raw_text,
+            candidate,
+            None,
+            False,
+            corrected,
+            f"characters_not_allowed:{''.join(invalid_chars)}",
         )
     if re.fullmatch(config.regex, candidate) is None:
         return ValidatedValue(raw_text, candidate, None, False, corrected, "regex_mismatch")

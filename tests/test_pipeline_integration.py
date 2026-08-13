@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 HAS_IMAGE_DEPS = bool(
     importlib.util.find_spec("numpy")
     and importlib.util.find_spec("cv2")
@@ -116,7 +115,7 @@ class PipelineIntegrationTests(unittest.TestCase):
             )
             if not writer.isOpened():
                 self.skipTest("MJPG encoder is unavailable")
-            for index in range(15):
+            for _index in range(15):
                 frame = np.zeros((180, 320, 3), dtype=np.uint8)
                 cv2.putText(
                     frame,
@@ -167,7 +166,13 @@ class PipelineIntegrationTests(unittest.TestCase):
         import numpy as np
 
         from telemetry_ocr.calibration import calibrate, export_validation_crops
-        from telemetry_ocr.config import AppConfig, FieldConfig, RecipeConfig, RuntimeConfig, load_config
+        from telemetry_ocr.config import (
+            AppConfig,
+            FieldConfig,
+            RecipeConfig,
+            RuntimeConfig,
+            load_config,
+        )
         from telemetry_ocr.ocr import OCRResult
 
         class FakeRecognizer:

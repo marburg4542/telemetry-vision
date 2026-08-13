@@ -5,11 +5,12 @@ import queue
 import statistics
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
-from .config import AppConfig, FieldConfig
+from .config import AppConfig
 from .errors import DependencyError, VideoError
 from .ocr import OCRResult, Recognizer
 from .output import RecordWriter, TelemetryRecord
@@ -173,7 +174,7 @@ def recognize_grouped(
         results = recognizer.recognize([image for _, image in members])
         if len(results) != len(members):
             raise RuntimeError("Recognizer returned a result count that does not match its batch")
-        for (index, _), result in zip(members, results):
+        for (index, _), result in zip(members, results, strict=True):
             ordered[index] = result
     if any(item is None for item in ordered):
         raise RuntimeError("Internal error while restoring OCR batch order")
@@ -198,7 +199,9 @@ class TelemetryPipeline:
         self._warmup(video_path)
         frame_queue: queue.Queue[FramePacket | object] = queue.Queue(maxsize=runtime.queue_size)
         stop_event = threading.Event()
-        decoder = VideoDecoder(video_path, frame_queue, runtime.ocr_hz, runtime.realtime, stop_event)
+        decoder = VideoDecoder(
+            video_path, frame_queue, runtime.ocr_hz, runtime.realtime, stop_event
+        )
         writer = RecordWriter(jsonl_path, csv_path)
         latencies: list[float] = []
         processed = 0
@@ -316,7 +319,7 @@ class TelemetryPipeline:
         )
         fallback_indexes: list[int] = []
         fallback_images: list[Any] = []
-        for index, result in zip(primary_indexes, primary_results):
+        for index, result in zip(primary_indexes, primary_results, strict=True):
             field = self.config.fields[index]
             validated = validate_text(result.text, field)
             candidates[index] = _Candidate(
@@ -334,7 +337,7 @@ class TelemetryPipeline:
             fallback_results = recognize_grouped(
                 self.recognizer, fallback_images, self.config.runtime.aspect_bucket_base
             )
-            for index, result in zip(fallback_indexes, fallback_results):
+            for index, result in zip(fallback_indexes, fallback_results, strict=True):
                 field = self.config.fields[index]
                 fallback = _Candidate(
                     validate_text(result.text, field),
@@ -351,22 +354,25 @@ class TelemetryPipeline:
                 if preferred[0] is fallback.validated:
                     candidates[index] = fallback
 
-        for field, candidate in zip(self.config.fields, candidates):
+        for field, candidate in zip(self.config.fields, candidates, strict=True):
             assert candidate is not None
             if candidate.variant not in {"derived_source_time", "held_last_ocr"}:
                 self._last_candidates[field.field_id] = candidate
-            if field.derive_from_source_time and field.field_id not in self._time_anchors:
-                if candidate.validated.valid:
-                    self._set_time_anchor(
-                        field.field_id,
-                        candidate.validated.normalized_text,
-                        packet.source_time_ms,
-                    )
+            if (
+                field.derive_from_source_time
+                and field.field_id not in self._time_anchors
+                and candidate.validated.valid
+            ):
+                self._set_time_anchor(
+                    field.field_id,
+                    candidate.validated.normalized_text,
+                    packet.source_time_ms,
+                )
 
         # This includes time spent waiting in the bounded frame queue, not just OCR.
         latency_ms = (time.perf_counter() - packet.enqueued_at) * 1000.0
         records: list[TelemetryRecord] = []
-        for field, candidate in zip(self.config.fields, candidates):
+        for field, candidate in zip(self.config.fields, candidates, strict=True):
             assert candidate is not None
             stable = self.stabilizer.add(
                 field.field_id,

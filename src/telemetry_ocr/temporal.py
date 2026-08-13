@@ -7,7 +7,6 @@ from typing import Any
 from .config import AppConfig, FieldConfig, TemporalProfileConfig
 from .validation import ValidatedValue
 
-
 # A median needs three samples before it can hold an outlier out of the middle.
 # With two, the "median" is whichever reading arrived last.
 _MIN_MEDIAN_SAMPLES = 3
@@ -84,7 +83,10 @@ class FieldStabilizer:
             if len(ordered) % 2:
                 winning_observation = ordered[len(ordered) // 2]
             else:
-                middle = {id(item) for item in ordered[len(ordered) // 2 - 1 : len(ordered) // 2 + 1]}
+                middle = {
+                    id(item)
+                    for item in ordered[len(ordered) // 2 - 1 : len(ordered) // 2 + 1]
+                }
                 winning_observation = next(
                     item for item in reversed(numeric_observations) if id(item) in middle
                 )

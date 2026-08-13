@@ -170,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
 
             thread_counts = _parse_threads(args.threads)
             if args.iterations <= 0 or args.warmup < 0 or args.frame_index < 0:
-                parser.error("iterations must be positive; warmup and frame-index cannot be negative")
+                parser.error(
+                    "iterations must be positive; warmup and frame-index cannot be negative"
+                )
             report, best = benchmark_threads(
                 args.video,
                 config,

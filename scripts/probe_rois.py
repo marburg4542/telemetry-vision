@@ -48,14 +48,17 @@ def main() -> int:
                 crops.append(processed)
                 safe_time = str(time_seconds).replace(".", "_")
                 cv2.imwrite(
-                    str(args.output_dir / f"{safe_time}s_{field.field_id}_{field.primary.name}.png"),
+                    str(
+                        args.output_dir
+                        / f"{safe_time}s_{field.field_id}_{field.primary.name}.png"
+                    ),
                     processed,
                 )
             results = recognize_grouped(recognizer, crops, config.runtime.aspect_bucket_base)
             candidates = []
             fallback_indexes = []
             fallback_images = []
-            for index, (field, result) in enumerate(zip(config.fields, results)):
+            for index, (field, result) in enumerate(zip(config.fields, results, strict=True)):
                 checked = validate_text(result.text, field)
                 candidates.append((result, checked, field.primary.name))
                 if config.runtime.enable_fallback and (
@@ -70,7 +73,7 @@ def main() -> int:
                 fallback_results = recognize_grouped(
                     recognizer, fallback_images, config.runtime.aspect_bucket_base
                 )
-                for index, fallback_result in zip(fallback_indexes, fallback_results):
+                for index, fallback_result in zip(fallback_indexes, fallback_results, strict=True):
                     field = config.fields[index]
                     fallback_checked = validate_text(fallback_result.text, field)
                     primary_result, primary_checked, primary_variant = candidates[index]
@@ -90,7 +93,7 @@ def main() -> int:
                             primary_checked,
                             primary_variant,
                         )
-            for field, (result, checked, variant) in zip(config.fields, candidates):
+            for field, (result, checked, variant) in zip(config.fields, candidates, strict=True):
                 rows.append(
                     {
                         "time_seconds": time_seconds,

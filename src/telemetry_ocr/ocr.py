@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 from .config import RuntimeConfig
 from .errors import DependencyError, RecognitionError
@@ -33,7 +34,8 @@ class PaddleRecognizer:
             from paddleocr import TextRecognition
         except ImportError as exc:
             raise DependencyError(
-                "PaddleOCR is not installed. Install PaddlePaddle for your CPU, then `pip install -e .[ocr]`."
+                "PaddleOCR is not installed. Install PaddlePaddle for your CPU, "
+                "then `pip install -e .[ocr]`."
             ) from exc
         self.batch_size = config.batch_size
         try:
@@ -45,7 +47,9 @@ class PaddleRecognizer:
                 cpu_threads=config.cpu_threads,
             )
         except Exception as exc:
-            raise RecognitionError(f"Cannot initialize PaddleOCR model {config.model_name}: {exc}") from exc
+            raise RecognitionError(
+                f"Cannot initialize PaddleOCR model {config.model_name}: {exc}"
+            ) from exc
 
     def recognize(self, images: Sequence[Any]) -> list[OCRResult]:
         if not images:
@@ -84,7 +88,9 @@ class ParallelRecognizer:
         ]
         futures = [
             self.executor.submit(recognizer.recognize, chunk)
-            for recognizer, chunk in zip(self.recognizers, chunks)
+            # Fewer chunks than recognizers is normal: a batch smaller than the
+            # worker count leaves the surplus recognizers idle on purpose.
+            for recognizer, chunk in zip(self.recognizers, chunks, strict=False)
         ]
         return [result for future in futures for result in future.result()]
 

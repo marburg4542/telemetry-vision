@@ -1,7 +1,6 @@
 import importlib.util
 import unittest
 
-
 HAS_IMAGE_DEPS = bool(importlib.util.find_spec("numpy") and importlib.util.find_spec("cv2"))
 
 

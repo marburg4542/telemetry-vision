@@ -1,11 +1,12 @@
 import unittest
+from typing import ClassVar
 
 from telemetry_ocr.errors import RecognitionError
 from telemetry_ocr.ocr import OCRResult, ParallelRecognizer, extract_ocr_result
 
 
 class FakeResult:
-    json = {"res": {"rec_text": "123", "rec_score": 0.91}}
+    json: ClassVar[dict] = {"res": {"rec_text": "123", "rec_score": 0.91}}
 
 
 class OCRResultTests(unittest.TestCase):

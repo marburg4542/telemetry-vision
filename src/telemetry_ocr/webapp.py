@@ -6,9 +6,9 @@ import tempfile
 import time
 import uuid
 import webbrowser
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from collections.abc import Callable, Iterable
 from typing import Any
 from urllib.parse import urlsplit
 

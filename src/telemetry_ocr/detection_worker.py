@@ -5,9 +5,10 @@ import multiprocessing as mp
 import os
 import queue
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from .detection import load_ultralytics_detector
 
@@ -90,7 +91,10 @@ class ProcessDetectionWorker:
         self._pending_reset = True
         self._process = self._context.Process(
             target=self._worker_target,
-            args=(str(self._model_path), self._filename, self._tracker, self._frames, self._results),
+            args=(
+                str(self._model_path), self._filename, self._tracker,
+                self._frames, self._results,
+            ),
             name="telemetry-ocr-yolo",
             daemon=True,
         )

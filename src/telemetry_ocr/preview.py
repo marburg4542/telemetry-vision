@@ -33,10 +33,10 @@ def save_roi_preview(
     height, width = frame.shape[:2]
     for position, item in enumerate(config.fields):
         x, y, roi_width, roi_height = item.box
-        left = int(round(x * width))
-        top = int(round(y * height))
-        right = int(round((x + roi_width) * width))
-        bottom = int(round((y + roi_height) * height))
+        left = round(x * width)
+        top = round(y * height)
+        right = round((x + roi_width) * width)
+        bottom = round((y + roi_height) * height)
         color = _color(position)
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
         label = item.field_id

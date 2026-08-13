@@ -26,10 +26,10 @@ def extract_roi(frame: Any, box: tuple[float, float, float, float], padding: flo
     x, y, width, height = box
     pad_x = width * padding
     pad_y = height * padding
-    left = max(0, int(round((x - pad_x) * frame_w)))
-    top = max(0, int(round((y - pad_y) * frame_h)))
-    right = min(frame_w, int(round((x + width + pad_x) * frame_w)))
-    bottom = min(frame_h, int(round((y + height + pad_y) * frame_h)))
+    left = max(0, round((x - pad_x) * frame_w))
+    top = max(0, round((y - pad_y) * frame_h))
+    right = min(frame_w, round((x + width + pad_x) * frame_w))
+    bottom = min(frame_h, round((y + height + pad_y) * frame_h))
     if right <= left or bottom <= top:
         raise ValueError("ROI collapsed to an empty crop")
     crop = frame[top:bottom, left:right]

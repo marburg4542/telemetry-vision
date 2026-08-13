@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 from .errors import DependencyError
 
@@ -189,7 +190,7 @@ class UltralyticsDetector:
                 track_id=None if track_id is None else int(track_id),
             )
             for (x1, y1, x2, y2), score, class_id, track_id in zip(
-                coordinates, confidences, class_ids, track_ids
+                coordinates, confidences, class_ids, track_ids, strict=True
             )
         ]
 

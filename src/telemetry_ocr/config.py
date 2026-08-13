@@ -8,7 +8,6 @@ from typing import Any, Literal
 
 from .errors import ConfigError, DependencyError
 
-
 Channel = Literal[
     "color", "gray", "b", "g", "r", "lab_l", "lab_a", "lab_b", "hsv_s", "hsv_v"
 ]
@@ -156,7 +155,9 @@ def parse_config(data: dict[str, Any]) -> AppConfig:
         runtime = RuntimeConfig(**(data.get("runtime") or {}))
         temporal_data = data.get("temporal") or {}
         temporal = TemporalConfig(
-            fast=TemporalProfileConfig(**(temporal_data.get("fast") or {"window": 3, "required": 2})),
+            fast=TemporalProfileConfig(
+                **(temporal_data.get("fast") or {"window": 3, "required": 2})
+            ),
             stable=TemporalProfileConfig(
                 **(temporal_data.get("stable") or {"window": 5, "required": 3})
             ),
@@ -277,7 +278,11 @@ def validate_config(config: AppConfig) -> None:
                 raise ConfigError(f"{item.field_id}: dms hemisphere must be N, S, E or W")
         elif item.normalizer == "dms":
             raise ConfigError(f"{item.field_id}: normalizer dms requires data_type: dms")
-        if item.min_value is not None and item.max_value is not None and item.min_value > item.max_value:
+        if (
+            item.min_value is not None
+            and item.max_value is not None
+            and item.min_value > item.max_value
+        ):
             raise ConfigError(f"{item.field_id}: min_value cannot exceed max_value")
         if item.max_delta_per_second is not None and item.max_delta_per_second <= 0:
             raise ConfigError(f"{item.field_id}: max_delta_per_second must be positive")

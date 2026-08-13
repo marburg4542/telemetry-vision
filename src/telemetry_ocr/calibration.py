@@ -5,7 +5,7 @@ import json
 import math
 import statistics
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -55,10 +55,7 @@ def load_labels(path: str | Path | None) -> dict[tuple[int, str], str]:
 
 def calibration_score(stats: RecipeStats) -> tuple[float, float, float, float]:
     report = stats.report()
-    if stats.labeled:
-        first = float(report["exact_accuracy"])
-    else:
-        first = float(report["valid_rate"])
+    first = float(report["exact_accuracy"]) if stats.labeled else float(report["valid_rate"])
     return (
         first,
         float(report["valid_rate"]),
@@ -86,13 +83,15 @@ def calibrate(
     unknown_fields = sorted({field_id for _, field_id in labels} - set(fields_by_id))
     if unknown_fields:
         raise ValueError(f"Labels reference unknown field IDs: {', '.join(unknown_fields)}")
-    for (frame_index, field_id), expected in labels.items():
-        if frame_index < 0:
+    # Named apart from the sampling loop below, where `expected` is optional.
+    for (label_frame, label_field), label_text in labels.items():
+        if label_frame < 0:
             raise ValueError("Label frame indexes cannot be negative")
-        checked = validate_text(expected, fields_by_id[field_id])
+        checked = validate_text(label_text, fields_by_id[label_field])
         if not checked.valid:
             raise ValueError(
-                f"Invalid label for frame {frame_index}/{field_id}: {expected!r} ({checked.reason})"
+                f"Invalid label for frame {label_frame}/{label_field}: "
+                f"{label_text!r} ({checked.reason})"
             )
     candidate_recipes = recipes or default_calibration_recipes()
     recipe_names = [recipe.name for recipe in candidate_recipes]
@@ -126,7 +125,11 @@ def calibrate(
                 continue
             processed_frames += 1
             for field_config in config.fields:
-                padding = config.runtime.padding if field_config.padding is None else field_config.padding
+                padding = (
+                    config.runtime.padding
+                    if field_config.padding is None
+                    else field_config.padding
+                )
                 crop = extract_roi(frame, field_config.box, padding)
                 images = [apply_recipe(crop, recipe) for recipe in candidate_recipes]
                 started = time.perf_counter()
@@ -136,7 +139,7 @@ def calibrate(
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 per_result_latency = elapsed_ms / max(len(results), 1)
                 expected = labels.get((frame_index, field_config.field_id))
-                for recipe, result in zip(candidate_recipes, results):
+                for recipe, result in zip(candidate_recipes, results, strict=True):
                     item_stats = stats[field_config.field_id][recipe.name]
                     validated = validate_text(result.text, field_config)
                     item_stats.attempts += 1
@@ -163,7 +166,9 @@ def calibrate(
     recipes_by_name = {recipe.name: recipe for recipe in candidate_recipes}
     for field_config in updated.fields:
         field_stats = stats[field_config.field_id]
-        ranked = sorted(field_stats, key=lambda name: calibration_score(field_stats[name]), reverse=True)
+        ranked = sorted(
+            field_stats, key=lambda name: calibration_score(field_stats[name]), reverse=True
+        )
         field_config.primary = recipes_by_name[ranked[0]]
         field_config.fallback = recipes_by_name[ranked[1] if len(ranked) > 1 else ranked[0]]
         report["fields"][field_config.field_id] = {
@@ -266,7 +271,10 @@ def export_validation_crops(
             raise VideoError("Video does not expose a finite frame count")
         frame_count = min(total_frames, max(1, math.ceil(crop_count / len(config.fields))))
         indexes = sorted(
-            {round(index * (total_frames - 1) / max(frame_count - 1, 1)) for index in range(frame_count)}
+            {
+                round(index * (total_frames - 1) / max(frame_count - 1, 1))
+                for index in range(frame_count)
+            }
         )
         rows: list[dict[str, Any]] = []
         exported = 0
@@ -280,7 +288,9 @@ def export_validation_crops(
                     break
                 padding = config.runtime.padding if item.padding is None else item.padding
                 crop = extract_roi(frame, item.box, padding)
-                safe_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in item.field_id)
+                safe_id = "".join(
+                    char if char.isalnum() or char in "-_" else "_" for char in item.field_id
+                )
                 relative_path = Path("images") / (
                     f"frame_{frame_index:08d}_{field_position:02d}_{safe_id}.png"
                 )

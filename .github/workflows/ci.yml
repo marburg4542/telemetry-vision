@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # PaddlePaddle is not installed here. Every heavy dependency is imported
+      # lazily, so the suite skips the model-backed paths and still covers
+      # config parsing, validation, temporal voting, the pipeline and the API.
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[web,test,lint]"
+      - run: python -m pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[web,test,lint]"
+      # `ruff format` is deliberately not enforced yet: adopting it would
+      # rewrite every file and bury real changes in the diff.
+      - run: python -m ruff check .
+      - run: python -m mypy

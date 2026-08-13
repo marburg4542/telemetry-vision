@@ -28,6 +28,7 @@ ai = [
   "opencv-python==4.10.0.84",
 ]
 test = ["pytest>=8,<9", "pytest-cov>=5,<7"]
+lint = ["ruff>=0.6,<1", "mypy>=1.11,<2", "types-PyYAML>=6,<7"]
 
 [project.scripts]
 telemetry-ocr = "telemetry_ocr.cli:main"
@@ -50,3 +51,30 @@ telemetry_ocr = [
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+  # The heavy dependencies are imported lazily inside functions on purpose, so
+  # that validate-config and the unit tests run without an ML stack installed.
+  "E402",
+  # Repairing glyphs an OSD font renders ambiguously is what this project does;
+  # the en dashes, primes and degree signs in string literals are the subject
+  # matter, not typos.
+  "RUF001",
+]
+
+[tool.mypy]
+files = ["src/telemetry_ocr"]
+python_version = "3.10"
+# cv2, paddleocr, torch and ultralytics have no usable stubs here, and the
+# frame/image types they exchange are deliberately Any at the boundaries.
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

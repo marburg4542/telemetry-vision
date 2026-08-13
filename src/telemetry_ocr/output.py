@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ _STOP = object()
 
 
 class RecordWriter:
-    fieldnames = [
+    fieldnames: ClassVar[list[str]] = [
         "source_time_ms",
         "frame_index",
         "field_id",

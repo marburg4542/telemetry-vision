@@ -307,6 +307,18 @@ python -m pytest
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
+ชุดเทสต์ไม่ต้องใช้ PaddlePaddle เพราะ dependency หนักถูก import แบบ lazy ทั้งหมด
+เทสต์ที่ต้องใช้ aiohttp/OpenCV จะ skip เองถ้าไม่มี
+
+Lint และ type check (ติดตั้งด้วย `pip install -e ".[lint]"`):
+
+```bash
+python -m ruff check . && python -m mypy
+```
+
+GitHub Actions ใน `.github/workflows/ci.yml` รัน pytest บน Python 3.11/3.12 พร้อม ruff
+และ mypy ส่วน `ruff format` ยังไม่ได้บังคับใช้เพราะจะ rewrite ทุกไฟล์จนกลบ diff ของงานจริง
+
 ก่อนใช้งานจริงควรมี labeled set อย่างน้อย 1,000 ROI crops และตรวจ:
 
 - exact-field accuracy เป้าหมายอย่างน้อย 97%
