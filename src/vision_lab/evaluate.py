@@ -121,7 +121,6 @@ def evaluate(paths: ProjectPaths, options: EvaluationOptions) -> dict[str, Any]:
         "save": options.save_video,
         "save_txt": options.save_txt,
         "save_conf": options.save_conf,
-        "half": options.half,
         "agnostic_nms": options.agnostic_nms,
         "line_width": 2,
         "project": str(run_dir.parent),
@@ -130,6 +129,10 @@ def evaluate(paths: ProjectPaths, options: EvaluationOptions) -> dict[str, Any]:
         "verbose": not options.quiet,
         **options.extra,
     }
+    # Ultralytics 8.4 deprecated `half` in favour of `quantize` and warns on
+    # every run even when it is False, so only send it when it was asked for.
+    if options.half:
+        call_options["half"] = True
     if options.device is not None:
         call_options["device"] = options.device
     if options.classes is not None:

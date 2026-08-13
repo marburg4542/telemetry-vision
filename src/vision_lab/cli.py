@@ -15,6 +15,7 @@ from pathlib import Path
 
 from telemetry_ocr.errors import TelemetryOCRError
 
+from . import __version__
 from .paths import load_paths
 
 
@@ -23,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="vision-lab",
         description="Dataset preparation, YOLO evaluation and environment checks.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
 
     check = commands.add_parser(
