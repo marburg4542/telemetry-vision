@@ -433,9 +433,42 @@ measured when the config still had 10 fields (50,780 records over 5,078 frames
 is exactly 10 per frame), so it is not comparable: 12 fields is 20% more OCR
 work per frame and p95 rose 20.4%, which accounts for the whole difference.
 
-These timing numbers are measured. Accuracy is not claimed from format validity:
-the delivery probe passed 79/80 sampled ROIs, but a manually labeled 1,000-crop
-validation set is still required before claiming the 97% exact-field target.
-Crops for that set are exported at `output/validation/` (996 images across the
-12 fields) and need their `expected` column filled in; rows for the `timestamp`
-field can be left blank because it is derived from source time, not recognized.
+## Accuracy ที่วัดได้จริง
+
+`examples/validation_labels_15-31-25-0.csv` คือ label ที่ตรวจด้วยตาทีละแถวจากเฟรมจริง
+ครบ 913 crops (ไม่นับ `timestamp` ที่คำนวณจากเวลา ไม่ได้ OCR) โดยดูภาพก่อนแล้วค่อยเทียบกับ
+ผล OCR เพื่อไม่ให้คำตอบเดิมชี้นำ
+
+**exact-field accuracy = 95.9% (840/876)** ยังต่ำกว่าเป้า 97% อยู่ 1.1 จุด
+
+| field | n | recipe เดิม | recipe ที่เลือกด้วย label |
+|---|---|---|---|
+| `tag_lat_dms` | 83 | 97.6% | **100.0%** |
+| `acft_lon_dms` | 83 | 98.8% | 98.8% |
+| `tag_lon_dms` | 83 | 96.4% | 98.8% |
+| `tag_alt_m` | 83 | 96.4% | 98.8% |
+| `lrf_m` | 46 | 95.7% | 97.8% |
+| `elevation_deg` | 83 | 95.2% | 97.6% |
+| `acft_lat_dms` | 83 | 95.2% | 96.4% |
+| `acft_alt_m` | 83 | 90.4% | 95.2% |
+| `sensor_angle_deg` | 83 | 86.7% | **91.6%** |
+| `eo_detail` | 83 | 90.4% | 90.4% |
+| `ir_detail` | 83 | 90.4% | 90.4% |
+| **รวม** | **876** | **93.8%** | **95.9%** |
+
+การ calibrate ครั้งแรกเลือก recipe จาก *valid rate* จึงเลือก preprocessing ที่ทำให้ผลแย่ลง
+พอวัดด้วย label จริง `color_baseline` (ภาพสีดิบ ไม่ทำ CLAHE/unsharp) ชนะ 6 จาก 11 field
+และได้ +2.1 จุด รันซ้ำได้ด้วย:
+
+```bash
+telemetry-ocr calibrate --video <video> --config configs/roi_calibrated_cuda.yaml \
+  --output-config configs/roi_calibrated_cuda.yaml --report output/calibration.json \
+  --labels examples/validation_labels_15-31-25-0.csv
+```
+
+`lrf_m` นับ 46 แถวเพราะอีก 37 แถวเป็น `0.00` (ไม่มีสัญญาณสะท้อน) ซึ่งต่ำกว่า `min_value` แล้ว
+จึงไม่มีระยะให้ตรวจ
+
+ที่เหลือให้ไล่ต่อคือสองตัวท้ายตาราง: `sensor_angle_deg` ยังอ่านหลักนำหน้าเกินในบางเฟรม
+(`2.46` เป็น `32.46`) และ `eo_detail`/`ir_detail` พลาดจากตัวอักษรกำกวมของฟอนต์ OSD
+(`1.⑩x`, `FOv`, `F0V 1.9²`) ซึ่งน่าจะต้อง fine-tune โมเดลมากกว่าปรับ preprocessing

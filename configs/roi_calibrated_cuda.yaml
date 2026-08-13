@@ -62,8 +62,8 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: gray_clahe
-    channel: gray
+    name: g_clahe
+    channel: g
     scale: 2.0
     clahe: true
     clahe_clip: 2.0
@@ -92,14 +92,31 @@ fields:
     channel: color
     scale: 2.0
     clahe: false
+    clahe_clip: 2.0
+    clahe_grid: 8
     unsharp: false
+    unsharp_amount: 0.8
+    morphology: none
+    morphology_kernel: 3
+    threshold: none
+    adaptive_block_size: 21
+    adaptive_c: 5.0
+    invert: false
   fallback:
-    name: gray_clahe
-    channel: gray
+    name: g_clahe
+    channel: g
     scale: 2.0
     clahe: true
+    clahe_clip: 2.0
+    clahe_grid: 8
     unsharp: true
+    unsharp_amount: 0.8
+    morphology: none
+    morphology_kernel: 3
     threshold: none
+    adaptive_block_size: 21
+    adaptive_c: 5.0
+    invert: false
 - field_id: ir_detail
   box:
   - 0.062
@@ -116,14 +133,31 @@ fields:
     channel: color
     scale: 2.0
     clahe: false
+    clahe_clip: 2.0
+    clahe_grid: 8
     unsharp: false
+    unsharp_amount: 0.8
+    morphology: none
+    morphology_kernel: 3
+    threshold: none
+    adaptive_block_size: 21
+    adaptive_c: 5.0
+    invert: false
   fallback:
-    name: gray_clahe
-    channel: gray
+    name: hsv_v_clahe
+    channel: hsv_v
     scale: 2.0
     clahe: true
+    clahe_clip: 2.0
+    clahe_grid: 8
     unsharp: true
+    unsharp_amount: 0.8
+    morphology: none
+    morphology_kernel: 3
     threshold: none
+    adaptive_block_size: 21
+    adaptive_c: 5.0
+    invert: false
 - field_id: lrf_m
   box:
   - 0.07
@@ -144,13 +178,13 @@ fields:
   max_delta_per_second: null
   padding: null
   primary:
-    name: color_baseline
+    name: color_clahe
     channel: color
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -193,13 +227,13 @@ fields:
   max_delta_per_second: null
   padding: null
   primary:
-    name: g_clahe
-    channel: g
+    name: color_baseline
+    channel: color
     scale: 2.0
-    clahe: true
+    clahe: false
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: true
+    unsharp: false
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -208,13 +242,13 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: color_baseline
-    channel: color
+    name: r_clahe
+    channel: r
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -242,13 +276,13 @@ fields:
   max_delta_per_second: null
   padding: null
   primary:
-    name: b_clahe
-    channel: b
+    name: color_baseline
+    channel: color
     scale: 2.0
-    clahe: true
+    clahe: false
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: true
+    unsharp: false
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -257,13 +291,13 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: color_baseline
-    channel: color
+    name: b_clahe
+    channel: b
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -291,13 +325,13 @@ fields:
   max_delta_per_second: null
   padding: null
   primary:
-    name: b_clahe
-    channel: b
+    name: color_baseline
+    channel: color
     scale: 2.0
-    clahe: true
+    clahe: false
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: true
+    unsharp: false
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -306,13 +340,13 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: color_baseline
-    channel: color
+    name: b_clahe
+    channel: b
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -340,13 +374,13 @@ fields:
   max_delta_per_second: null
   padding: null
   primary:
-    name: b_clahe
-    channel: b
+    name: color_baseline
+    channel: color
     scale: 2.0
-    clahe: true
+    clahe: false
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: true
+    unsharp: false
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -355,13 +389,13 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: color_baseline
-    channel: color
+    name: gray_clahe
+    channel: gray
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -391,13 +425,13 @@ fields:
   ocr_phase: 0
   padding: null
   primary:
-    name: b_clahe
-    channel: b
+    name: color_baseline
+    channel: color
     scale: 2.0
-    clahe: true
+    clahe: false
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: true
+    unsharp: false
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -406,13 +440,13 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: color_baseline
-    channel: color
+    name: r_clahe
+    channel: r
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
@@ -440,8 +474,8 @@ fields:
   max_delta_per_second: null
   padding: null
   primary:
-    name: r_clahe
-    channel: r
+    name: gray_clahe
+    channel: gray
     scale: 2.0
     clahe: true
     clahe_clip: 2.0
@@ -455,8 +489,8 @@ fields:
     adaptive_c: 5.0
     invert: false
   fallback:
-    name: color_clahe
-    channel: color
+    name: b_clahe
+    channel: b
     scale: 2.0
     clahe: true
     clahe_clip: 2.0
@@ -540,8 +574,8 @@ fields:
   ocr_phase: 2
   padding: null
   primary:
-    name: gray_otsu_inverted
-    channel: gray
+    name: color_clahe
+    channel: color
     scale: 2.0
     clahe: true
     clahe_clip: 2.0
@@ -550,18 +584,18 @@ fields:
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
-    threshold: otsu
+    threshold: none
     adaptive_block_size: 21
     adaptive_c: 5.0
-    invert: true
+    invert: false
   fallback:
-    name: color_baseline
-    channel: color
+    name: b_clahe
+    channel: b
     scale: 2.0
-    clahe: false
+    clahe: true
     clahe_clip: 2.0
     clahe_grid: 8
-    unsharp: false
+    unsharp: true
     unsharp_amount: 0.8
     morphology: none
     morphology_kernel: 3
