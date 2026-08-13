@@ -327,6 +327,14 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 - ROI ต้องคงที่และวิดีโอไม่มีการหมุนหรือเปลี่ยน layout
 - ถ้าตัวอักษรและพื้นหลังเหมือนกันจนไม่มี spatial/color signal เหลืออยู่ preprocessing ไม่สามารถกู้ข้อมูลที่หายไปได้ ต้องใช้ต้นฉบับคุณภาพสูงขึ้น, multi-frame reconstruction หรือ fine-tuning
 - Exact temporal voting ไม่เหมาะกับค่าที่เปลี่ยนทุก OCR tick; field ดังกล่าวควรลด `temporal.fast.required` เป็น `1` หลังวัด false-read rate จาก validation set
+- ค่าที่เปลี่ยนทุก tick ใช้ median ข้ามเฟรมแทน exact vote และต้องมี observation ที่ valid
+  อย่างน้อย **3 ค่า** จึงจะ `confirmed` ได้ เพราะ median ของ 2 ค่าคือค่าที่ใหม่กว่าเสมอ
+  ไม่ได้กันค่าผิดเลย ผลคือ field แบบ `fast` ยืนยันช้าลงหนึ่ง tick และวัดจาก
+  `telemetry-9.78hz.jsonl` แล้วมี tick ที่ `confirmed` ลดลง 0.3–8.3% แล้วแต่ field
+  โดยค่าที่รายงานยังเป็นค่า confirmed ล่าสุดเหมือนเดิม เพียงแต่ `confirmed=false`
+- ตั้ง `max_delta_per_second` ให้ field ที่มีขีดจำกัดทางกายภาพชัดเจน จะได้ด่านที่สอง:
+  หน้าต่าง voting ที่กระจายเกินกว่าที่ค่าจะเปลี่ยนทันจะไม่ถูกยืนยัน ค่าที่วัดได้จาก run
+  ที่มีอยู่ยังปนค่าผิดจึงใช้ตั้ง threshold ไม่ได้ ควรใช้ข้อจำกัดจริงของ gimbal และอากาศยาน
 
 ## Real-video CPU tuning (15-31-25-0.mp4)
 

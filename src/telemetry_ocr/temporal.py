@@ -8,6 +8,11 @@ from .config import AppConfig, FieldConfig, TemporalProfileConfig
 from .validation import ValidatedValue
 
 
+# A median needs three samples before it can hold an outlier out of the middle.
+# With two, the "median" is whichever reading arrived last.
+_MIN_MEDIAN_SAMPLES = 3
+
+
 @dataclass(frozen=True, slots=True)
 class Observation:
     timestamp_ms: float
@@ -67,7 +72,11 @@ class FieldStabilizer:
             for item in self.history
             if item is not None and isinstance(item.value, (int, float))
         ]
-        if not confirmed and len(numeric_observations) >= self.profile.required:
+        if (
+            not confirmed
+            and len(numeric_observations) >= max(self.profile.required, _MIN_MEDIAN_SAMPLES)
+            and self._window_is_coherent(numeric_observations)
+        ):
             # Continuously changing telemetry may never repeat an exact string.
             # Use the observed median so a single valid-but-wrong spike cannot
             # become the confirmed value merely because it is the latest read.
@@ -90,6 +99,22 @@ class FieldStabilizer:
         else:
             confirmed = False
         return StabilizedValue(self.last_value, self.last_text, confirmed, support)
+
+    def _window_is_coherent(self, observations: list[Observation]) -> bool:
+        """Reject a median drawn from readings that disagree more than the field can move.
+
+        `_passes_delta` asks whether the winning value jumped away from the last
+        confirmed one. This asks the different question of whether the window
+        agrees with itself well enough for its median to mean anything.
+        """
+        limit = self.field.max_delta_per_second
+        if limit is None:
+            return True
+        values = [observation.value for observation in observations]
+        elapsed_seconds = max(
+            (observations[-1].timestamp_ms - observations[0].timestamp_ms) / 1000.0, 0.001
+        )
+        return max(values) - min(values) <= limit * elapsed_seconds
 
     def _passes_delta(self, observation: Observation) -> bool:
         limit = self.field.max_delta_per_second

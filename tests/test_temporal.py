@@ -54,10 +54,34 @@ class TemporalTests(unittest.TestCase):
         second = stabilizer.add(valid("11", 11), 0.9, 100)
         third = stabilizer.add(valid("100", 100), 0.9, 200)
         self.assertFalse(first.confirmed)
-        self.assertTrue(second.confirmed)
-        self.assertEqual(second.value, 11)
+        # Two samples cannot hold an outlier out of the middle, so the median
+        # path waits for a third before it confirms anything.
+        self.assertFalse(second.confirmed)
         self.assertTrue(third.confirmed)
         self.assertEqual(third.value, 11)
+
+    def test_median_of_two_never_confirms_the_newest_read(self):
+        stabilizer = FieldStabilizer(self.make_field(), TemporalProfileConfig(3, 2))
+        stabilizer.add(valid("17", 17), 0.9, 0)
+        stabilizer.add(ValidatedValue("x", "x", None, False), 0.9, 100)
+        spike = stabilizer.add(valid("78", 78), 0.9, 200)
+        self.assertFalse(spike.confirmed)
+        self.assertNotEqual(spike.value, 78)
+
+    def test_median_is_rejected_when_the_window_disagrees_with_itself(self):
+        field = self.make_field(max_delta_per_second=10)
+        noisy = FieldStabilizer(field, TemporalProfileConfig(3, 2))
+        noisy.add(valid("10", 10), 0.9, 0)
+        noisy.add(valid("60", 60), 0.9, 100)
+        scattered = noisy.add(valid("11", 11), 0.9, 200)
+        self.assertFalse(scattered.confirmed)
+
+        steady = FieldStabilizer(field, TemporalProfileConfig(3, 2))
+        steady.add(valid("10", 10), 0.9, 0)
+        steady.add(valid("10.5", 10.5), 0.9, 100)
+        tight = steady.add(valid("11", 11), 0.9, 200)
+        self.assertTrue(tight.confirmed)
+        self.assertEqual(tight.value, 10.5)
 
     def test_delta_rule_rejects_implausible_jump(self):
         stabilizer = FieldStabilizer(
