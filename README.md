@@ -62,6 +62,54 @@ paddleocr install_hpi_deps cpu
 
 สำหรับ CPU ค่าเริ่มต้นใช้ `PP-OCRv6_tiny_rec` เพราะมี latency ต่ำกว่าอย่างชัดเจนในการ benchmark บนเครื่องนี้ ตั้ง `warmup_iterations: 2` เพื่อไม่ให้การ compile oneDNN ครั้งแรกปนกับ realtime latency หาก labeled accuracy ของวิดีโอจริงต่ำกว่าเป้าหมาย ให้เปลี่ยนเป็น `en_PP-OCRv5_mobile_rec` แล้ว benchmark ใหม่
 
+## ติดตั้งแบบ CUDA (แนะนำถ้ามี NVIDIA GPU)
+
+วัดบน GTX 1650 (4 GB, compute 7.5) แล้ว GPU เร็วกว่า CPU ทั้งสองงาน และ**ผ่านเกณฑ์
+10 Hz / p95 < 100 ms ที่ native Windows ทำไม่ได้บน CPU**:
+
+| งาน | CPU | CUDA |
+|---|---|---|
+| OCR update rate | 9.84 Hz | **10.10 Hz** |
+| OCR latency p95 | 164.0 ms | **46.6 ms** |
+| OCR dropped frames | 130 | **1** |
+| YOLO track @416 px | 236.8 ms | **32.8 ms** |
+| YOLO track @640 px | 507.3 ms | **41.4 ms** |
+
+บน CUDA ให้ใช้ image size **640 px** ได้เลย เพราะถูกกว่า 416 px บน CPU เสียอีก
+
+```powershell
+py -3.12 -m venv .venv-cuda
+.\.venv-cuda\Scripts\python.exe -m pip install paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+.\.venv-cuda\Scripts\python.exe -m pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126
+.\.venv-cuda\Scripts\python.exe -m pip install -e ".[ocr,web,ai]" nvidia-cudnn-cu12==9.9.0.52
+```
+
+บรรทัดสุดท้ายจำเป็น: `paddlepaddle-gpu 3.2.0` ประกาศ pin ไว้ที่ `nvidia-cudnn-cu12==9.5.1.17`
+แต่ตัว binary คอมไพล์มากับ cuDNN 9.9 และจะเตือนตอน runtime ว่า *"may cause serious
+incompatible bug"* การลง 9.9.0.52 ทับทำให้คำเตือนหายและทั้งสอง framework ยังทำงานได้
+(pip จะบ่นเรื่อง pin ไม่ตรง ซึ่งไม่เป็นไร)
+
+ใช้ `configs/roi_calibrated_cuda.yaml` ซึ่งต่างจากตัว CPU แค่ `device: gpu`,
+`enable_mkldnn: false` (oneDNN เป็นไลบรารี CPU) และ `recognizer_workers: 1`
+เพราะ VRAM 4 GB ต้องแบ่งกับ YOLO
+
+`start_windows_ocr_web.ps1` จะเลือก `.venv-cuda` ก่อนเสมอ และถอยไปใช้ `.venv` (CPU)
+อัตโนมัติถ้าไม่มี โดยบันทึกว่าเลือกอันไหนลง log
+
+### ทำไม Paddle กับ PyTorch อยู่ process เดียวกันบน CUDA ไม่ได้
+
+ทั้งคู่พก cuDNN 9 มาเอง และบน Windows ตัวที่โหลดทีหลัง**พังเสมอ ไม่ว่าจะสลับลำดับอย่างไร**
+(`WinError 127` ที่ `cudnn_cnn64_9.dll`) ปัญหาคือ `paddleocr` ลาก torch เข้ามาทางอ้อมผ่าน
+`paddlex → modelscope` การเปิด GPU เฉยๆ จึงทำให้ Paddle พังก่อนจะสร้างโมเดล OCR ด้วยซ้ำ
+
+ทางออกคือ process ที่ถือ Paddle จะซ่อน torch จากตัวเอง (`paddleocr` ทำงานได้ปกติเมื่อไม่มี torch)
+ส่วน YOLO อยู่ใน spawn process แยกซึ่งโหลด cuDNN ของ torch ได้อิสระ
+
+ข้อจำกัดที่ตามมาคือ **ข้อมูลที่ส่งข้าม process ต้องเป็น builtin ล้วน** เพราะการ unpickle
+จะ import โมดูลที่นิยามคลาสนั้น เช่น `torch.__version__` เป็น subclass ของ `str`
+การส่งกลับมาจะลาก torch เข้าไปใน process ของ Paddle และทำให้ OCR พัง —
+มีเทสต์ `DetectionBoundaryTests` คุมเรื่องนี้ไว้แล้ว
+
 ## ตั้งค่า ROI
 
 คัดลอก [examples/roi_config.yaml](examples/roi_config.yaml) แล้วแก้ `box` ของแต่ละ field ซึ่งอยู่ในรูป `[x, y, width, height]` และทุกค่าเป็นสัดส่วน `0.0–1.0` เทียบกับขนาดเฟรม
@@ -240,7 +288,8 @@ OCR และหน้าเว็บจะทำงานต่อ พร้อ
 
 - ใช้ `model.track(..., persist=True, tracker="botsort.yaml")` บน CPU และส่ง `track_id` กลับมาพร้อม class, confidence และ bounding box
 - ค่าเริ่มต้นของหน้าเว็บคือส่งเฟรม 10 Hz, confidence `0.45`, IoU `0.45`, image size 416 px และจำกัด PyTorch/OpenCV ไว้ 2 CPU threads
-- เลือก 416 px เพื่อให้กรอบทันวิดีโอเมื่อรันพร้อม OCR บน CPU เครื่องนี้; ยังเลือก 640/960 px ได้เมื่อต้องการเน้นความแม่นยำหรือใช้ CPU ที่เร็วกว่า
+- 416 px เป็นค่าเริ่มต้นเพื่อให้กรอบทันวิดีโอเมื่อรันพร้อม OCR **บน CPU**; บน CUDA ให้เลือก
+  640 px ได้เลยเพราะวัดได้ 41.4 ms ซึ่งถูกกว่า 416 px บน CPU (236.8 ms) หลายเท่า
 - browser ย่อด้านยาวของภาพตาม image size ก่อนสร้าง JPEG; server รับเฟรมแบบ non-blocking และ queue เก็บได้หนึ่งเฟรม โดยเฟรมใหม่แทนเฟรมที่ค้างอยู่
 - overlay ใช้สองตำแหน่งล่าสุดของแต่ละ `track_id` เพื่อคาดตำแหน่งต่อไม่เกิน 250 ms, fade กรอบที่หายภายใน 150 ms และซ่อนผลที่ช้ากว่าวิดีโอเกิน 750 ms
 - tracker จะ reset เมื่อเลือก/seek วิดีโอ, เปลี่ยน confidence หรือ image size, เปลี่ยนโมเดล และเมื่อ source timestamp กระโดดเกินหนึ่งวินาที
@@ -373,9 +422,11 @@ runtime controls:
 The full 513-second run over the 12 fields this config now defines produced
 60,624 records from 5,052 processed OCR frames: 9.84 updates/second, 92.7 ms
 mean end-to-end latency, 164.0 ms p95 latency, and 130 newest-frame queue drops.
-Native Windows is therefore below the strict 10 Hz / 100 ms-p95 acceptance
-target. PaddleX HPI is Linux-only for this setup; WSL2/Ubuntu with HPI remains
-the recommended deployment route when that strict target is mandatory.
+Native Windows on the CPU is therefore below the strict 10 Hz / 100 ms-p95
+acceptance target. The same run on CUDA clears it comfortably at 10.10 Hz and
+46.6 ms p95, so a GPU, not WSL2/HPI, is now the recommended route to that
+target. PaddleX HPI is Linux-only for this setup and remains the option for
+CPU-only deployments that must hit it.
 
 An earlier figure of 9.90 Hz and 136.2 ms p95 is quoted in some notes. It was
 measured when the config still had 10 fields (50,780 records over 5,078 frames
