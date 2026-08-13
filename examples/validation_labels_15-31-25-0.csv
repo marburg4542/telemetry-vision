@@ -1,0 +1,997 @@
+frame_index,field_id,expected,ocr_raw,verified,crop_path
+0,timestamp,,,,images/frame_00000000_00_timestamp.png
+0,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00000000_01_eo_detail.png
+0,ir_detail,1.0x,1.0x,visual,images/frame_00000000_02_ir_detail.png
+0,lrf_m,70.5,70.5m,visual,images/frame_00000000_03_lrf_m.png
+0,sensor_angle_deg,0.18,0.18,visual,images/frame_00000000_04_sensor_angle_deg.png
+0,elevation_deg,0.02,0.02,visual,images/frame_00000000_05_elevation_deg.png
+0,tag_lat_dms,"14°52'19.11""","14°52'19.11""",visual,images/frame_00000000_06_tag_lat_dms.png
+0,tag_lon_dms,"102°01'13.24""","102°01'13.24""",visual,images/frame_00000000_07_tag_lon_dms.png
+0,tag_alt_m,238.000,238.000m,visual,images/frame_00000000_08_tag_alt_m.png
+0,acft_lat_dms,"14°52'17.80""",14°52'17.802,visual,images/frame_00000000_09_acft_lat_dms.png
+0,acft_lon_dms,"102°01'11.22""","102°01'11.22""",visual,images/frame_00000000_10_acft_lon_dms.png
+0,acft_alt_m,238.000,238.000n,visual,images/frame_00000000_11_acft_alt_m.png
+185,timestamp,,,,images/frame_00000185_00_timestamp.png
+185,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00000185_01_eo_detail.png
+185,ir_detail,1.0x,1.0x,visual,images/frame_00000185_02_ir_detail.png
+185,lrf_m,76.8,76.8m,visual,images/frame_00000185_03_lrf_m.png
+185,sensor_angle_deg,0.18,0.18,visual,images/frame_00000185_04_sensor_angle_deg.png
+185,elevation_deg,0.00,-0.00,visual,images/frame_00000185_05_elevation_deg.png
+185,tag_lat_dms,"14°52'19.18""","14°52'19.18""",visual,images/frame_00000185_06_tag_lat_dms.png
+185,tag_lon_dms,"102°01'13.36""","102°01'13.36""",visual,images/frame_00000185_07_tag_lon_dms.png
+185,tag_alt_m,238.000,238.000m,visual,images/frame_00000185_08_tag_alt_m.png
+185,acft_lat_dms,"14°52'17.80""",14°52'17.802,visual,images/frame_00000185_09_acft_lat_dms.png
+185,acft_lon_dms,"102°01'11.22""","102°01'11.22""",visual,images/frame_00000185_10_acft_lon_dms.png
+185,acft_alt_m,238.000,238.000m,visual,images/frame_00000185_11_acft_alt_m.png
+371,timestamp,,,,images/frame_00000371_00_timestamp.png
+371,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00000371_01_eo_detail.png
+371,ir_detail,1.0x,1.0x,visual,images/frame_00000371_02_ir_detail.png
+371,lrf_m,76.8,76.8m,visual,images/frame_00000371_03_lrf_m.png
+371,sensor_angle_deg,0.09,0.09,visual,images/frame_00000371_04_sensor_angle_deg.png
+371,elevation_deg,0.00,-0.00,visual,images/frame_00000371_05_elevation_deg.png
+371,tag_lat_dms,"14°52'19.18""","14°52'19.18""",visual,images/frame_00000371_06_tag_lat_dms.png
+371,tag_lon_dms,"102°01'13.35""","102°01'13.35""",visual,images/frame_00000371_07_tag_lon_dms.png
+371,tag_alt_m,238.000,238.000m,visual,images/frame_00000371_08_tag_alt_m.png
+371,acft_lat_dms,"14°52'17.80""",14°52'17.802,visual,images/frame_00000371_09_acft_lat_dms.png
+371,acft_lon_dms,"102°01'11.22""","102°01'11.22""",visual,images/frame_00000371_10_acft_lon_dms.png
+371,acft_alt_m,238.000,238.000n,visual,images/frame_00000371_11_acft_alt_m.png
+556,timestamp,,,,images/frame_00000556_00_timestamp.png
+556,eo_detail,1.0xFOV66.4°,1.0xFOV 66.4°,visual,images/frame_00000556_01_eo_detail.png
+556,ir_detail,1.0x,10x,visual,images/frame_00000556_02_ir_detail.png
+556,lrf_m,64.8,64.8m,visual,images/frame_00000556_03_lrf_m.png
+556,sensor_angle_deg,-11.78,=11.70,visual,images/frame_00000556_04_sensor_angle_deg.png
+556,elevation_deg,-0.02,-0.02,visual,images/frame_00000556_05_elevation_deg.png
+556,tag_lat_dms,"14°52'15.97""","14°52′15.97""",visual,images/frame_00000556_06_tag_lat_dms.png
+556,tag_lon_dms,"102°01'12.29""","102°01~12.29""",visual,images/frame_00000556_07_tag_lon_dms.png
+556,tag_alt_m,238.000,238. 060m,visual,images/frame_00000556_08_tag_alt_m.png
+556,acft_lat_dms,"14°52'17.80""",14°52/17.802,visual,images/frame_00000556_09_acft_lat_dms.png
+556,acft_lon_dms,"102°01'11.22""",102°01'11.22ⁿ,visual,images/frame_00000556_10_acft_lon_dms.png
+556,acft_alt_m,238.000,238. 000n,visual,images/frame_00000556_11_acft_alt_m.png
+742,timestamp,,,,images/frame_00000742_00_timestamp.png
+742,eo_detail,1.0xFOV66.4°,.1.0x F0V.66.4,visual,images/frame_00000742_01_eo_detail.png
+742,ir_detail,1.0x,1.Ox,visual,images/frame_00000742_02_ir_detail.png
+742,lrf_m,43.2,43.2m,visual,images/frame_00000742_03_lrf_m.png
+742,sensor_angle_deg,-2.72,-2.722,visual,images/frame_00000742_04_sensor_angle_deg.png
+742,elevation_deg,0.00,-0.00,visual,images/frame_00000742_05_elevation_deg.png
+742,tag_lat_dms,"14°52'17.19""","14°52°17.19""",visual,images/frame_00000742_06_tag_lat_dms.png
+742,tag_lon_dms,"102°01'09.92""","102°01'09.92""",visual,images/frame_00000742_07_tag_lon_dms.png
+742,tag_alt_m,238.000,238.000m,visual,images/frame_00000742_08_tag_alt_m.png
+742,acft_lat_dms,"14°52'17.80""",14°52⁰17.802,visual,images/frame_00000742_09_acft_lat_dms.png
+742,acft_lon_dms,"102°01'11.22""","102°01⁰11.22""",visual,images/frame_00000742_10_acft_lon_dms.png
+742,acft_alt_m,238.000,238.000n,visual,images/frame_00000742_11_acft_alt_m.png
+927,timestamp,,,,images/frame_00000927_00_timestamp.png
+927,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00000927_01_eo_detail.png
+927,ir_detail,1.0x,TOx,visual,images/frame_00000927_02_ir_detail.png
+927,lrf_m,50.8,50.8m,visual,images/frame_00000927_03_lrf_m.png
+927,sensor_angle_deg,-0.09,-0709,visual,images/frame_00000927_04_sensor_angle_deg.png
+927,elevation_deg,0.00,-0.00,visual,images/frame_00000927_05_elevation_deg.png
+927,tag_lat_dms,"14°52'17.17""",14°52'17.172,visual,images/frame_00000927_06_tag_lat_dms.png
+927,tag_lon_dms,"102°01'09.64""","102°01°09.64""",visual,images/frame_00000927_07_tag_lon_dms.png
+927,tag_alt_m,238.000,238.000m,visual,images/frame_00000927_08_tag_alt_m.png
+927,acft_lat_dms,"14°52'17.80""",14°52°17.802,visual,images/frame_00000927_09_acft_lat_dms.png
+927,acft_lon_dms,"102°01'11.22""","102°01⁰11.22""",visual,images/frame_00000927_10_acft_lon_dms.png
+927,acft_alt_m,238.000,238.000n,visual,images/frame_00000927_11_acft_alt_m.png
+1113,timestamp,,,,images/frame_00001113_00_timestamp.png
+1113,eo_detail,1.0xFOV66.4°,1-0x F0V 66.4°,visual,images/frame_00001113_01_eo_detail.png
+1113,ir_detail,1.0x,OxS,visual,images/frame_00001113_02_ir_detail.png
+1113,lrf_m,47.8,47.8m.,visual,images/frame_00001113_03_lrf_m.png
+1113,sensor_angle_deg,0.09,0P09,visual,images/frame_00001113_04_sensor_angle_deg.png
+1113,elevation_deg,0.00,-0.00,visual,images/frame_00001113_05_elevation_deg.png
+1113,tag_lat_dms,"14°52'17.22""","14°52°17.22""",visual,images/frame_00001113_06_tag_lat_dms.png
+1113,tag_lon_dms,"102°01'09.73""","102°01'09.73""",visual,images/frame_00001113_07_tag_lon_dms.png
+1113,tag_alt_m,238.000,238.000m,visual,images/frame_00001113_08_tag_alt_m.png
+1113,acft_lat_dms,"14°52'17.80""",14°52°17.802,visual,images/frame_00001113_09_acft_lat_dms.png
+1113,acft_lon_dms,"102°01'11.22""","102°01⁰11.22""",visual,images/frame_00001113_10_acft_lon_dms.png
+1113,acft_alt_m,238.000,238.000n,visual,images/frame_00001113_11_acft_alt_m.png
+1298,timestamp,,,,images/frame_00001298_00_timestamp.png
+1298,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00001298_01_eo_detail.png
+1298,ir_detail,1.0x,1.0x,visual,images/frame_00001298_02_ir_detail.png
+1298,lrf_m,52.0,52. 0m,visual,images/frame_00001298_03_lrf_m.png
+1298,sensor_angle_deg,0.35,0.35,visual,images/frame_00001298_04_sensor_angle_deg.png
+1298,elevation_deg,0.02,0.02,visual,images/frame_00001298_05_elevation_deg.png
+1298,tag_lat_dms,"14°52'17.16""",14°52'17.16″,visual,images/frame_00001298_06_tag_lat_dms.png
+1298,tag_lon_dms,"102°01'09.62""","102°01'09.62""",visual,images/frame_00001298_07_tag_lon_dms.png
+1298,tag_alt_m,247.000,247.000m,visual,images/frame_00001298_08_tag_alt_m.png
+1298,acft_lat_dms,"14°52'17.80""",14°52′17.80″,visual,images/frame_00001298_09_acft_lat_dms.png
+1298,acft_lon_dms,"102°01'11.23""",102°01'11.23″,visual,images/frame_00001298_10_acft_lon_dms.png
+1298,acft_alt_m,247.000,247.000m,visual,images/frame_00001298_11_acft_alt_m.png
+1484,timestamp,,,,images/frame_00001484_00_timestamp.png
+1484,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00001484_01_eo_detail.png
+1484,ir_detail,1.0x,10x,visual,images/frame_00001484_02_ir_detail.png
+1484,lrf_m,54.0,54.0m,visual,images/frame_00001484_03_lrf_m.png
+1484,sensor_angle_deg,3.43,3.43,visual,images/frame_00001484_04_sensor_angle_deg.png
+1484,elevation_deg,-24.96,=24.96,visual,images/frame_00001484_05_elevation_deg.png
+1484,tag_lat_dms,"14°52'17.22""",14°52°17.22”,visual,images/frame_00001484_06_tag_lat_dms.png
+1484,tag_lon_dms,"102°01'09.59""","102°01’09.59""",visual,images/frame_00001484_07_tag_lon_dms.png
+1484,tag_alt_m,237.000,237 000m,visual,images/frame_00001484_08_tag_alt_m.png
+1484,acft_lat_dms,"14°52'17.79""",14⁸52⁰17.79,visual,images/frame_00001484_09_acft_lat_dms.png
+1484,acft_lon_dms,"102°01'11.23""",102°01°11.23²,visual,images/frame_00001484_10_acft_lon_dms.png
+1484,acft_alt_m,260.000,260. 000元,visual,images/frame_00001484_11_acft_alt_m.png
+1669,timestamp,,,,images/frame_00001669_00_timestamp.png
+1669,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00001669_01_eo_detail.png
+1669,ir_detail,1.0x,1.0x,visual,images/frame_00001669_02_ir_detail.png
+1669,lrf_m,57.4,57.4m,visual,images/frame_00001669_03_lrf_m.png
+1669,sensor_angle_deg,0.88,0.88,visual,images/frame_00001669_04_sensor_angle_deg.png
+1669,elevation_deg,-24.96,=24.96,visual,images/frame_00001669_05_elevation_deg.png
+1669,tag_lat_dms,"14°52'17.20""",14*52/17.20,visual,images/frame_00001669_06_tag_lat_dms.png
+1669,tag_lon_dms,"102°01'09.66""",102°01'09.66*,visual,images/frame_00001669_07_tag_lon_dms.png
+1669,tag_alt_m,248.000,248.000m,visual,images/frame_00001669_08_tag_alt_m.png
+1669,acft_lat_dms,"14°52'17.80""",—14°52'17.802,visual,images/frame_00001669_09_acft_lat_dms.png
+1669,acft_lon_dms,"102°01'11.23""",102°01°11.232,visual,images/frame_00001669_10_acft_lon_dms.png
+1669,acft_alt_m,272.000,272.000n,visual,images/frame_00001669_11_acft_alt_m.png
+1855,timestamp,,,,images/frame_00001855_00_timestamp.png
+1855,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00001855_01_eo_detail.png
+1855,ir_detail,1.0x,1.0x,visual,images/frame_00001855_02_ir_detail.png
+1855,lrf_m,89.8,89.8m.,visual,images/frame_00001855_03_lrf_m.png
+1855,sensor_angle_deg,2.37,2.37,visual,images/frame_00001855_04_sensor_angle_deg.png
+1855,elevation_deg,-24.96,=24.96,visual,images/frame_00001855_05_elevation_deg.png
+1855,tag_lat_dms,"14°52'16.88""",14°5216 882,visual,images/frame_00001855_06_tag_lat_dms.png
+1855,tag_lon_dms,"102°01'08.67""","102°01<08, 67²",visual,images/frame_00001855_07_tag_lon_dms.png
+1855,tag_alt_m,247.000,247.000m,visual,images/frame_00001855_08_tag_alt_m.png
+1855,acft_lat_dms,"14°52'17.80""",14°5217. 804,visual,images/frame_00001855_09_acft_lat_dms.png
+1855,acft_lon_dms,"102°01'11.23""","102°01'11.23""",visual,images/frame_00001855_10_acft_lon_dms.png
+1855,acft_alt_m,285.000,285t 000m,visual,images/frame_00001855_11_acft_alt_m.png
+2040,timestamp,,,,images/frame_00002040_00_timestamp.png
+2040,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00002040_01_eo_detail.png
+2040,ir_detail,1.0x,1Ox,visual,images/frame_00002040_02_ir_detail.png
+2040,lrf_m,119.3,119.3m,visual,images/frame_00002040_03_lrf_m.png
+2040,sensor_angle_deg,2.37,2.3720,visual,images/frame_00002040_04_sensor_angle_deg.png
+2040,elevation_deg,-24.96,-24.96,visual,images/frame_00002040_05_elevation_deg.png
+2040,tag_lat_dms,"14°52'16.59""",14:52~16.592,visual,images/frame_00002040_06_tag_lat_dms.png
+2040,tag_lon_dms,"102°01'07.82""",102:01’07-82*,visual,images/frame_00002040_07_tag_lon_dms.png
+2040,tag_alt_m,247.000,247.000m,visual,images/frame_00002040_08_tag_alt_m.png
+2040,acft_lat_dms,"14°52'17.79""","14°52'17.79""",visual,images/frame_00002040_09_acft_lat_dms.png
+2040,acft_lon_dms,"102°01'11.22""",.102°0111 22,visual,images/frame_00002040_10_acft_lon_dms.png
+2040,acft_alt_m,298.000,298:000ns,visual,images/frame_00002040_11_acft_alt_m.png
+2225,timestamp,,,,images/frame_00002225_00_timestamp.png
+2225,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00002225_01_eo_detail.png
+2225,ir_detail,1.0x,L.0x,visual,images/frame_00002225_02_ir_detail.png
+2225,lrf_m,151.4,151. 4m,visual,images/frame_00002225_03_lrf_m.png
+2225,sensor_angle_deg,2.72,22.72网,visual,images/frame_00002225_04_sensor_angle_deg.png
+2225,elevation_deg,-24.96,=24.96,visual,images/frame_00002225_05_elevation_deg.png
+2225,tag_lat_dms,"14°52'16.26""","14°5216.26""",visual,images/frame_00002225_06_tag_lat_dms.png
+2225,tag_lon_dms,"102°01'06.91""",102°01/06.912,visual,images/frame_00002225_07_tag_lon_dms.png
+2225,tag_alt_m,246.000,"246, 000m",visual,images/frame_00002225_08_tag_alt_m.png
+2225,acft_lat_dms,"14°52'17.80""","14°52/17.80""",visual,images/frame_00002225_09_acft_lat_dms.png
+2225,acft_lon_dms,"102°01'11.22""","102°0111.22""",visual,images/frame_00002225_10_acft_lon_dms.png
+2225,acft_alt_m,310.000,31oy000m,visual,images/frame_00002225_11_acft_alt_m.png
+2411,timestamp,,,,images/frame_00002411_00_timestamp.png
+2411,eo_detail,1.0xFOV66.4°,1.0x FOv 66.4°,visual,images/frame_00002411_01_eo_detail.png
+2411,ir_detail,1.0x,1.@x,visual,images/frame_00002411_02_ir_detail.png
+2411,lrf_m,188.8,188.8m,visual,images/frame_00002411_03_lrf_m.png
+2411,sensor_angle_deg,2.55,2.55,visual,images/frame_00002411_04_sensor_angle_deg.png
+2411,elevation_deg,-24.96,-24.96,visual,images/frame_00002411_05_elevation_deg.png
+2411,tag_lat_dms,"14°52'15.87""",-14°52-15.87“,visual,images/frame_00002411_06_tag_lat_dms.png
+2411,tag_lon_dms,"102°01'05.85""",102°01<05.854,visual,images/frame_00002411_07_tag_lon_dms.png
+2411,tag_alt_m,242.000,242. 000m,visual,images/frame_00002411_08_tag_alt_m.png
+2411,acft_lat_dms,"14°52'17.80""",14°52'17-80^,visual,images/frame_00002411_09_acft_lat_dms.png
+2411,acft_lon_dms,"102°01'11.22""","102°0111.22""",visual,images/frame_00002411_10_acft_lon_dms.png
+2411,acft_alt_m,322.000,322 000m:,visual,images/frame_00002411_11_acft_alt_m.png
+2596,timestamp,,,,images/frame_00002596_00_timestamp.png
+2596,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00002596_01_eo_detail.png
+2596,ir_detail,1.0x,1.0x,visual,images/frame_00002596_02_ir_detail.png
+2596,lrf_m,206.3,206.3n,visual,images/frame_00002596_03_lrf_m.png
+2596,sensor_angle_deg,2.46,32.46,visual,images/frame_00002596_04_sensor_angle_deg.png
+2596,elevation_deg,-24.96,-24.96,visual,images/frame_00002596_05_elevation_deg.png
+2596,tag_lat_dms,"14°52'15.67""","14°52~15.67""",visual,images/frame_00002596_06_tag_lat_dms.png
+2596,tag_lon_dms,"102°01'05.35""","102°01'05.35""",visual,images/frame_00002596_07_tag_lon_dms.png
+2596,tag_alt_m,241.000,241 000m,visual,images/frame_00002596_08_tag_alt_m.png
+2596,acft_lat_dms,"14°52'17.79""","14°52/17.79""",visual,images/frame_00002596_09_acft_lat_dms.png
+2596,acft_lon_dms,"102°01'11.22""",102°0111.222,visual,images/frame_00002596_10_acft_lon_dms.png
+2596,acft_alt_m,328.000,328000m,visual,images/frame_00002596_11_acft_alt_m.png
+2782,timestamp,,,,images/frame_00002782_00_timestamp.png
+2782,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00002782_01_eo_detail.png
+2782,ir_detail,1.0x,1.0x,visual,images/frame_00002782_02_ir_detail.png
+2782,lrf_m,201.2,201.2m,visual,images/frame_00002782_03_lrf_m.png
+2782,sensor_angle_deg,-1.23,=1.23,visual,images/frame_00002782_04_sensor_angle_deg.png
+2782,elevation_deg,-24.92,=24.92,visual,images/frame_00002782_05_elevation_deg.png
+2782,tag_lat_dms,"14°52'15.48""","14°5215.48""",visual,images/frame_00002782_06_tag_lat_dms.png
+2782,tag_lon_dms,"102°01'05.55""","102°01~05.55""",visual,images/frame_00002782_07_tag_lon_dms.png
+2782,tag_alt_m,243.000,243 000m,visual,images/frame_00002782_08_tag_alt_m.png
+2782,acft_lat_dms,"14°52'17.74""",14°52<17.74”,visual,images/frame_00002782_09_acft_lat_dms.png
+2782,acft_lon_dms,"102°01'11.20""",102°01'11.20,visual,images/frame_00002782_10_acft_lon_dms.png
+2782,acft_alt_m,328.000,328000m,visual,images/frame_00002782_11_acft_alt_m.png
+2967,timestamp,,,,images/frame_00002967_00_timestamp.png
+2967,eo_detail,1.0xFOV66.4°,1.0x FOv 66.4°,visual,images/frame_00002967_01_eo_detail.png
+2967,ir_detail,1.0x,1.0x,visual,images/frame_00002967_02_ir_detail.png
+2967,lrf_m,178.0,178.0n,visual,images/frame_00002967_03_lrf_m.png
+2967,sensor_angle_deg,3.25,3.5,visual,images/frame_00002967_04_sensor_angle_deg.png
+2967,elevation_deg,-25.05,"-25,05",visual,images/frame_00002967_05_elevation_deg.png
+2967,tag_lat_dms,"14°52'14.85""","14°52<14 85""",visual,images/frame_00002967_06_tag_lat_dms.png
+2967,tag_lon_dms,"102°01'03.96""","102°01'03 96""",visual,images/frame_00002967_07_tag_lon_dms.png
+2967,tag_alt_m,254.000,254-000m,visual,images/frame_00002967_08_tag_alt_m.png
+2967,acft_lat_dms,"14°52'16.76""",1452'16.702,visual,images/frame_00002967_09_acft_lat_dms.png
+2967,acft_lon_dms,"102°01'09.39""",102°01'09.39”,visual,images/frame_00002967_10_acft_lon_dms.png
+2967,acft_alt_m,329.000,.329.000m,visual,images/frame_00002967_11_acft_alt_m.png
+3153,timestamp,,,,images/frame_00003153_00_timestamp.png
+3153,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00003153_01_eo_detail.png
+3153,ir_detail,1.0x,1.0x,visual,images/frame_00003153_02_ir_detail.png
+3153,lrf_m,283.5,283.5m,visual,images/frame_00003153_03_lrf_m.png
+3153,sensor_angle_deg,3.08,3.08,visual,images/frame_00003153_04_sensor_angle_deg.png
+3153,elevation_deg,-24.96,-24.96,visual,images/frame_00003153_05_elevation_deg.png
+3153,tag_lat_dms,"14°52'14.54""","14°5214.54""",visual,images/frame_00003153_06_tag_lat_dms.png
+3153,tag_lon_dms,"102°00'57.42""","102°00~57.42""",visual,images/frame_00003153_07_tag_lon_dms.png
+3153,tag_alt_m,233.000,233.000m,visual,images/frame_00003153_08_tag_alt_m.png
+3153,acft_lat_dms,"14°52'15.96""",14°52'15.96,visual,images/frame_00003153_09_acft_lat_dms.png
+3153,acft_lon_dms,"102°01'05.90""","102°010590""",visual,images/frame_00003153_10_acft_lon_dms.png
+3153,acft_alt_m,353.000,353.000m,visual,images/frame_00003153_11_acft_alt_m.png
+3338,timestamp,,,,images/frame_00003338_00_timestamp.png
+3338,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00003338_01_eo_detail.png
+3338,ir_detail,1.0x,1.0x,visual,images/frame_00003338_02_ir_detail.png
+3338,lrf_m,272.5,2725m,visual,images/frame_00003338_03_lrf_m.png
+3338,sensor_angle_deg,3.78,3.78-,visual,images/frame_00003338_04_sensor_angle_deg.png
+3338,elevation_deg,-24.98,-24.98,visual,images/frame_00003338_05_elevation_deg.png
+3338,tag_lat_dms,"14°52'13.18""",14°5213.18~,visual,images/frame_00003338_06_tag_lat_dms.png
+3338,tag_lon_dms,"102°00'54.05""",102°00'54.05”,visual,images/frame_00003338_07_tag_lon_dms.png
+3338,tag_alt_m,244.000,244.000m,visual,images/frame_00003338_08_tag_alt_m.png
+3338,acft_lat_dms,"14°52'14.96""",14°52'14.96,visual,images/frame_00003338_09_acft_lat_dms.png
+3338,acft_lon_dms,"102°01'02.12""","10201'02 12""",visual,images/frame_00003338_10_acft_lon_dms.png
+3338,acft_alt_m,359.000,359.000m,visual,images/frame_00003338_11_acft_alt_m.png
+3524,timestamp,,,,images/frame_00003524_00_timestamp.png
+3524,eo_detail,1.0xFOV66.4°,1.0x FoV 66.4°,visual,images/frame_00003524_01_eo_detail.png
+3524,ir_detail,1.0x,1-0x,visual,images/frame_00003524_02_ir_detail.png
+3524,lrf_m,315.1,"315, 1m",visual,images/frame_00003524_03_lrf_m.png
+3524,sensor_angle_deg,3.25,3.药一,visual,images/frame_00003524_04_sensor_angle_deg.png
+3524,elevation_deg,-24.96,-24.96,visual,images/frame_00003524_05_elevation_deg.png
+3524,tag_lat_dms,"14°52'11.49""","14°52'11.49""",visual,images/frame_00003524_06_tag_lat_dms.png
+3524,tag_lon_dms,"102°00'49.14""","102°00'49.14""",visual,images/frame_00003524_07_tag_lon_dms.png
+3524,tag_alt_m,226.000,226-0Q0m,visual,images/frame_00003524_08_tag_alt_m.png
+3524,acft_lat_dms,"14°52'13.74""",14°5213.74,visual,images/frame_00003524_09_acft_lat_dms.png
+3524,acft_lon_dms,"102°00'58.42""","10200'58.42""",visual,images/frame_00003524_10_acft_lon_dms.png
+3524,acft_alt_m,359.000,55900Qm,visual,images/frame_00003524_11_acft_alt_m.png
+3709,timestamp,,,,images/frame_00003709_00_timestamp.png
+3709,eo_detail,1.0xFOV66.4°,"1.0x FOv66.,ª",visual,images/frame_00003709_01_eo_detail.png
+3709,ir_detail,1.0x,10x,visual,images/frame_00003709_02_ir_detail.png
+3709,lrf_m,313.7,313.7m,visual,images/frame_00003709_03_lrf_m.png
+3709,sensor_angle_deg,-23.38,-23381,visual,images/frame_00003709_04_sensor_angle_deg.png
+3709,elevation_deg,-24.94,-24.94.,visual,images/frame_00003709_05_elevation_deg.png
+3709,tag_lat_dms,"14°52'04.94""",14°52'04. 94°,visual,images/frame_00003709_06_tag_lat_dms.png
+3709,tag_lon_dms,"102°00'49.30""",102°00'49 30°,visual,images/frame_00003709_07_tag_lon_dms.png
+3709,tag_alt_m,225.000,225.000m,visual,images/frame_00003709_08_tag_alt_m.png
+3709,acft_lat_dms,"14°52'12.26""",14°52'1226”,visual,images/frame_00003709_09_acft_lat_dms.png
+3709,acft_lon_dms,"102°00'55.08""","102°00'55.08""",visual,images/frame_00003709_10_acft_lon_dms.png
+3709,acft_alt_m,358.000,358. 000m,visual,images/frame_00003709_11_acft_alt_m.png
+3895,timestamp,,,,images/frame_00003895_00_timestamp.png
+3895,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00003895_01_eo_detail.png
+3895,ir_detail,1.0x,1.0x,visual,images/frame_00003895_02_ir_detail.png
+3895,lrf_m,290.0,290.0m,visual,images/frame_00003895_03_lrf_m.png
+3895,sensor_angle_deg,4.92,4.92,visual,images/frame_00003895_04_sensor_angle_deg.png
+3895,elevation_deg,-24.96,-24.96,visual,images/frame_00003895_05_elevation_deg.png
+3895,tag_lat_dms,"14°51'59.79""",14°51'59792,visual,images/frame_00003895_06_tag_lat_dms.png
+3895,tag_lon_dms,"102°00'54.32""","102°00~54.32""",visual,images/frame_00003895_07_tag_lon_dms.png
+3895,tag_alt_m,240.000,240 000m,visual,images/frame_00003895_08_tag_alt_m.png
+3895,acft_lat_dms,"14°52'08.28""",14*5208 282,visual,images/frame_00003895_09_acft_lat_dms.png
+3895,acft_lon_dms,"102°00'54.89""",102-00'54 89a,visual,images/frame_00003895_10_acft_lon_dms.png
+3895,acft_alt_m,362.000,2000元,visual,images/frame_00003895_11_acft_alt_m.png
+4080,timestamp,,,,images/frame_00004080_00_timestamp.png
+4080,eo_detail,1.0xFOV66.4°,1.0xFOV 66.4°,visual,images/frame_00004080_01_eo_detail.png
+4080,ir_detail,1.0x,1.0x,visual,images/frame_00004080_02_ir_detail.png
+4080,lrf_m,326.3,326.3m,visual,images/frame_00004080_03_lrf_m.png
+4080,sensor_angle_deg,-16.79,516.79,visual,images/frame_00004080_04_sensor_angle_deg.png
+4080,elevation_deg,-24.96,=24.96,visual,images/frame_00004080_05_elevation_deg.png
+4080,tag_lat_dms,"14°51'58.20""",14°51'58 20”,visual,images/frame_00004080_06_tag_lat_dms.png
+4080,tag_lon_dms,"102°01'05.30""",102°01'05 302,visual,images/frame_00004080_07_tag_lon_dms.png
+4080,tag_alt_m,235.000,235 000m,visual,images/frame_00004080_08_tag_alt_m.png
+4080,acft_lat_dms,"14°52'04.32""",14°52'04 32”,visual,images/frame_00004080_09_acft_lat_dms.png
+4080,acft_lon_dms,"102°00'57.67""","102°00'57 67""",visual,images/frame_00004080_10_acft_lon_dms.png
+4080,acft_alt_m,372.000,372~000m.,visual,images/frame_00004080_11_acft_alt_m.png
+4266,timestamp,,,,images/frame_00004266_00_timestamp.png
+4266,eo_detail,1.0xFOV66.4°,1.0xFOV 66.4°,visual,images/frame_00004266_01_eo_detail.png
+4266,ir_detail,1.0x,1.0x,visual,images/frame_00004266_02_ir_detail.png
+4266,lrf_m,359.5,359.5m,visual,images/frame_00004266_03_lrf_m.png
+4266,sensor_angle_deg,8.09,809,visual,images/frame_00004266_04_sensor_angle_deg.png
+4266,elevation_deg,-25.00,-25.00,visual,images/frame_00004266_05_elevation_deg.png
+4266,tag_lat_dms,"14°51'59.19""",14°51'5919º,visual,images/frame_00004266_06_tag_lat_dms.png
+4266,tag_lon_dms,"102°01'13.09""","102°01'13. og""",visual,images/frame_00004266_07_tag_lon_dms.png
+4266,tag_alt_m,234.000,234.000m,visual,images/frame_00004266_08_tag_alt_m.png
+4266,acft_lat_dms,"14°52'03.10""",14 52'03 ror,visual,images/frame_00004266_09_acft_lat_dms.png
+4266,acft_lon_dms,"102°01'03.55""",102*01'03 55”,visual,images/frame_00004266_10_acft_lon_dms.png
+4266,acft_alt_m,386.000,"386, 000页-",visual,images/frame_00004266_11_acft_alt_m.png
+4451,timestamp,,,,images/frame_00004451_00_timestamp.png
+4451,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00004451_01_eo_detail.png
+4451,ir_detail,1.0x,1.0x,visual,images/frame_00004451_02_ir_detail.png
+4451,lrf_m,982.2,982.2m,visual,images/frame_00004451_03_lrf_m.png
+4451,sensor_angle_deg,-19.51,-19.51,visual,images/frame_00004451_04_sensor_angle_deg.png
+4451,elevation_deg,-9.10,-9.10,visual,images/frame_00004451_05_elevation_deg.png
+4451,tag_lat_dms,"14°51'39.54""","14°51'39.54""",visual,images/frame_00004451_06_tag_lat_dms.png
+4451,tag_lon_dms,"102°01'32.64""","102°01'32.64""",visual,images/frame_00004451_07_tag_lon_dms.png
+4451,tag_alt_m,234.000,234.000m,visual,images/frame_00004451_08_tag_alt_m.png
+4451,acft_lat_dms,"14°52'00.02""",14°52'00.02″,visual,images/frame_00004451_09_acft_lat_dms.png
+4451,acft_lon_dms,"102°01'08.44""","102°01'08.44""",visual,images/frame_00004451_10_acft_lon_dms.png
+4451,acft_alt_m,389.000,389.000m,visual,images/frame_00004451_11_acft_alt_m.png
+4636,timestamp,,,,images/frame_00004636_00_timestamp.png
+4636,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00004636_01_eo_detail.png
+4636,ir_detail,1.0x,1.0x,visual,images/frame_00004636_02_ir_detail.png
+4636,lrf_m,1050.3,1050.3,visual,images/frame_00004636_03_lrf_m.png
+4636,sensor_angle_deg,-59.50,-59.50,visual,images/frame_00004636_04_sensor_angle_deg.png
+4636,elevation_deg,-9.01,-9.01,visual,images/frame_00004636_05_elevation_deg.png
+4636,tag_lat_dms,"14°51'34.90""",14°51'34.90″,visual,images/frame_00004636_06_tag_lat_dms.png
+4636,tag_lon_dms,"102°01'38.12""","102°01'38.12""",visual,images/frame_00004636_07_tag_lon_dms.png
+4636,tag_alt_m,225.000,225.000m,visual,images/frame_00004636_08_tag_alt_m.png
+4636,acft_lat_dms,"14°51'55.35""","14°51'55.35""",visual,images/frame_00004636_09_acft_lat_dms.png
+4636,acft_lon_dms,"102°01'10.56""",102°01'10.56″,visual,images/frame_00004636_10_acft_lon_dms.png
+4636,acft_alt_m,389.000,389.000m,visual,images/frame_00004636_11_acft_alt_m.png
+4822,timestamp,,,,images/frame_00004822_00_timestamp.png
+4822,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00004822_01_eo_detail.png
+4822,ir_detail,1.0x,1.0x,visual,images/frame_00004822_02_ir_detail.png
+4822,lrf_m,881.9,881.9n,visual,images/frame_00004822_03_lrf_m.png
+4822,sensor_angle_deg,-86.40,=86.40,visual,images/frame_00004822_04_sensor_angle_deg.png
+4822,elevation_deg,-4.83,-4.83,visual,images/frame_00004822_05_elevation_deg.png
+4822,tag_lat_dms,"14°51'35.06""","14°51/35.06""",visual,images/frame_00004822_06_tag_lat_dms.png
+4822,tag_lon_dms,"102°01'34.45""",102°01/34.45,visual,images/frame_00004822_07_tag_lon_dms.png
+4822,tag_alt_m,315.000,315.000m,visual,images/frame_00004822_08_tag_alt_m.png
+4822,acft_lat_dms,"14°51'51.23""",14°51'51.23ⁿ,visual,images/frame_00004822_09_acft_lat_dms.png
+4822,acft_lon_dms,"102°01'10.23""",102°01'10.23″,visual,images/frame_00004822_10_acft_lon_dms.png
+4822,acft_alt_m,389.000,389.000m,visual,images/frame_00004822_11_acft_alt_m.png
+5007,timestamp,,,,images/frame_00005007_00_timestamp.png
+5007,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00005007_01_eo_detail.png
+5007,ir_detail,1.0x,1.0x,visual,images/frame_00005007_02_ir_detail.png
+5007,lrf_m,1900.8,1900.8,visual,images/frame_00005007_03_lrf_m.png
+5007,sensor_angle_deg,-107.84,-107.84,visual,images/frame_00005007_04_sensor_angle_deg.png
+5007,elevation_deg,-4.83,-4.83,visual,images/frame_00005007_05_elevation_deg.png
+5007,tag_lat_dms,"14°51'13.71""","14°5113.71""",visual,images/frame_00005007_06_tag_lat_dms.png
+5007,tag_lon_dms,"102°02'00.95""","102°02'00.95""",visual,images/frame_00005007_07_tag_lon_dms.png
+5007,tag_alt_m,229.000,229.000m,visual,images/frame_00005007_08_tag_alt_m.png
+5007,acft_lat_dms,"14°51'47.85""","14°51'47.85""",visual,images/frame_00005007_09_acft_lat_dms.png
+5007,acft_lon_dms,"102°01'08.26""",102°01'08.26″,visual,images/frame_00005007_10_acft_lon_dms.png
+5007,acft_alt_m,389.000,389.000m,visual,images/frame_00005007_11_acft_alt_m.png
+5193,timestamp,,,,images/frame_00005193_00_timestamp.png
+5193,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00005193_01_eo_detail.png
+5193,ir_detail,1.0x,1.0x,visual,images/frame_00005193_02_ir_detail.png
+5193,lrf_m,1602.9,1602.9,visual,images/frame_00005193_03_lrf_m.png
+5193,sensor_angle_deg,-110.92,-110.92,visual,images/frame_00005193_04_sensor_angle_deg.png
+5193,elevation_deg,0.00,0.00,visual,images/frame_00005193_05_elevation_deg.png
+5193,tag_lat_dms,"14°51'18.60""","14°51'18.60""",visual,images/frame_00005193_06_tag_lat_dms.png
+5193,tag_lon_dms,"102°01'51.05""","102°01'51.05""",visual,images/frame_00005193_07_tag_lon_dms.png
+5193,tag_alt_m,257.000,257.000m,visual,images/frame_00005193_08_tag_alt_m.png
+5193,acft_lat_dms,"14°51'45.77""",14°51'45.772,visual,images/frame_00005193_09_acft_lat_dms.png
+5193,acft_lon_dms,"102°01'05.51""","102°01'05.51""",visual,images/frame_00005193_10_acft_lon_dms.png
+5193,acft_alt_m,389.000,389n000m,visual,images/frame_00005193_11_acft_alt_m.png
+5378,timestamp,,,,images/frame_00005378_00_timestamp.png
+5378,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00005378_01_eo_detail.png
+5378,ir_detail,1.0x,1.0x,visual,images/frame_00005378_02_ir_detail.png
+5378,lrf_m,,0.0n,read-invalid:0.0,images/frame_00005378_03_lrf_m.png
+5378,sensor_angle_deg,-8.96,-8.96,visual,images/frame_00005378_04_sensor_angle_deg.png
+5378,elevation_deg,0.00,-0.00,visual,images/frame_00005378_05_elevation_deg.png
+5378,tag_lat_dms,"14°51'28.82""","14°51'28.82""",visual,images/frame_00005378_06_tag_lat_dms.png
+5378,tag_lon_dms,"102°00'13.22""",102°00~13.22″,visual,images/frame_00005378_07_tag_lon_dms.png
+5378,tag_alt_m,0.000,0.000m,visual,images/frame_00005378_08_tag_alt_m.png
+5378,acft_lat_dms,"14°51'44.71""","14°51'44.71""",visual,images/frame_00005378_09_acft_lat_dms.png
+5378,acft_lon_dms,"102°01'02.06""",102°01'02.06″,visual,images/frame_00005378_10_acft_lon_dms.png
+5378,acft_alt_m,389.000,389.000m,visual,images/frame_00005378_11_acft_alt_m.png
+5564,timestamp,,,,images/frame_00005564_00_timestamp.png
+5564,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00005564_01_eo_detail.png
+5564,ir_detail,1.0x,1.0x,visual,images/frame_00005564_02_ir_detail.png
+5564,lrf_m,,0.0m,read-invalid:0.0,images/frame_00005564_03_lrf_m.png
+5564,sensor_angle_deg,-9.49,-9.49,visual,images/frame_00005564_04_sensor_angle_deg.png
+5564,elevation_deg,0.00,-0.00,visual,images/frame_00005564_05_elevation_deg.png
+5564,tag_lat_dms,"14°51'28.82""","14°51'28.82""",visual,images/frame_00005564_06_tag_lat_dms.png
+5564,tag_lon_dms,"102°00'13.22""","102°00'13.22""",visual,images/frame_00005564_07_tag_lon_dms.png
+5564,tag_alt_m,0.000,0.000m,visual,images/frame_00005564_08_tag_alt_m.png
+5564,acft_lat_dms,"14°51'44.88""","14°51/44.88""",visual,images/frame_00005564_09_acft_lat_dms.png
+5564,acft_lon_dms,"102°00'58.56""",102°00'58.56″,visual,images/frame_00005564_10_acft_lon_dms.png
+5564,acft_alt_m,389.000,389.000m,visual,images/frame_00005564_11_acft_alt_m.png
+5749,timestamp,,,,images/frame_00005749_00_timestamp.png
+5749,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00005749_01_eo_detail.png
+5749,ir_detail,1.0x,1.0x,visual,images/frame_00005749_02_ir_detail.png
+5749,lrf_m,,0.0m,read-invalid:0.0,images/frame_00005749_03_lrf_m.png
+5749,sensor_angle_deg,-29.53,-29.53,visual,images/frame_00005749_04_sensor_angle_deg.png
+5749,elevation_deg,0.00,-0.00,visual,images/frame_00005749_05_elevation_deg.png
+5749,tag_lat_dms,"14°51'28.82""","14°51'28.82""",visual,images/frame_00005749_06_tag_lat_dms.png
+5749,tag_lon_dms,"102°00'13.22""","102°0013.22""",visual,images/frame_00005749_07_tag_lon_dms.png
+5749,tag_alt_m,0.000,0.000m,visual,images/frame_00005749_08_tag_alt_m.png
+5749,acft_lat_dms,"14°51'46.17""","14°5146.17""",visual,images/frame_00005749_09_acft_lat_dms.png
+5749,acft_lon_dms,"102°00'55.42""",102°00'55.42″,visual,images/frame_00005749_10_acft_lon_dms.png
+5749,acft_alt_m,389.000,389.000m,visual,images/frame_00005749_11_acft_alt_m.png
+5935,timestamp,,,,images/frame_00005935_00_timestamp.png
+5935,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00005935_01_eo_detail.png
+5935,ir_detail,1.0x,1.0x,visual,images/frame_00005935_02_ir_detail.png
+5935,lrf_m,,0.0m,read-invalid:0.0,images/frame_00005935_03_lrf_m.png
+5935,sensor_angle_deg,-46.32,-46.32,visual,images/frame_00005935_04_sensor_angle_deg.png
+5935,elevation_deg,0.02,0.02,visual,images/frame_00005935_05_elevation_deg.png
+5935,tag_lat_dms,"14°51'28.82""",14°51′28.82″,visual,images/frame_00005935_06_tag_lat_dms.png
+5935,tag_lon_dms,"102°00'13.22""",102°00~13.22″,visual,images/frame_00005935_07_tag_lon_dms.png
+5935,tag_alt_m,0.000,0.000m,visual,images/frame_00005935_08_tag_alt_m.png
+5935,acft_lat_dms,"14°51'48.64""","14°51'48.64""",visual,images/frame_00005935_09_acft_lat_dms.png
+5935,acft_lon_dms,"102°00'52.78""",102°00'52.78″,visual,images/frame_00005935_10_acft_lon_dms.png
+5935,acft_alt_m,388.000,388.000m,visual,images/frame_00005935_11_acft_alt_m.png
+6120,timestamp,,,,images/frame_00006120_00_timestamp.png
+6120,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00006120_01_eo_detail.png
+6120,ir_detail,1.0x,1.0x,visual,images/frame_00006120_02_ir_detail.png
+6120,lrf_m,2152.3,2152.3,visual,images/frame_00006120_03_lrf_m.png
+6120,sensor_angle_deg,-1.05,=1。05,visual,images/frame_00006120_04_sensor_angle_deg.png
+6120,elevation_deg,0.02,0.02,visual,images/frame_00006120_05_elevation_deg.png
+6120,tag_lat_dms,"14°52'50.19""",14°52'50.19″,visual,images/frame_00006120_06_tag_lat_dms.png
+6120,tag_lon_dms,"102°00'10.91""","102°00'10.91""",visual,images/frame_00006120_07_tag_lon_dms.png
+6120,tag_alt_m,389.000,389.000m,visual,images/frame_00006120_08_tag_alt_m.png
+6120,acft_lat_dms,"14°51'52.34""",14°51'52.34′,visual,images/frame_00006120_09_acft_lat_dms.png
+6120,acft_lon_dms,"102°00'51.09""","102°00'51.09""",visual,images/frame_00006120_10_acft_lon_dms.png
+6120,acft_alt_m,388.000,388.000m,visual,images/frame_00006120_11_acft_alt_m.png
+6306,timestamp,,,,images/frame_00006306_00_timestamp.png
+6306,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00006306_01_eo_detail.png
+6306,ir_detail,1.0x,1.0x,visual,images/frame_00006306_02_ir_detail.png
+6306,lrf_m,,0.0m,read-invalid:0.0,images/frame_00006306_03_lrf_m.png
+6306,sensor_angle_deg,-21.45,=21。45,visual,images/frame_00006306_04_sensor_angle_deg.png
+6306,elevation_deg,-2.07,-2.07,visual,images/frame_00006306_05_elevation_deg.png
+6306,tag_lat_dms,"14°52'49.94""","14°52′49.94""",visual,images/frame_00006306_06_tag_lat_dms.png
+6306,tag_lon_dms,"102°00'10.29""",102°00~10.29″,visual,images/frame_00006306_07_tag_lon_dms.png
+6306,tag_alt_m,0.000,0.000m,visual,images/frame_00006306_08_tag_alt_m.png
+6306,acft_lat_dms,"14°51'57.01""",14°51′57.01ⁿ,visual,images/frame_00006306_09_acft_lat_dms.png
+6306,acft_lon_dms,"102°00'51.21""","102°00'51.21""",visual,images/frame_00006306_10_acft_lon_dms.png
+6306,acft_alt_m,388.000,388.000m,visual,images/frame_00006306_11_acft_alt_m.png
+6491,timestamp,,,,images/frame_00006491_00_timestamp.png
+6491,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00006491_01_eo_detail.png
+6491,ir_detail,1.0x,1.0x,visual,images/frame_00006491_02_ir_detail.png
+6491,lrf_m,,0.0m,read-invalid:0.0,images/frame_00006491_03_lrf_m.png
+6491,sensor_angle_deg,-64.42,-64.42,visual,images/frame_00006491_04_sensor_angle_deg.png
+6491,elevation_deg,-3.96,-3.96,visual,images/frame_00006491_05_elevation_deg.png
+6491,tag_lat_dms,"14°52'49.94""","14°52'49.94""",visual,images/frame_00006491_06_tag_lat_dms.png
+6491,tag_lon_dms,"102°00'10.29""","102°0010.29""",visual,images/frame_00006491_07_tag_lon_dms.png
+6491,tag_alt_m,0.000,0.000m,visual,images/frame_00006491_08_tag_alt_m.png
+6491,acft_lat_dms,"14°52'01.55""","14°52'01.55""",visual,images/frame_00006491_09_acft_lat_dms.png
+6491,acft_lon_dms,"102°00'54.34""","102°00'54.34""",visual,images/frame_00006491_10_acft_lon_dms.png
+6491,acft_alt_m,388.000,388.000m,visual,images/frame_00006491_11_acft_alt_m.png
+6676,timestamp,,,,images/frame_00006676_00_timestamp.png
+6676,eo_detail,1.0xFOV66.4°,1.⑩x F0V 66.4°,visual,images/frame_00006676_01_eo_detail.png
+6676,ir_detail,1.0x,1.0x,visual,images/frame_00006676_02_ir_detail.png
+6676,lrf_m,,0.0m,read-invalid:0.0,images/frame_00006676_03_lrf_m.png
+6676,sensor_angle_deg,-134.74,=134.74,visual,images/frame_00006676_04_sensor_angle_deg.png
+6676,elevation_deg,-3.52,-3.52,visual,images/frame_00006676_05_elevation_deg.png
+6676,tag_lat_dms,"14°53'34.71""","14°53'34.71""",visual,images/frame_00006676_06_tag_lat_dms.png
+6676,tag_lon_dms,"101°59'52.80""","101°59'52.80""",visual,images/frame_00006676_07_tag_lon_dms.png
+6676,tag_alt_m,0.000,0.000m,visual,images/frame_00006676_08_tag_alt_m.png
+6676,acft_lat_dms,"14°52'03.77""","14°52′03.77""",visual,images/frame_00006676_09_acft_lat_dms.png
+6676,acft_lon_dms,"102°00'59.91""","102°00'59.91""",visual,images/frame_00006676_10_acft_lon_dms.png
+6676,acft_alt_m,388.000,388.000m,visual,images/frame_00006676_11_acft_alt_m.png
+6862,timestamp,,,,images/frame_00006862_00_timestamp.png
+6862,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00006862_01_eo_detail.png
+6862,ir_detail,1.0x,1.0x,visual,images/frame_00006862_02_ir_detail.png
+6862,lrf_m,,0.0m,read-invalid:0.0,images/frame_00006862_03_lrf_m.png
+6862,sensor_angle_deg,-161.89,-161.89,visual,images/frame_00006862_04_sensor_angle_deg.png
+6862,elevation_deg,37.68,37.68,visual,images/frame_00006862_05_elevation_deg.png
+6862,tag_lat_dms,"14°53'25.55""","14°53'25.55""",visual,images/frame_00006862_06_tag_lat_dms.png
+6862,tag_lon_dms,"101°59'42.78""","101°59'42.78""",visual,images/frame_00006862_07_tag_lon_dms.png
+6862,tag_alt_m,0.000,0. 000m,visual,images/frame_00006862_08_tag_alt_m.png
+6862,acft_lat_dms,"14°52'02.30""",14°52°02.302,visual,images/frame_00006862_09_acft_lat_dms.png
+6862,acft_lon_dms,"102°01'06.01""",102°01°06.012,visual,images/frame_00006862_10_acft_lon_dms.png
+6862,acft_alt_m,388.000,388.000n,visual,images/frame_00006862_11_acft_alt_m.png
+7047,timestamp,,,,images/frame_00007047_00_timestamp.png
+7047,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00007047_01_eo_detail.png
+7047,ir_detail,1.0x,1.0x,visual,images/frame_00007047_02_ir_detail.png
+7047,lrf_m,,0.0m,read-invalid:0.0,images/frame_00007047_03_lrf_m.png
+7047,sensor_angle_deg,161.37,161.37,visual,images/frame_00007047_04_sensor_angle_deg.png
+7047,elevation_deg,37.68,37.68,visual,images/frame_00007047_05_elevation_deg.png
+7047,tag_lat_dms,"14°53'25.55""","14°53'25.55""",visual,images/frame_00007047_06_tag_lat_dms.png
+7047,tag_lon_dms,"101°59'42.78""",101°59'42.78',visual,images/frame_00007047_07_tag_lon_dms.png
+7047,tag_alt_m,0.000,0.000m,visual,images/frame_00007047_08_tag_alt_m.png
+7047,acft_lat_dms,"14°51'58.24""","14°5158.24""",visual,images/frame_00007047_09_acft_lat_dms.png
+7047,acft_lon_dms,"102°01'09.76""","102°01'09.76""",visual,images/frame_00007047_10_acft_lon_dms.png
+7047,acft_alt_m,389.000,389.000m,visual,images/frame_00007047_11_acft_alt_m.png
+7233,timestamp,,,,images/frame_00007233_00_timestamp.png
+7233,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00007233_01_eo_detail.png
+7233,ir_detail,1.0x,1.0x,visual,images/frame_00007233_02_ir_detail.png
+7233,lrf_m,,0.0m,read-invalid:0.0,images/frame_00007233_03_lrf_m.png
+7233,sensor_angle_deg,-13.36,=13.36,visual,images/frame_00007233_04_sensor_angle_deg.png
+7233,elevation_deg,-5.62,-5.62,visual,images/frame_00007233_05_elevation_deg.png
+7233,tag_lat_dms,"14°53'25.55""","14°53′25.55""",visual,images/frame_00007233_06_tag_lat_dms.png
+7233,tag_lon_dms,"101°59'42.78""",101°59′42.78″,visual,images/frame_00007233_07_tag_lon_dms.png
+7233,tag_alt_m,0.000,0.000m,visual,images/frame_00007233_08_tag_alt_m.png
+7233,acft_lat_dms,"14°51'53.64""","14°51'53.64""",visual,images/frame_00007233_09_acft_lat_dms.png
+7233,acft_lon_dms,"102°01'10.77""",102°01'10.77″,visual,images/frame_00007233_10_acft_lon_dms.png
+7233,acft_alt_m,389.000,389.000m,visual,images/frame_00007233_11_acft_alt_m.png
+7418,timestamp,,,,images/frame_00007418_00_timestamp.png
+7418,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00007418_01_eo_detail.png
+7418,ir_detail,1.0x,1.@x,visual,images/frame_00007418_02_ir_detail.png
+7418,lrf_m,689.1,689.1n,visual,images/frame_00007418_03_lrf_m.png
+7418,sensor_angle_deg,-15.21,=15。21,visual,images/frame_00007418_04_sensor_angle_deg.png
+7418,elevation_deg,-10.79,-10.79,visual,images/frame_00007418_05_elevation_deg.png
+7418,tag_lat_dms,"14°51'32.66""","14°51'32.66""",visual,images/frame_00007418_06_tag_lat_dms.png
+7418,tag_lon_dms,"102°01'00.65""","102°01'00.65""",visual,images/frame_00007418_07_tag_lon_dms.png
+7418,tag_alt_m,259.000,259.000m,visual,images/frame_00007418_08_tag_alt_m.png
+7418,acft_lat_dms,"14°51'49.70""",14°5149.70″,visual,images/frame_00007418_09_acft_lat_dms.png
+7418,acft_lon_dms,"102°01'09.63""",102°01'09.63″,visual,images/frame_00007418_10_acft_lon_dms.png
+7418,acft_alt_m,389.000,389.000m,visual,images/frame_00007418_11_acft_alt_m.png
+7604,timestamp,,,,images/frame_00007604_00_timestamp.png
+7604,eo_detail,10.0xFOV7.5°,10.0x FOV 7.5°,visual,images/frame_00007604_01_eo_detail.png
+7604,ir_detail,1.0x,1.0x,visual,images/frame_00007604_02_ir_detail.png
+7604,lrf_m,,0. 0m,read-invalid:0.0,images/frame_00007604_03_lrf_m.png
+7604,sensor_angle_deg,-33.75,-33.75,visual,images/frame_00007604_04_sensor_angle_deg.png
+7604,elevation_deg,-11.62,=11.62,visual,images/frame_00007604_05_elevation_deg.png
+7604,tag_lat_dms,"14°51'25.30""",14°51'25.30ⁿ,visual,images/frame_00007604_06_tag_lat_dms.png
+7604,tag_lon_dms,"102°00'55.36""","102°00'55.36""",visual,images/frame_00007604_07_tag_lon_dms.png
+7604,tag_alt_m,0.000,0.000m,visual,images/frame_00007604_08_tag_alt_m.png
+7604,acft_lat_dms,"14°51'46.95""","14°51'46.95""",visual,images/frame_00007604_09_acft_lat_dms.png
+7604,acft_lon_dms,"102°01'07.35""",102°01'07.35″,visual,images/frame_00007604_10_acft_lon_dms.png
+7604,acft_alt_m,388.000,388.000m,visual,images/frame_00007604_11_acft_alt_m.png
+7789,timestamp,,,,images/frame_00007789_00_timestamp.png
+7789,eo_detail,12.6xFOV5.9°,12.6x F0V 5.9°,visual,images/frame_00007789_01_eo_detail.png
+7789,ir_detail,1.0x,1.0x,visual,images/frame_00007789_02_ir_detail.png
+7789,lrf_m,724.3,724.3m,visual,images/frame_00007789_03_lrf_m.png
+7789,sensor_angle_deg,-52.12,=52.12,visual,images/frame_00007789_04_sensor_angle_deg.png
+7789,elevation_deg,-12.17,=12.17,visual,images/frame_00007789_05_elevation_deg.png
+7789,tag_lat_dms,"14°51'23.93""","14°51'23.93""",visual,images/frame_00007789_06_tag_lat_dms.png
+7789,tag_lon_dms,"102°00'55.67""",102°00~55.67”,visual,images/frame_00007789_07_tag_lon_dms.png
+7789,tag_alt_m,236.000,236.000m,visual,images/frame_00007789_08_tag_alt_m.png
+7789,acft_lat_dms,"14°51'45.25""",14°51'45.25”,visual,images/frame_00007789_09_acft_lat_dms.png
+7789,acft_lon_dms,"102°01'04.39""","102°01'04.39""",visual,images/frame_00007789_10_acft_lon_dms.png
+7789,acft_alt_m,388.000,388.000m,visual,images/frame_00007789_11_acft_alt_m.png
+7975,timestamp,,,,images/frame_00007975_00_timestamp.png
+7975,eo_detail,12.6xFOV5.9°,12.6x F0V 5.9°,visual,images/frame_00007975_01_eo_detail.png
+7975,ir_detail,1.0x,1.0x,visual,images/frame_00007975_02_ir_detail.png
+7975,lrf_m,637.9,637.9m,visual,images/frame_00007975_03_lrf_m.png
+7975,sensor_angle_deg,-69.96,=69.96,visual,images/frame_00007975_04_sensor_angle_deg.png
+7975,elevation_deg,-13.07,-13.07,visual,images/frame_00007975_05_elevation_deg.png
+7975,tag_lat_dms,"14°51'25.07""",14°51'25.07”,visual,images/frame_00007975_06_tag_lat_dms.png
+7975,tag_lon_dms,"102°00'56.02""","10200*56.02""",visual,images/frame_00007975_07_tag_lon_dms.png
+7975,tag_alt_m,244.000,244.000m,visual,images/frame_00007975_08_tag_alt_m.png
+7975,acft_lat_dms,"14°51'44.63""",14°51'44.63*,visual,images/frame_00007975_09_acft_lat_dms.png
+7975,acft_lon_dms,"102°01'01.23""","102°01'01.23""",visual,images/frame_00007975_10_acft_lon_dms.png
+7975,acft_alt_m,388.000,388.000m,visual,images/frame_00007975_11_acft_alt_m.png
+8160,timestamp,,,,images/frame_00008160_00_timestamp.png
+8160,eo_detail,39.0xFOV1.9°,39.0x F0V 1.9°,visual,images/frame_00008160_01_eo_detail.png
+8160,ir_detail,1.0x,1.0x,visual,images/frame_00008160_02_ir_detail.png
+8160,lrf_m,633.0,633.0m,visual,images/frame_00008160_03_lrf_m.png
+8160,sensor_angle_deg,-96.15,-96.15,visual,images/frame_00008160_04_sensor_angle_deg.png
+8160,elevation_deg,-13.47,-13.47,visual,images/frame_00008160_05_elevation_deg.png
+8160,tag_lat_dms,"14°51'25.16""","14°51'25.16""",visual,images/frame_00008160_06_tag_lat_dms.png
+8160,tag_lon_dms,"102°00'56.28""","102°00'56.28""",visual,images/frame_00008160_07_tag_lon_dms.png
+8160,tag_alt_m,240.000,240.000m,visual,images/frame_00008160_08_tag_alt_m.png
+8160,acft_lat_dms,"14°51'45.02""",14“51'45.02',visual,images/frame_00008160_09_acft_lat_dms.png
+8160,acft_lon_dms,"102°00'57.94""","102°00'57.94""",visual,images/frame_00008160_10_acft_lon_dms.png
+8160,acft_alt_m,388.000,388.000m,visual,images/frame_00008160_11_acft_alt_m.png
+8346,timestamp,,,,images/frame_00008346_00_timestamp.png
+8346,eo_detail,40.0xFOV1.9°,40.0x F0V 1.9°,visual,images/frame_00008346_01_eo_detail.png
+8346,ir_detail,1.0x,1.0x,visual,images/frame_00008346_02_ir_detail.png
+8346,lrf_m,675.0,675.0m,visual,images/frame_00008346_03_lrf_m.png
+8346,sensor_angle_deg,-120.41,=120.41,visual,images/frame_00008346_04_sensor_angle_deg.png
+8346,elevation_deg,-12.52,=12.52,visual,images/frame_00008346_05_elevation_deg.png
+8346,tag_lat_dms,"14°51'25.38""","14951'25.38""",visual,images/frame_00008346_06_tag_lat_dms.png
+8346,tag_lon_dms,"102°00'56.81""",102°00'56 812,visual,images/frame_00008346_07_tag_lon_dms.png
+8346,tag_alt_m,241.000,241.000m,visual,images/frame_00008346_08_tag_alt_m.png
+8346,acft_lat_dms,"14°51'46.62""",1451'46.62”,visual,images/frame_00008346_09_acft_lat_dms.png
+8346,acft_lon_dms,"102°00'54.79""","102°00'54:79""",visual,images/frame_00008346_10_acft_lon_dms.png
+8346,acft_alt_m,388.000,388.000m2,visual,images/frame_00008346_11_acft_alt_m.png
+8531,timestamp,,,,images/frame_00008531_00_timestamp.png
+8531,eo_detail,40.0xFOV1.9°,40.0x FOV i 9,visual,images/frame_00008531_01_eo_detail.png
+8531,ir_detail,1.0x,1.0x,visual,images/frame_00008531_02_ir_detail.png
+8531,lrf_m,684.4,68A.4m,visual,images/frame_00008531_03_lrf_m.png
+8531,sensor_angle_deg,-143.61,=143 61,visual,images/frame_00008531_04_sensor_angle_deg.png
+8531,elevation_deg,-12.66,-12.66,visual,images/frame_00008531_05_elevation_deg.png
+8531,tag_lat_dms,"14°51'27.97""",14°51/2797²,visual,images/frame_00008531_06_tag_lat_dms.png
+8531,tag_lon_dms,"102°00'55.64""","102°00<55-64""",visual,images/frame_00008531_07_tag_lon_dms.png
+8531,tag_alt_m,238.000,238-000m,visual,images/frame_00008531_08_tag_alt_m.png
+8531,acft_lat_dms,"14°51'49.34""","14°5149.34""",visual,images/frame_00008531_09_acft_lat_dms.png
+8531,acft_lon_dms,"102°00'52.24""","102°00'52,24""",visual,images/frame_00008531_10_acft_lon_dms.png
+8531,acft_alt_m,388.000,388.000m,visual,images/frame_00008531_11_acft_alt_m.png
+8717,timestamp,,,,images/frame_00008717_00_timestamp.png
+8717,eo_detail,40.0xFOV1.9°,40.0x F0V 1.9,visual,images/frame_00008717_01_eo_detail.png
+8717,ir_detail,1.0x,1.0x,visual,images/frame_00008717_02_ir_detail.png
+8717,lrf_m,783.0,783.0m,visual,images/frame_00008717_03_lrf_m.png
+8717,sensor_angle_deg,-178.51,-178.50,visual,images/frame_00008717_04_sensor_angle_deg.png
+8717,elevation_deg,-10.50,10:50.,visual,images/frame_00008717_05_elevation_deg.png
+8717,tag_lat_dms,"14°51'29.82""",14°51'29.82ⁿ,visual,images/frame_00008717_06_tag_lat_dms.png
+8717,tag_lon_dms,"102°00'58.93""","102°00'5893""",visual,images/frame_00008717_07_tag_lon_dms.png
+8717,tag_alt_m,245.000,245.000m,visual,images/frame_00008717_08_tag_alt_m.png
+8717,acft_lat_dms,"14°51'53.50""",14°51'53 50°,visual,images/frame_00008717_09_acft_lat_dms.png
+8717,acft_lon_dms,"102°00'50.88""","102°00'50 88""",visual,images/frame_00008717_10_acft_lon_dms.png
+8717,acft_alt_m,389.000,389 000m,visual,images/frame_00008717_11_acft_alt_m.png
+8902,timestamp,,,,images/frame_00008902_00_timestamp.png
+8902,eo_detail,40.0xFOV1.9°,40.0x F0V 1.9,visual,images/frame_00008902_01_eo_detail.png
+8902,ir_detail,1.0x,10x,visual,images/frame_00008902_02_ir_detail.png
+8902,lrf_m,931.4,931.4m,visual,images/frame_00008902_03_lrf_m.png
+8902,sensor_angle_deg,147.83,147-83-,visual,images/frame_00008902_04_sensor_angle_deg.png
+8902,elevation_deg,-8.80,-8.88,visual,images/frame_00008902_05_elevation_deg.png
+8902,tag_lat_dms,"14°51'31.91""","14°51'31.91""",visual,images/frame_00008902_06_tag_lat_dms.png
+8902,tag_lon_dms,"102°01'05.51""","102°01'05.51""",visual,images/frame_00008902_07_tag_lon_dms.png
+8902,tag_alt_m,244.000,244.000m,visual,images/frame_00008902_08_tag_alt_m.png
+8902,acft_lat_dms,"14°51'58.06""","14°51'58.06""",visual,images/frame_00008902_09_acft_lat_dms.png
+8902,acft_lon_dms,"102°00'51.59""","102°00'51.59""",visual,images/frame_00008902_10_acft_lon_dms.png
+8902,acft_alt_m,388.000,388.000m,visual,images/frame_00008902_11_acft_alt_m.png
+9087,timestamp,,,,images/frame_00009087_00_timestamp.png
+9087,eo_detail,40.0xFOV1.9°,40.0x F0V 1.9²,visual,images/frame_00009087_01_eo_detail.png
+9087,ir_detail,1.0x,1.0x,visual,images/frame_00009087_02_ir_detail.png
+9087,lrf_m,1051.6,1051.6,visual,images/frame_00009087_03_lrf_m.png
+9087,sensor_angle_deg,108.64,108.64,visual,images/frame_00009087_04_sensor_angle_deg.png
+9087,elevation_deg,-7.03,-7.06,visual,images/frame_00009087_05_elevation_deg.png
+9087,tag_lat_dms,"14°51'30.17""","14°51'30.17""",visual,images/frame_00009087_06_tag_lat_dms.png
+9087,tag_lon_dms,"102°01'05.67""",102°01'05 67⁴,visual,images/frame_00009087_07_tag_lon_dms.png
+9087,tag_alt_m,258.000,256000m,visual,images/frame_00009087_08_tag_alt_m.png
+9087,acft_lat_dms,"14°52'02.51""","14°52'02.51""",visual,images/frame_00009087_09_acft_lat_dms.png
+9087,acft_lon_dms,"102°00'55.55""","102°00'55.55""",visual,images/frame_00009087_10_acft_lon_dms.png
+9087,acft_alt_m,387.000,387.000m,visual,images/frame_00009087_11_acft_alt_m.png
+9273,timestamp,,,,images/frame_00009273_00_timestamp.png
+9273,eo_detail,40.0xFOV1.9°,40.0x F0V 1.9°,visual,images/frame_00009273_01_eo_detail.png
+9273,ir_detail,1.0x,1-0x,visual,images/frame_00009273_02_ir_detail.png
+9273,lrf_m,1233.4,1233.4,visual,images/frame_00009273_03_lrf_m.png
+9273,sensor_angle_deg,81.56,81.56,visual,images/frame_00009273_04_sensor_angle_deg.png
+9273,elevation_deg,-6.33,=33,visual,images/frame_00009273_05_elevation_deg.png
+9273,tag_lat_dms,"14°51'24.08""",14°5124082,visual,images/frame_00009273_06_tag_lat_dms.png
+9273,tag_lon_dms,"102°00'59.11""",102*00'59 11²,visual,images/frame_00009273_07_tag_lon_dms.png
+9273,tag_alt_m,252.000,252. 000m,visual,images/frame_00009273_08_tag_alt_m.png
+9273,acft_lat_dms,"14°52'03.68""",14°52'08 68”,visual,images/frame_00009273_09_acft_lat_dms.png
+9273,acft_lon_dms,"102°01'01.88""","102“01’01 86""",visual,images/frame_00009273_10_acft_lon_dms.png
+9273,acft_alt_m,387.000,387-000n-,visual,images/frame_00009273_11_acft_alt_m.png
+9458,timestamp,,,,images/frame_00009458_00_timestamp.png
+9458,eo_detail,1.9xFOV38.0°,1.9x F0V 38.0°,visual,images/frame_00009458_01_eo_detail.png
+9458,ir_detail,1.0x,1.0x,visual,images/frame_00009458_02_ir_detail.png
+9458,lrf_m,,0.0m,read-invalid:0.0,images/frame_00009458_03_lrf_m.png
+9458,sensor_angle_deg,-22.06,=22.06,visual,images/frame_00009458_04_sensor_angle_deg.png
+9458,elevation_deg,0.00,=0.00,visual,images/frame_00009458_05_elevation_deg.png
+9458,tag_lat_dms,"14°51'41.62""","14°51′41.62""",visual,images/frame_00009458_06_tag_lat_dms.png
+9458,tag_lon_dms,"102°01'39.28""",102°01'39.28″,visual,images/frame_00009458_07_tag_lon_dms.png
+9458,tag_alt_m,0.000,0.000m,visual,images/frame_00009458_08_tag_alt_m.png
+9458,acft_lat_dms,"14°52'01.27""","14°52'01.27""",visual,images/frame_00009458_09_acft_lat_dms.png
+9458,acft_lon_dms,"102°01'07.37""","102°01'07.37""",visual,images/frame_00009458_10_acft_lon_dms.png
+9458,acft_alt_m,388.000,388.000m,visual,images/frame_00009458_11_acft_alt_m.png
+9644,timestamp,,,,images/frame_00009644_00_timestamp.png
+9644,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00009644_01_eo_detail.png
+9644,ir_detail,1.0x,1.0x,visual,images/frame_00009644_02_ir_detail.png
+9644,lrf_m,1226.5,1226.5,visual,images/frame_00009644_03_lrf_m.png
+9644,sensor_angle_deg,-69.79,-69.79,visual,images/frame_00009644_04_sensor_angle_deg.png
+9644,elevation_deg,-6.44,-6.44,visual,images/frame_00009644_05_elevation_deg.png
+9644,tag_lat_dms,"14°51'41.72""",14°51'41.72″,visual,images/frame_00009644_06_tag_lat_dms.png
+9644,tag_lon_dms,"102°01'47.89""","102°01'47.89""",visual,images/frame_00009644_07_tag_lon_dms.png
+9644,tag_alt_m,251.000,251.000m,visual,images/frame_00009644_08_tag_alt_m.png
+9644,acft_lat_dms,"14°51'56.96""","14°51'56.96""",visual,images/frame_00009644_09_acft_lat_dms.png
+9644,acft_lon_dms,"102°01'10.24""",102°01'10.24″,visual,images/frame_00009644_10_acft_lon_dms.png
+9644,acft_alt_m,389.000,389.000m,visual,images/frame_00009644_11_acft_alt_m.png
+9829,timestamp,,,,images/frame_00009829_00_timestamp.png
+9829,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00009829_01_eo_detail.png
+9829,ir_detail,1.0x,1.0x,visual,images/frame_00009829_02_ir_detail.png
+9829,lrf_m,,0.0m,read-invalid:0.0,images/frame_00009829_03_lrf_m.png
+9829,sensor_angle_deg,-3.96,-3.96,visual,images/frame_00009829_04_sensor_angle_deg.png
+9829,elevation_deg,0.00,-0.00,visual,images/frame_00009829_05_elevation_deg.png
+9829,tag_lat_dms,"14°51'16.96""",14°51'16.96″,visual,images/frame_00009829_06_tag_lat_dms.png
+9829,tag_lon_dms,"102°00'58.38""","102°00<58.38""",visual,images/frame_00009829_07_tag_lon_dms.png
+9829,tag_alt_m,0.000,0.000m,visual,images/frame_00009829_08_tag_alt_m.png
+9829,acft_lat_dms,"14°51'52.77""","14°51'52.77""",visual,images/frame_00009829_09_acft_lat_dms.png
+9829,acft_lon_dms,"102°01'10.63""","102°01'10.63""",visual,images/frame_00009829_10_acft_lon_dms.png
+9829,acft_alt_m,389.000,389.000m,visual,images/frame_00009829_11_acft_alt_m.png
+10015,timestamp,,,,images/frame_00010015_00_timestamp.png
+10015,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00010015_01_eo_detail.png
+10015,ir_detail,1.0x,1.0x,visual,images/frame_00010015_02_ir_detail.png
+10015,lrf_m,,0.0m,read-invalid:0.0,images/frame_00010015_03_lrf_m.png
+10015,sensor_angle_deg,-30.67,-30.67,visual,images/frame_00010015_04_sensor_angle_deg.png
+10015,elevation_deg,0.00,-0.00,visual,images/frame_00010015_05_elevation_deg.png
+10015,tag_lat_dms,"14°51'16.96""","14°51'16.96""",visual,images/frame_00010015_06_tag_lat_dms.png
+10015,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00010015_07_tag_lon_dms.png
+10015,tag_alt_m,0.000,0.000m,visual,images/frame_00010015_08_tag_alt_m.png
+10015,acft_lat_dms,"14°51'48.99""","14°5148.99""",visual,images/frame_00010015_09_acft_lat_dms.png
+10015,acft_lon_dms,"102°01'09.20""",102°01'09.20″,visual,images/frame_00010015_10_acft_lon_dms.png
+10015,acft_alt_m,388.000,388.000m,visual,images/frame_00010015_11_acft_alt_m.png
+10200,timestamp,,,,images/frame_00010200_00_timestamp.png
+10200,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00010200_01_eo_detail.png
+10200,ir_detail,1.0x,1.0x,visual,images/frame_00010200_02_ir_detail.png
+10200,lrf_m,,0.0m,read-invalid:0.0,images/frame_00010200_03_lrf_m.png
+10200,sensor_angle_deg,-47.02,-47.02,visual,images/frame_00010200_04_sensor_angle_deg.png
+10200,elevation_deg,0.00,-0.00,visual,images/frame_00010200_05_elevation_deg.png
+10200,tag_lat_dms,"14°51'16.96""",14°51'16.96”,visual,images/frame_00010200_06_tag_lat_dms.png
+10200,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00010200_07_tag_lon_dms.png
+10200,tag_alt_m,0.000,0.000m,visual,images/frame_00010200_08_tag_alt_m.png
+10200,acft_lat_dms,"14°51'46.49""",14°51'46.49″,visual,images/frame_00010200_09_acft_lat_dms.png
+10200,acft_lon_dms,"102°01'06.76""",102°01'06.76″,visual,images/frame_00010200_10_acft_lon_dms.png
+10200,acft_alt_m,388.000,388.000m,visual,images/frame_00010200_11_acft_alt_m.png
+10386,timestamp,,,,images/frame_00010386_00_timestamp.png
+10386,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00010386_01_eo_detail.png
+10386,ir_detail,1.0x,1.0x,visual,images/frame_00010386_02_ir_detail.png
+10386,lrf_m,,0.0m,read-invalid:0.0,images/frame_00010386_03_lrf_m.png
+10386,sensor_angle_deg,-61.61,=61.61,visual,images/frame_00010386_04_sensor_angle_deg.png
+10386,elevation_deg,0.00,-0.00,visual,images/frame_00010386_05_elevation_deg.png
+10386,tag_lat_dms,"14°51'16.96""",14°51′16.96″,visual,images/frame_00010386_06_tag_lat_dms.png
+10386,tag_lon_dms,"102°00'58.38""",102°00'58.38″,visual,images/frame_00010386_07_tag_lon_dms.png
+10386,tag_alt_m,0.000,0.000m,visual,images/frame_00010386_08_tag_alt_m.png
+10386,acft_lat_dms,"14°51'45.05""",14°51'45.05″,visual,images/frame_00010386_09_acft_lat_dms.png
+10386,acft_lon_dms,"102°01'03.73""",102°01'03.73″,visual,images/frame_00010386_10_acft_lon_dms.png
+10386,acft_alt_m,388.000,388.000m,visual,images/frame_00010386_11_acft_alt_m.png
+10571,timestamp,,,,images/frame_00010571_00_timestamp.png
+10571,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00010571_01_eo_detail.png
+10571,ir_detail,1.0x,1.0x,visual,images/frame_00010571_02_ir_detail.png
+10571,lrf_m,,0.0m,read-invalid:0.0,images/frame_00010571_03_lrf_m.png
+10571,sensor_angle_deg,-76.46,-76.46,visual,images/frame_00010571_04_sensor_angle_deg.png
+10571,elevation_deg,0.00,-0.00,visual,images/frame_00010571_05_elevation_deg.png
+10571,tag_lat_dms,"14°51'16.96""",14°51'16.96″,visual,images/frame_00010571_06_tag_lat_dms.png
+10571,tag_lon_dms,"102°00'58.38""",102°00'58.38″,visual,images/frame_00010571_07_tag_lon_dms.png
+10571,tag_alt_m,0.000,0.000m,visual,images/frame_00010571_08_tag_alt_m.png
+10571,acft_lat_dms,"14°51'44.62""",14°51'44.62″,visual,images/frame_00010571_09_acft_lat_dms.png
+10571,acft_lon_dms,"102°01'00.43""",102°01'00.43″,visual,images/frame_00010571_10_acft_lon_dms.png
+10571,acft_alt_m,388.000,388.000m,visual,images/frame_00010571_11_acft_alt_m.png
+10757,timestamp,,,,images/frame_00010757_00_timestamp.png
+10757,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00010757_01_eo_detail.png
+10757,ir_detail,1.0x,1.0x,visual,images/frame_00010757_02_ir_detail.png
+10757,lrf_m,,0.0m,read-invalid:0.0,images/frame_00010757_03_lrf_m.png
+10757,sensor_angle_deg,-90.70,-90.70,visual,images/frame_00010757_04_sensor_angle_deg.png
+10757,elevation_deg,0.02,0.02,visual,images/frame_00010757_05_elevation_deg.png
+10757,tag_lat_dms,"14°51'16.96""",14°51′16.96″,visual,images/frame_00010757_06_tag_lat_dms.png
+10757,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00010757_07_tag_lon_dms.png
+10757,tag_alt_m,0.000,0.000m,visual,images/frame_00010757_08_tag_alt_m.png
+10757,acft_lat_dms,"14°51'45.23""",14°51′45.23″,visual,images/frame_00010757_09_acft_lat_dms.png
+10757,acft_lon_dms,"102°00'57.16""",102°00'57.16″,visual,images/frame_00010757_10_acft_lon_dms.png
+10757,acft_alt_m,389.000,389.000m,visual,images/frame_00010757_11_acft_alt_m.png
+10942,timestamp,,,,images/frame_00010942_00_timestamp.png
+10942,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00010942_01_eo_detail.png
+10942,ir_detail,1.0x,1.0x,visual,images/frame_00010942_02_ir_detail.png
+10942,lrf_m,,0.0m,read-invalid:0.0,images/frame_00010942_03_lrf_m.png
+10942,sensor_angle_deg,-108.90,=108.90,visual,images/frame_00010942_04_sensor_angle_deg.png
+10942,elevation_deg,0.00,-0.00,visual,images/frame_00010942_05_elevation_deg.png
+10942,tag_lat_dms,"14°51'16.96""",14°51′16.96″,visual,images/frame_00010942_06_tag_lat_dms.png
+10942,tag_lon_dms,"102°00'58.38""",102°00'58.38″,visual,images/frame_00010942_07_tag_lon_dms.png
+10942,tag_alt_m,0.000,0.000m,visual,images/frame_00010942_08_tag_alt_m.png
+10942,acft_lat_dms,"14°51'47.05""",14°51′47.05″,visual,images/frame_00010942_09_acft_lat_dms.png
+10942,acft_lon_dms,"102°00'54.13""",102°00'54.13″,visual,images/frame_00010942_10_acft_lon_dms.png
+10942,acft_alt_m,388.000,388.000m,visual,images/frame_00010942_11_acft_alt_m.png
+11127,timestamp,,,,images/frame_00011127_00_timestamp.png
+11127,eo_detail,1.0xFOV66.4°,1.0x F0v66.4°,visual,images/frame_00011127_01_eo_detail.png
+11127,ir_detail,1.0x,1.0x,visual,images/frame_00011127_02_ir_detail.png
+11127,lrf_m,,0.0m,read-invalid:0.0,images/frame_00011127_03_lrf_m.png
+11127,sensor_angle_deg,-125.95,=125.95,visual,images/frame_00011127_04_sensor_angle_deg.png
+11127,elevation_deg,0.00,-0.00,visual,images/frame_00011127_05_elevation_deg.png
+11127,tag_lat_dms,"14°51'16.96""",14°51′16.96″,visual,images/frame_00011127_06_tag_lat_dms.png
+11127,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00011127_07_tag_lon_dms.png
+11127,tag_alt_m,0.000,0.000m,visual,images/frame_00011127_08_tag_alt_m.png
+11127,acft_lat_dms,"14°51'50.07""","14°51'50.07""",visual,images/frame_00011127_09_acft_lat_dms.png
+11127,acft_lon_dms,"102°00'51.88""","102°00'51.88""",visual,images/frame_00011127_10_acft_lon_dms.png
+11127,acft_alt_m,388.000,388.000m,visual,images/frame_00011127_11_acft_alt_m.png
+11313,timestamp,,,,images/frame_00011313_00_timestamp.png
+11313,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00011313_01_eo_detail.png
+11313,ir_detail,1.0x,1.0x,visual,images/frame_00011313_02_ir_detail.png
+11313,lrf_m,,0.0m,read-invalid:0.0,images/frame_00011313_03_lrf_m.png
+11313,sensor_angle_deg,-155.83,=155.83,visual,images/frame_00011313_04_sensor_angle_deg.png
+11313,elevation_deg,0.00,-0.00,visual,images/frame_00011313_05_elevation_deg.png
+11313,tag_lat_dms,"14°51'16.96""",14°51'16.96″,visual,images/frame_00011313_06_tag_lat_dms.png
+11313,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00011313_07_tag_lon_dms.png
+11313,tag_alt_m,0.000,-0.000m,visual,images/frame_00011313_08_tag_alt_m.png
+11313,acft_lat_dms,"14°51'54.28""",14°51'54.28″,visual,images/frame_00011313_09_acft_lat_dms.png
+11313,acft_lon_dms,"102°00'50.83""","102°00'50.83""",visual,images/frame_00011313_10_acft_lon_dms.png
+11313,acft_alt_m,388.000,388.000m,visual,images/frame_00011313_11_acft_alt_m.png
+11498,timestamp,,,,images/frame_00011498_00_timestamp.png
+11498,eo_detail,1.0xFOV66.4°,1.0x FOV 66.4°,visual,images/frame_00011498_01_eo_detail.png
+11498,ir_detail,1.0x,1.0x,visual,images/frame_00011498_02_ir_detail.png
+11498,lrf_m,,0.0m,read-invalid:0.0,images/frame_00011498_03_lrf_m.png
+11498,sensor_angle_deg,165.50,165.50,visual,images/frame_00011498_04_sensor_angle_deg.png
+11498,elevation_deg,0.02,0.02,visual,images/frame_00011498_05_elevation_deg.png
+11498,tag_lat_dms,"14°51'16.96""","14°51'16.96""",visual,images/frame_00011498_06_tag_lat_dms.png
+11498,tag_lon_dms,"102°00'58.38""","102°00~58.38""",visual,images/frame_00011498_07_tag_lon_dms.png
+11498,tag_alt_m,0.000,0.000m,visual,images/frame_00011498_08_tag_alt_m.png
+11498,acft_lat_dms,"14°51'59.10""","14°51'59.10""",visual,images/frame_00011498_09_acft_lat_dms.png
+11498,acft_lon_dms,"102°00'52.15""","102°00'52.15""",visual,images/frame_00011498_10_acft_lon_dms.png
+11498,acft_alt_m,388.000,388.000m,visual,images/frame_00011498_11_acft_alt_m.png
+11684,timestamp,,,,images/frame_00011684_00_timestamp.png
+11684,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00011684_01_eo_detail.png
+11684,ir_detail,1.0x,1.0x,visual,images/frame_00011684_02_ir_detail.png
+11684,lrf_m,,0.0n,read-invalid:0.0,images/frame_00011684_03_lrf_m.png
+11684,sensor_angle_deg,115.49,115。49,visual,images/frame_00011684_04_sensor_angle_deg.png
+11684,elevation_deg,0.00,-0.00,visual,images/frame_00011684_05_elevation_deg.png
+11684,tag_lat_dms,"14°51'16.96""",14°51~16.96″,visual,images/frame_00011684_06_tag_lat_dms.png
+11684,tag_lon_dms,"102°00'58.38""",102°00'58.38″,visual,images/frame_00011684_07_tag_lon_dms.png
+11684,tag_alt_m,0.000,0.000m,visual,images/frame_00011684_08_tag_alt_m.png
+11684,acft_lat_dms,"14°52'02.90""",14°52'02.902,visual,images/frame_00011684_09_acft_lat_dms.png
+11684,acft_lon_dms,"102°00'56.44""","102°00'56.44""",visual,images/frame_00011684_10_acft_lon_dms.png
+11684,acft_alt_m,387.000,387. 000m,visual,images/frame_00011684_11_acft_alt_m.png
+11869,timestamp,,,,images/frame_00011869_00_timestamp.png
+11869,eo_detail,1.0xFOV66.4°,1.0x F0v 66.4°,visual,images/frame_00011869_01_eo_detail.png
+11869,ir_detail,1.0x,1.0x,visual,images/frame_00011869_02_ir_detail.png
+11869,lrf_m,,0.0m,read-invalid:0.0,images/frame_00011869_03_lrf_m.png
+11869,sensor_angle_deg,78.40,78.40,visual,images/frame_00011869_04_sensor_angle_deg.png
+11869,elevation_deg,0.02,0.02,visual,images/frame_00011869_05_elevation_deg.png
+11869,tag_lat_dms,"14°51'16.96""","14°51'16.96""",visual,images/frame_00011869_06_tag_lat_dms.png
+11869,tag_lon_dms,"102°00'58.38""","102°0058:38""",visual,images/frame_00011869_07_tag_lon_dms.png
+11869,tag_alt_m,0.000,0.000m,visual,images/frame_00011869_08_tag_alt_m.png
+11869,acft_lat_dms,"14°52'03.52""","14°52′03.52""",visual,images/frame_00011869_09_acft_lat_dms.png
+11869,acft_lon_dms,"102°01'02.82""",102°01'02.82″,visual,images/frame_00011869_10_acft_lon_dms.png
+11869,acft_alt_m,387.000,387.000m,visual,images/frame_00011869_11_acft_alt_m.png
+12055,timestamp,,,,images/frame_00012055_00_timestamp.png
+12055,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00012055_01_eo_detail.png
+12055,ir_detail,1.0x,1.0x,visual,images/frame_00012055_02_ir_detail.png
+12055,lrf_m,,0.0m,read-invalid:0.0,images/frame_00012055_03_lrf_m.png
+12055,sensor_angle_deg,49.31,49.31,visual,images/frame_00012055_04_sensor_angle_deg.png
+12055,elevation_deg,0.00,-0.00,visual,images/frame_00012055_05_elevation_deg.png
+12055,tag_lat_dms,"14°51'16.96""",14°51'16.96″,visual,images/frame_00012055_06_tag_lat_dms.png
+12055,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00012055_07_tag_lon_dms.png
+12055,tag_alt_m,0.000,0.000m,visual,images/frame_00012055_08_tag_alt_m.png
+12055,acft_lat_dms,"14°52'00.60""",14°52′00.60″,visual,images/frame_00012055_09_acft_lat_dms.png
+12055,acft_lon_dms,"102°01'08.12""",102°01'08.12″,visual,images/frame_00012055_10_acft_lon_dms.png
+12055,acft_alt_m,388.000,388.000m,visual,images/frame_00012055_11_acft_alt_m.png
+12240,timestamp,,,,images/frame_00012240_00_timestamp.png
+12240,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00012240_01_eo_detail.png
+12240,ir_detail,1.0x,1.0x,visual,images/frame_00012240_02_ir_detail.png
+12240,lrf_m,,0.0m,read-invalid:0.0,images/frame_00012240_03_lrf_m.png
+12240,sensor_angle_deg,18.90,18.90,visual,images/frame_00012240_04_sensor_angle_deg.png
+12240,elevation_deg,0.00,-0.00,visual,images/frame_00012240_05_elevation_deg.png
+12240,tag_lat_dms,"14°51'16.96""",14°51'16.96″,visual,images/frame_00012240_06_tag_lat_dms.png
+12240,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00012240_07_tag_lon_dms.png
+12240,tag_alt_m,0.000,0.000m,visual,images/frame_00012240_08_tag_alt_m.png
+12240,acft_lat_dms,"14°51'56.15""",14°51'56.15″,visual,images/frame_00012240_09_acft_lat_dms.png
+12240,acft_lon_dms,"102°01'10.59""",102°01'10.59″,visual,images/frame_00012240_10_acft_lon_dms.png
+12240,acft_alt_m,389.000,389.000m,visual,images/frame_00012240_11_acft_alt_m.png
+12426,timestamp,,,,images/frame_00012426_00_timestamp.png
+12426,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00012426_01_eo_detail.png
+12426,ir_detail,1.0x,1.0x,visual,images/frame_00012426_02_ir_detail.png
+12426,lrf_m,,0.0m,read-invalid:0.0,images/frame_00012426_03_lrf_m.png
+12426,sensor_angle_deg,-46.85,=46.85,visual,images/frame_00012426_04_sensor_angle_deg.png
+12426,elevation_deg,-0.02,-0.02,visual,images/frame_00012426_05_elevation_deg.png
+12426,tag_lat_dms,"14°51'16.96""",14°5116.96″,visual,images/frame_00012426_06_tag_lat_dms.png
+12426,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00012426_07_tag_lon_dms.png
+12426,tag_alt_m,0.000,0.000m,visual,images/frame_00012426_08_tag_alt_m.png
+12426,acft_lat_dms,"14°51'52.40""","14°51'52.40""",visual,images/frame_00012426_09_acft_lat_dms.png
+12426,acft_lon_dms,"102°01'09.72""",102°01'09.72″,visual,images/frame_00012426_10_acft_lon_dms.png
+12426,acft_alt_m,389.000,389.000m,visual,images/frame_00012426_11_acft_alt_m.png
+12611,timestamp,,,,images/frame_00012611_00_timestamp.png
+12611,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00012611_01_eo_detail.png
+12611,ir_detail,1.0x,1.0x,visual,images/frame_00012611_02_ir_detail.png
+12611,lrf_m,,0.0m,read-invalid:0.0,images/frame_00012611_03_lrf_m.png
+12611,sensor_angle_deg,-60.38,-60.38,visual,images/frame_00012611_04_sensor_angle_deg.png
+12611,elevation_deg,-0.02,-0.02,visual,images/frame_00012611_05_elevation_deg.png
+12611,tag_lat_dms,"14°51'16.96""","14°5116.96""",visual,images/frame_00012611_06_tag_lat_dms.png
+12611,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00012611_07_tag_lon_dms.png
+12611,tag_alt_m,0.000,0.000m,visual,images/frame_00012611_08_tag_alt_m.png
+12611,acft_lat_dms,"14°51'51.42""","14°51/51.42""",visual,images/frame_00012611_09_acft_lat_dms.png
+12611,acft_lon_dms,"102°01'06.76""","102°01'06.76""",visual,images/frame_00012611_10_acft_lon_dms.png
+12611,acft_alt_m,392.000,392.000m,visual,images/frame_00012611_11_acft_alt_m.png
+12797,timestamp,,,,images/frame_00012797_00_timestamp.png
+12797,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00012797_01_eo_detail.png
+12797,ir_detail,1.0x,1.0x,visual,images/frame_00012797_02_ir_detail.png
+12797,lrf_m,,0.0m,read-invalid:0.0,images/frame_00012797_03_lrf_m.png
+12797,sensor_angle_deg,-50.62,-50.62,visual,images/frame_00012797_04_sensor_angle_deg.png
+12797,elevation_deg,0.00,-0.00,visual,images/frame_00012797_05_elevation_deg.png
+12797,tag_lat_dms,"14°51'16.96""",14°51′16.96″,visual,images/frame_00012797_06_tag_lat_dms.png
+12797,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00012797_07_tag_lon_dms.png
+12797,tag_alt_m,0.000,0.000m,visual,images/frame_00012797_08_tag_alt_m.png
+12797,acft_lat_dms,"14°51'49.56""",14°51'49.56″,visual,images/frame_00012797_09_acft_lat_dms.png
+12797,acft_lon_dms,"102°01'04.15""",102°01'04.15″,visual,images/frame_00012797_10_acft_lon_dms.png
+12797,acft_alt_m,395.000,~395.000m,visual,images/frame_00012797_11_acft_alt_m.png
+12982,timestamp,,,,images/frame_00012982_00_timestamp.png
+12982,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00012982_01_eo_detail.png
+12982,ir_detail,1.0x,1.0x,visual,images/frame_00012982_02_ir_detail.png
+12982,lrf_m,,0.0m,read-invalid:0.0,images/frame_00012982_03_lrf_m.png
+12982,sensor_angle_deg,-48.60,=48.60,visual,images/frame_00012982_04_sensor_angle_deg.png
+12982,elevation_deg,0.00,-0.00,visual,images/frame_00012982_05_elevation_deg.png
+12982,tag_lat_dms,"14°51'16.96""",14°51'16.96″,visual,images/frame_00012982_06_tag_lat_dms.png
+12982,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00012982_07_tag_lon_dms.png
+12982,tag_alt_m,0.000,0.000m,visual,images/frame_00012982_08_tag_alt_m.png
+12982,acft_lat_dms,"14°51'47.37""","14°51'47.37""",visual,images/frame_00012982_09_acft_lat_dms.png
+12982,acft_lon_dms,"102°01'01.55""",102°01'01.55″,visual,images/frame_00012982_10_acft_lon_dms.png
+12982,acft_alt_m,397.000,397.000m,visual,images/frame_00012982_11_acft_alt_m.png
+13168,timestamp,,,,images/frame_00013168_00_timestamp.png
+13168,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00013168_01_eo_detail.png
+13168,ir_detail,1.0x,1.0x,visual,images/frame_00013168_02_ir_detail.png
+13168,lrf_m,,0.0m,read-invalid:0.0,images/frame_00013168_03_lrf_m.png
+13168,sensor_angle_deg,-36.30,-36.30,visual,images/frame_00013168_04_sensor_angle_deg.png
+13168,elevation_deg,0.02,0.02,visual,images/frame_00013168_05_elevation_deg.png
+13168,tag_lat_dms,"14°51'16.96""","14°5116.96""",visual,images/frame_00013168_06_tag_lat_dms.png
+13168,tag_lon_dms,"102°00'58.38""","102°00'58.38""",visual,images/frame_00013168_07_tag_lon_dms.png
+13168,tag_alt_m,0.000,0.000m,visual,images/frame_00013168_08_tag_alt_m.png
+13168,acft_lat_dms,"14°51'45.14""","14°51'45.14""",visual,images/frame_00013168_09_acft_lat_dms.png
+13168,acft_lon_dms,"102°00'58.99""",102°00'58.99″,visual,images/frame_00013168_10_acft_lon_dms.png
+13168,acft_alt_m,400.000,400.000m,visual,images/frame_00013168_11_acft_alt_m.png
+13353,timestamp,,,,images/frame_00013353_00_timestamp.png
+13353,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00013353_01_eo_detail.png
+13353,ir_detail,1.0x,1.0x,visual,images/frame_00013353_02_ir_detail.png
+13353,lrf_m,2309.6,2309.6,visual,images/frame_00013353_03_lrf_m.png
+13353,sensor_angle_deg,-2.90,=2.90,visual,images/frame_00013353_04_sensor_angle_deg.png
+13353,elevation_deg,-3.82,-3.82,visual,images/frame_00013353_05_elevation_deg.png
+13353,tag_lat_dms,"14°51'02.75""",14°51'02.75″,visual,images/frame_00013353_06_tag_lat_dms.png
+13353,tag_lon_dms,"101°59'50.79""",101°59'50.79″,visual,images/frame_00013353_07_tag_lon_dms.png
+13353,tag_alt_m,246.000,246.000m,visual,images/frame_00013353_08_tag_alt_m.png
+13353,acft_lat_dms,"14°51'42.86""",14°51'42.86″,visual,images/frame_00013353_09_acft_lat_dms.png
+13353,acft_lon_dms,"102°00'56.40""",102°00'56.40″,visual,images/frame_00013353_10_acft_lon_dms.png
+13353,acft_alt_m,401.000,401.000m,visual,images/frame_00013353_11_acft_alt_m.png
+13538,timestamp,,,,images/frame_00013538_00_timestamp.png
+13538,eo_detail,2.3xFOV32.2°,2.3x F0V 32.2°,visual,images/frame_00013538_01_eo_detail.png
+13538,ir_detail,1.0x,1.0x,visual,images/frame_00013538_02_ir_detail.png
+13538,lrf_m,,0.0m,read-invalid:0.0,images/frame_00013538_03_lrf_m.png
+13538,sensor_angle_deg,0.88,0.g,visual,images/frame_00013538_04_sensor_angle_deg.png
+13538,elevation_deg,0.00,-0.00,visual,images/frame_00013538_05_elevation_deg.png
+13538,tag_lat_dms,"14°51'04.82""",14°51'04.82″,visual,images/frame_00013538_06_tag_lat_dms.png
+13538,tag_lon_dms,"101°59'48.31""","101°59'48.31""",visual,images/frame_00013538_07_tag_lon_dms.png
+13538,tag_alt_m,0.000,0.000m,visual,images/frame_00013538_08_tag_alt_m.png
+13538,acft_lat_dms,"14°51'40.56""",14°51'40.56”,visual,images/frame_00013538_09_acft_lat_dms.png
+13538,acft_lon_dms,"102°00'53.83""","102°00'53.83""",visual,images/frame_00013538_10_acft_lon_dms.png
+13538,acft_alt_m,404.000,404.000m,visual,images/frame_00013538_11_acft_alt_m.png
+13724,timestamp,,,,images/frame_00013724_00_timestamp.png
+13724,eo_detail,4.8xFOV15.6°,4.8x F0V 15.6°,visual,images/frame_00013724_01_eo_detail.png
+13724,ir_detail,1.0x,1.0x,visual,images/frame_00013724_02_ir_detail.png
+13724,lrf_m,,0.0m,read-invalid:0.0,images/frame_00013724_03_lrf_m.png
+13724,sensor_angle_deg,0.97,0.97,visual,images/frame_00013724_04_sensor_angle_deg.png
+13724,elevation_deg,0.02,0.02,visual,images/frame_00013724_05_elevation_deg.png
+13724,tag_lat_dms,"14°51'04.82""",14°51'04.82″,visual,images/frame_00013724_06_tag_lat_dms.png
+13724,tag_lon_dms,"101°59'48.31""","101°59'48.31""",visual,images/frame_00013724_07_tag_lon_dms.png
+13724,tag_alt_m,0.000,0.000m,visual,images/frame_00013724_08_tag_alt_m.png
+13724,acft_lat_dms,"14°51'38.22""",14°51'38.22″,visual,images/frame_00013724_09_acft_lat_dms.png
+13724,acft_lon_dms,"102°00'51.22""",102°00'51.22″,visual,images/frame_00013724_10_acft_lon_dms.png
+13724,acft_alt_m,406.000,406.000m,visual,images/frame_00013724_11_acft_alt_m.png
+13909,timestamp,,,,images/frame_00013909_00_timestamp.png
+13909,eo_detail,4.8xFOV15.6°,4.8x F0V 15.6°,visual,images/frame_00013909_01_eo_detail.png
+13909,ir_detail,1.0x,1.0x,visual,images/frame_00013909_02_ir_detail.png
+13909,lrf_m,,0.0m,read-invalid:0.0,images/frame_00013909_03_lrf_m.png
+13909,sensor_angle_deg,-3.60,-3.60,visual,images/frame_00013909_04_sensor_angle_deg.png
+13909,elevation_deg,-1.36,-1.36,visual,images/frame_00013909_05_elevation_deg.png
+13909,tag_lat_dms,"14°51'04.82""","14°51'04.82""",visual,images/frame_00013909_06_tag_lat_dms.png
+13909,tag_lon_dms,"101°59'48.31""","101°59'48.31""",visual,images/frame_00013909_07_tag_lon_dms.png
+13909,tag_alt_m,0.000,0.000m,visual,images/frame_00013909_08_tag_alt_m.png
+13909,acft_lat_dms,"14°51'35.92""","14°51'35.92""",visual,images/frame_00013909_09_acft_lat_dms.png
+13909,acft_lon_dms,"102°00'48.58""","102°00'48.58""",visual,images/frame_00013909_10_acft_lon_dms.png
+13909,acft_alt_m,409.000,409.000m,visual,images/frame_00013909_11_acft_alt_m.png
+14095,timestamp,,,,images/frame_00014095_00_timestamp.png
+14095,eo_detail,4.8xFOV15.6°,4.8x FOV 15.6°,visual,images/frame_00014095_01_eo_detail.png
+14095,ir_detail,1.0x,1.0x,visual,images/frame_00014095_02_ir_detail.png
+14095,lrf_m,,0.0m,read-invalid:0.0,images/frame_00014095_03_lrf_m.png
+14095,sensor_angle_deg,1.23,1.23,visual,images/frame_00014095_04_sensor_angle_deg.png
+14095,elevation_deg,-1.36,-1.36,visual,images/frame_00014095_05_elevation_deg.png
+14095,tag_lat_dms,"14°51'04.82""",14°51'04.82″,visual,images/frame_00014095_06_tag_lat_dms.png
+14095,tag_lon_dms,"101°59'48.31""","101°59'48.31""",visual,images/frame_00014095_07_tag_lon_dms.png
+14095,tag_alt_m,0.000,0.000m,visual,images/frame_00014095_08_tag_alt_m.png
+14095,acft_lat_dms,"14°51'33.70""","14°51'33.70""",visual,images/frame_00014095_09_acft_lat_dms.png
+14095,acft_lon_dms,"102°00'46.05""","102°00~46.05""",visual,images/frame_00014095_10_acft_lon_dms.png
+14095,acft_alt_m,411.000,411.000m,visual,images/frame_00014095_11_acft_alt_m.png
+14280,timestamp,,,,images/frame_00014280_00_timestamp.png
+14280,eo_detail,4.8xFOV15.6°,4.8x FOV 15.6°,visual,images/frame_00014280_01_eo_detail.png
+14280,ir_detail,1.0x,1.0x,visual,images/frame_00014280_02_ir_detail.png
+14280,lrf_m,,0.0m,read-invalid:0.0,images/frame_00014280_03_lrf_m.png
+14280,sensor_angle_deg,-7.03,-7.03,visual,images/frame_00014280_04_sensor_angle_deg.png
+14280,elevation_deg,-1.38,-1.38,visual,images/frame_00014280_05_elevation_deg.png
+14280,tag_lat_dms,"14°51'04.82""",14°51'04.82″,visual,images/frame_00014280_06_tag_lat_dms.png
+14280,tag_lon_dms,"101°59'48.31""","101°59'48.31""",visual,images/frame_00014280_07_tag_lon_dms.png
+14280,tag_alt_m,0.000,0.000m,visual,images/frame_00014280_08_tag_alt_m.png
+14280,acft_lat_dms,"14°51'31.35""","14°51'31.35""",visual,images/frame_00014280_09_acft_lat_dms.png
+14280,acft_lon_dms,"102°00'43.45""",102°00'43.45″,visual,images/frame_00014280_10_acft_lon_dms.png
+14280,acft_alt_m,414.000,414.000m,visual,images/frame_00014280_11_acft_alt_m.png
+14466,timestamp,,,,images/frame_00014466_00_timestamp.png
+14466,eo_detail,4.8xFOV15.6°,4.8x F0V 15.6°,visual,images/frame_00014466_01_eo_detail.png
+14466,ir_detail,1.0x,1.0x,visual,images/frame_00014466_02_ir_detail.png
+14466,lrf_m,,0.0m,read-invalid:0.0,images/frame_00014466_03_lrf_m.png
+14466,sensor_angle_deg,-4.13,=4.13,visual,images/frame_00014466_04_sensor_angle_deg.png
+14466,elevation_deg,-1.36,-1.36,visual,images/frame_00014466_05_elevation_deg.png
+14466,tag_lat_dms,"14°51'04.82""","14°51'04.82""",visual,images/frame_00014466_06_tag_lat_dms.png
+14466,tag_lon_dms,"101°59'48.31""","101°59'48.31""",visual,images/frame_00014466_07_tag_lon_dms.png
+14466,tag_alt_m,0.000,0.000m,visual,images/frame_00014466_08_tag_alt_m.png
+14466,acft_lat_dms,"14°51'29.20""",14°51′29.20″,visual,images/frame_00014466_09_acft_lat_dms.png
+14466,acft_lon_dms,"102°00'40.89""",102°00'40.89″,visual,images/frame_00014466_10_acft_lon_dms.png
+14466,acft_alt_m,416.000,416.000m,visual,images/frame_00014466_11_acft_alt_m.png
+14651,timestamp,,,,images/frame_00014651_00_timestamp.png
+14651,eo_detail,1.0xFOV66.4°,1.0x FOv 66.45,visual,images/frame_00014651_01_eo_detail.png
+14651,ir_detail,1.0x,1.0x,visual,images/frame_00014651_02_ir_detail.png
+14651,lrf_m,251.6,251.r,visual,images/frame_00014651_03_lrf_m.png
+14651,sensor_angle_deg,-6.42,4=642,visual,images/frame_00014651_04_sensor_angle_deg.png
+14651,elevation_deg,-44.98,-44.98),visual,images/frame_00014651_05_elevation_deg.png
+14651,tag_lat_dms,"14°51'23.27""",14°51°23.270,visual,images/frame_00014651_06_tag_lat_dms.png
+14651,tag_lon_dms,"102°00'34.02""",102*00'34 02,visual,images/frame_00014651_07_tag_lon_dms.png
+14651,tag_alt_m,241.000,241-000m,visual,images/frame_00014651_08_tag_alt_m.png
+14651,acft_lat_dms,"14°51'27.05""","14°512705""",visual,images/frame_00014651_09_acft_lat_dms.png
+14651,acft_lon_dms,"102°00'38.52""",102°00'38 52”,visual,images/frame_00014651_10_acft_lon_dms.png
+14651,acft_alt_m,418.000,418.000m,visual,images/frame_00014651_11_acft_alt_m.png
+14837,timestamp,,,,images/frame_00014837_00_timestamp.png
+14837,eo_detail,1.0xFOV66.4°,1.0x FOv 66.4°,visual,images/frame_00014837_01_eo_detail.png
+14837,ir_detail,1.0x,1.0x,visual,images/frame_00014837_02_ir_detail.png
+14837,lrf_m,244.7,244.7π,visual,images/frame_00014837_03_lrf_m.png
+14837,sensor_angle_deg,-8.00,-8.00,visual,images/frame_00014837_04_sensor_angle_deg.png
+14837,elevation_deg,-44.98,=44.98,visual,images/frame_00014837_05_elevation_deg.png
+14837,tag_lat_dms,"14°51'21.30""","14°51/21.30""",visual,images/frame_00014837_06_tag_lat_dms.png
+14837,tag_lon_dms,"102°00'31.50""","102°00231.50""",visual,images/frame_00014837_07_tag_lon_dms.png
+14837,tag_alt_m,248.000,248 000m,visual,images/frame_00014837_08_tag_alt_m.png
+14837,acft_lat_dms,"14°51'24.81""",14*51'24:81,visual,images/frame_00014837_09_acft_lat_dms.png
+14837,acft_lon_dms,"102°00'36.02""",102°00'3602*,visual,images/frame_00014837_10_acft_lon_dms.png
+14837,acft_alt_m,421.000,421rog0m,visual,images/frame_00014837_11_acft_alt_m.png
+15022,timestamp,,,,images/frame_00015022_00_timestamp.png
+15022,eo_detail,1.0xFOV66.4°,"1.0x FOV 66,4°",visual,images/frame_00015022_01_eo_detail.png
+15022,ir_detail,1.0x,1.0x,visual,images/frame_00015022_02_ir_detail.png
+15022,lrf_m,258.2,258.2m,visual,images/frame_00015022_03_lrf_m.png
+15022,sensor_angle_deg,-5.36,-5.36,visual,images/frame_00015022_04_sensor_angle_deg.png
+15022,elevation_deg,-44.98,=44.98,visual,images/frame_00015022_05_elevation_deg.png
+15022,tag_lat_dms,"14°51'18.80""",14°51<18.802,visual,images/frame_00015022_06_tag_lat_dms.png
+15022,tag_lon_dms,"102°00'28.72""","102°00'28.72""",visual,images/frame_00015022_07_tag_lon_dms.png
+15022,tag_alt_m,241.000,241、000m,visual,images/frame_00015022_08_tag_alt_m.png
+15022,acft_lat_dms,"14°51'22.59""",14*51'22.592,visual,images/frame_00015022_09_acft_lat_dms.png
+15022,acft_lon_dms,"102°00'33.51""","102*00'33.51""",visual,images/frame_00015022_10_acft_lon_dms.png
+15022,acft_alt_m,424.000,424：000m,visual,images/frame_00015022_11_acft_alt_m.png
+15208,timestamp,,,,images/frame_00015208_00_timestamp.png
+15208,eo_detail,1.0xFOV66.4°,1.0x F0V 66.4°,visual,images/frame_00015208_01_eo_detail.png
+15208,ir_detail,1.0x,1.0x,visual,images/frame_00015208_02_ir_detail.png
+15208,lrf_m,274.0,274.0m,visual,images/frame_00015208_03_lrf_m.png
+15208,sensor_angle_deg,-6.86,-6.86,visual,images/frame_00015208_04_sensor_angle_deg.png
+15208,elevation_deg,-44.98,=44.98,visual,images/frame_00015208_05_elevation_deg.png
+15208,tag_lat_dms,"14°51'16.21""","14°5116.21""",visual,images/frame_00015208_06_tag_lat_dms.png
+15208,tag_lon_dms,"102°00'26.10""",102°00′26.10″,visual,images/frame_00015208_07_tag_lon_dms.png
+15208,tag_alt_m,232.000,232.000m,visual,images/frame_00015208_08_tag_alt_m.png
+15208,acft_lat_dms,"14°51'20.34""",14°51'20.342,visual,images/frame_00015208_09_acft_lat_dms.png
+15208,acft_lon_dms,"102°00'30.99""",102°00'30.99″,visual,images/frame_00015208_10_acft_lon_dms.png
+15208,acft_alt_m,425.000,425.000m,visual,images/frame_00015208_11_acft_alt_m.png
