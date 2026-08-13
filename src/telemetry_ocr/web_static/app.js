@@ -108,12 +108,33 @@ const state = {
   detectionImageSizeTouched: false,
 };
 
+// Compared against the server's version at startup. A service worker serving a
+// stale app.js looks exactly like a bug in the current code, so the page says
+// which build it is actually running rather than leaving it to be deduced.
+const APP_BUILD = "0.4.0";
+
 const DETECTION_MAX_EXTRAPOLATION_MS = 600;
 const DETECTION_MIN_EXTRAPOLATION_MS = 250;
 const DETECTION_MIN_SAMPLE_GAP_MS = 30;
 const DETECTION_MAX_SAMPLE_GAP_MS = 400;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
+
+async function verifyBuildMatchesServer() {
+  try {
+    const health = await jsonFetch("/api/health");
+    const serverBuild = String(health.version || "");
+    if (serverBuild && serverBuild !== APP_BUILD) {
+      showToast(
+        `หน้าเว็บเป็นเวอร์ชัน ${APP_BUILD} แต่ server เป็น ${serverBuild}`
+        + " — กด Ctrl+Shift+R เพื่อโหลดโค้ดใหม่",
+      );
+      console.warn(`Stale page: app ${APP_BUILD} against server ${serverBuild}`);
+    }
+  } catch (error) {
+    console.warn("Could not verify the page build", error);
+  }
+}
 
 function initializePwa() {
   if ("serviceWorker" in navigator) {
@@ -123,6 +144,7 @@ function initializePwa() {
       });
     });
   }
+  verifyBuildMatchesServer();
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     state.installPrompt = event;

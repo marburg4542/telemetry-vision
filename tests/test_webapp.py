@@ -406,6 +406,21 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await poll
 
+    async def test_health_reports_the_build_the_page_checks_against(self):
+        from pathlib import Path
+
+        from telemetry_ocr import __version__, webapp
+
+        payload = await (await self.client.get("/api/health")).json()
+        self.assertEqual(payload["version"], __version__)
+        # The page hard-codes its own build and warns when the two differ, so a
+        # stale service-worker copy of app.js is reported out loud instead of
+        # being mistaken for a bug in the current code.
+        source = (Path(webapp.__file__).with_name("web_static") / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f'const APP_BUILD = "{__version__}"', source)
+
     async def test_result_long_poll_rejects_a_bad_wait(self):
         response = await self.client.get(
             "/api/detection/result?source_time_ms=100&after_sequence=0&wait_ms=abc"

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import __version__
 from .config import AppConfig, clone_config
 from .detection_worker import DetectionFrame, DetectionWorker, ProcessDetectionWorker
 from .errors import DependencyError
@@ -220,7 +221,14 @@ def create_app(
 
     async def health(_: Any) -> Any:
         return web.json_response(
-            {"status": "ready", "model": web_config.runtime.model_name}
+            {
+                "status": "ready",
+                "model": web_config.runtime.model_name,
+                # The page compares this against its own constant. A stale
+                # service-worker copy of app.js reporting an older build was
+                # mistaken for a behaviour bug once; now it says so out loud.
+                "version": __version__,
+            }
         )
 
     async def config_payload(_: Any) -> Any:
