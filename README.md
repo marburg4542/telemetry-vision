@@ -55,6 +55,11 @@ paddleocr install_hpi_deps cpu
 
 ค่าเริ่มต้นใน example config ใช้ `model_source: BOS` และเก็บโมเดลใน `models/paddlex` เพื่อใช้ cache เดิมทุกครั้ง บน WSL ที่ติดตั้ง HPI dependencies แล้วจึงเปลี่ยน `enable_hpi` เป็น `true`
 
+`model_cache_dir` เป็น path แบบ relative ต่อ **working directory ที่รันคำสั่ง** ไม่ใช่ต่อไฟล์ config
+ถ้ารันจากโฟลเดอร์อื่นจะได้ cache คนละที่และดาวน์โหลดโมเดลใหม่เงียบๆ ให้ `cd` เข้ามาที่ราก
+โปรเจกต์ก่อนเสมอ (`start_windows_ocr_web.ps1` และ Scheduled Task ตั้ง working directory ให้แล้ว)
+หรือใส่ absolute path ลงใน config โดยตรง เช่นเดียวกับ `output/ultralytics-config` ที่ YOLO worker ใช้
+
 สำหรับ CPU ค่าเริ่มต้นใช้ `PP-OCRv6_tiny_rec` เพราะมี latency ต่ำกว่าอย่างชัดเจนในการ benchmark บนเครื่องนี้ ตั้ง `warmup_iterations: 2` เพื่อไม่ให้การ compile oneDNN ครั้งแรกปนกับ realtime latency หาก labeled accuracy ของวิดีโอจริงต่ำกว่าเป้าหมาย ให้เปลี่ยนเป็น `en_PP-OCRv5_mobile_rec` แล้ว benchmark ใหม่
 
 ## ตั้งค่า ROI

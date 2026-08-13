@@ -315,7 +315,9 @@ def create_app(
             if written == 0:
                 raise ValueError("Model file is empty")
             previous_path = state.model_path
-            state.worker.start(model_path, filename)
+            # Spawning the worker process is slow enough to stall every other
+            # request, including the OCR frames the page is still sending.
+            await asyncio.to_thread(state.worker.start, model_path, filename)
             state.model_path = model_path
             state.filename = filename
             state.size_bytes = written
@@ -403,7 +405,10 @@ def create_app(
             raise ValueError("Detection frame body is empty")
         if len(payload) > detection_frame_limit:
             raise ValueError("Detection frame exceeds the 8 MB limit")
-        accepted = state.worker.submit(
+        # submit() pickles up to 8 MB onto a multiprocessing queue and can spin
+        # while the feeder thread catches up, so it does not belong on the loop.
+        accepted = await asyncio.to_thread(
+            state.worker.submit,
             DetectionFrame(
                 payload=payload,
                 source_id=source_id,
@@ -413,7 +418,7 @@ def create_app(
                 confidence=confidence,
                 iou=iou,
                 image_size=image_size,
-            )
+            ),
         )
         response_payload, response_status = detection_result_payload(source_time_ms)
         response_payload["accepted"] = accepted
