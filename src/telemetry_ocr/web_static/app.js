@@ -113,6 +113,8 @@ const state = {
   detectionCameraVelocity: null,
   detectionResultGapMs: 0,
   detectionLastResultMs: null,
+  mediaClockMs: null,
+  mediaClockWall: 0,
 };
 
 // Compared against the server's version at startup. A service worker serving a
@@ -131,6 +133,13 @@ const DETECTION_VELOCITY_SMOOTHING = 0.45;
 // Source pixels per millisecond. Nothing real crosses a 640 px frame in under
 // half a second, so anything faster is a tracker mistake, not motion.
 const DETECTION_MAX_SPEED = 1.5;
+// What is drawn this frame is shown at the next repaint, one 60 Hz interval
+// later, by which time the video has moved on again.
+const DETECTION_PRESENTATION_LEAD_MS = 16;
+// The camera estimate is a median across every box, so it is already denoised
+// spatially and can follow a changing pan faster than a single box's velocity
+// can be trusted to.
+const DETECTION_CAMERA_SMOOTHING = 0.7;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
 
@@ -547,6 +556,9 @@ function startFrameLoop() {
     // OCR reads fixed regions and does not care. Behind maybeSubmit it paid for
     // the full-resolution ROI encode before it could start its own.
     const tick = (_, metadata) => {
+      // The reference point the overlay's media clock is carried forward from.
+      state.mediaClockMs = metadata.mediaTime * 1000;
+      state.mediaClockWall = performance.now();
       maybeSubmitDetection(metadata.mediaTime * 1000);
       maybeSubmit(metadata.mediaTime * 1000, metadata.presentedFrames);
       ui.video.requestVideoFrameCallback(tick);
@@ -722,6 +734,7 @@ function resetDetectionFrame() {
   state.detectionCameraVelocity = null;
   state.detectionResultGapMs = 0;
   state.detectionLastResultMs = null;
+  state.mediaClockMs = null;
   ui.detectionFps.textContent = "0.0";
   ui.detectionLatency.textContent = "—";
   ui.detectionLag.textContent = "—";
@@ -811,6 +824,24 @@ function formatMs(value) {
   return Number.isFinite(number) ? String(Math.round(number)) : "—";
 }
 
+// video.currentTime is quantised to frame boundaries and reads behind the frame
+// actually on screen, so measuring staleness against it under-reports it and
+// the box is compensated by less than it needs. requestVideoFrameCallback gives
+// the exact presentation timestamp of the frame that was just shown; the clock
+// is carried forward from there at the current playback rate.
+function currentMediaTime() {
+  if (state.mediaClockMs === null || ui.video.paused) return ui.video.currentTime * 1000;
+  const elapsed = performance.now() - state.mediaClockWall;
+  // No new video frame for this long means stalled, seeking or a background
+  // tab, where extrapolating the clock would run away from the picture.
+  if (elapsed > 250) return ui.video.currentTime * 1000;
+  const rate = ui.video.playbackRate || 1;
+  // Whatever is drawn now is presented at the next repaint, by which point the
+  // video has advanced again. Leading by one frame lands the box on the picture
+  // the viewer actually sees rather than the one already gone.
+  return state.mediaClockMs + (elapsed + DETECTION_PRESENTATION_LEAD_MS) * rate;
+}
+
 function boxCentre(box, axis) {
   return axis === "x"
     ? (Number(box.x1) + Number(box.x2)) / 2
@@ -828,9 +859,9 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-function smooth(previousValue, nextValue) {
+function smooth(previousValue, nextValue, weight = DETECTION_VELOCITY_SMOOTHING) {
   return Number.isFinite(previousValue)
-    ? previousValue + (nextValue - previousValue) * DETECTION_VELOCITY_SMOOTHING
+    ? previousValue + (nextValue - previousValue) * weight
     : nextValue;
 }
 
@@ -892,8 +923,16 @@ function applyDetectionResult(result, completedNow) {
   // genuinely moving vehicle among stationary ones does not drag the estimate.
   if (sampled.length) {
     state.detectionCameraVelocity = {
-      x: smooth(state.detectionCameraVelocity?.x, median(sampled.map((v) => v[0]))),
-      y: smooth(state.detectionCameraVelocity?.y, median(sampled.map((v) => v[1]))),
+      x: smooth(
+        state.detectionCameraVelocity?.x,
+        median(sampled.map((v) => v[0])),
+        DETECTION_CAMERA_SMOOTHING,
+      ),
+      y: smooth(
+        state.detectionCameraVelocity?.y,
+        median(sampled.map((v) => v[1])),
+        DETECTION_CAMERA_SMOOTHING,
+      ),
     };
   }
 
@@ -1006,8 +1045,11 @@ function drawDetections(renderNow = performance.now()) {
   context.font = "600 12px ui-monospace, SFMono-Regular, Consolas, monospace";
   context.textBaseline = "top";
 
-  const currentMediaTimeMs = ui.video.currentTime * 1000;
-  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  // prefers-reduced-motion used to disable prediction entirely. That query is
+  // about decorative animation causing discomfort; a tracking box is neither
+  // decorative nor calmer for being wrong. Honouring it here just froze the
+  // compensation and left every box trailing its object.
+  const currentMediaTimeMs = currentMediaTime();
   for (const [key, track] of state.detectionTracks) {
     let opacity = 1;
     if (track.missingSince !== null) {
@@ -1027,7 +1069,7 @@ function drawDetections(renderNow = performance.now()) {
       DETECTION_MAX_EXTRAPOLATION_MS,
       Math.max(DETECTION_MIN_EXTRAPOLATION_MS, 2 * (state.detectionResultGapMs || 0)),
     );
-    const extrapolationMs = ui.video.paused || reduceMotion
+    const extrapolationMs = ui.video.paused
       ? 0
       : Math.min(reach, Math.max(0, mediaAgeMs));
     // Velocity is smoothed as results arrive, and falls back to the shared
