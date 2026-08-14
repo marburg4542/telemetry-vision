@@ -160,6 +160,9 @@ const DETECTION_POLL_BACKOFF_MS = 500;
 // Generous: a slow machine encoding 960 px still finishes far inside this.
 // It exists to break a wedge, not to police normal timing.
 const DETECTION_ENCODE_TIMEOUT_MS = 4000;
+// Mirrors the bounds the frame endpoint enforces.
+const DETECTION_MIN_IMAGE_SIZE = 320;
+const DETECTION_MAX_IMAGE_SIZE = 1920;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
 
@@ -322,11 +325,18 @@ function adoptTrainedImageSize() {
 
   // Always make the trained size selectable, even when it is not one of the
   // three the page ships with.
-  const options = Array.from(ui.modelImageSize.options);
+  // Anything added for a previous checkpoint is removed first, or the list grows
+  // by one entry per model loaded and most of them mean nothing for the current
+  // one.
+  for (const option of [...ui.modelImageSize.options]) {
+    if (option.dataset.trained === "1") option.remove();
+  }
+  const options = [...ui.modelImageSize.options];
   if (!options.some((option) => Number(option.value) === trained)) {
     const option = document.createElement("option");
     option.value = String(trained);
     option.textContent = `${trained} px`;
+    option.dataset.trained = "1";
     const insertBefore = options.find((candidate) => Number(candidate.value) > trained);
     ui.modelImageSize.insertBefore(option, insertBefore || null);
   }
@@ -337,7 +347,10 @@ function adoptTrainedImageSize() {
   // 960 px model on the CPU costs well over a second per frame. Cap the
   // automatic choice where the README's own benchmark stops being usable.
   const onCpu = state.detectionDevice.toLowerCase().startsWith("cpu");
-  const target = onCpu ? Math.min(trained, 640) : trained;
+  // The frame endpoint rejects anything outside 320-1920, so adopting a trained
+  // size beyond that would turn every submission into a 400 with no clue why.
+  const withinApi = Math.min(DETECTION_MAX_IMAGE_SIZE, Math.max(DETECTION_MIN_IMAGE_SIZE, trained));
+  const target = onCpu ? Math.min(withinApi, 640) : withinApi;
   if (Number(ui.modelImageSize.value) === target) return;
 
   ui.modelImageSize.value = String(target);
@@ -421,6 +434,9 @@ async function uploadDetectionModel(file) {
 
 async function clearDetectionModel() {
   ++state.detectionModelGeneration;
+  // The encoder is per-page, not per-model, but a wedged one would otherwise
+  // survive the clear and greet the next model already broken.
+  failEncoder("model cleared");
   stopModelStatusPolling();
   try {
     applyDetectionModelState(await jsonFetch("/api/detection/model", { method: "DELETE" }));
@@ -528,12 +544,15 @@ function handleFile(file) {
   ui.fileName.textContent = file.name;
   ui.fileDetails.textContent = `${formatBytes(file.size)} · กำลังอ่านข้อมูลวิดีโอ`;
   ui.dropState.hidden = true;
+  // Reset the outgoing source before adopting the new id. Minting it first made
+  // the reset name a source the server had never seen, while the tracker state
+  // for the video being replaced was never cleared at all.
+  resetDetectionTracker();
   state.detectionSourceId = globalThis.crypto?.randomUUID?.()
     || `video-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   ++state.detectionGeneration;
   state.detectionSequence = 0;
   resetDetectionFrame();
-  resetDetectionTracker();
   resetSession(true);
 }
 
@@ -611,7 +630,11 @@ function maybeSubmitDetection(sourceTimeMs) {
     || !ui.detectionToggle.checked
     || state.detectionInFlight
   ) return;
-  if (sourceTimeMs - state.lastDetectionMs < detectionIntervalMs()) return;
+  // detectionIntervalMs is a wall-clock budget while this delta is media time,
+  // so at 2x playback an unscaled comparison submitted twice as often and
+  // oversubscribed the very worker the pacing exists to protect.
+  const mediaInterval = detectionIntervalMs() * (ui.video.playbackRate || 1);
+  if (sourceTimeMs - state.lastDetectionMs < mediaInterval) return;
   submitDetectionFrame(false, sourceTimeMs);
 }
 
@@ -641,6 +664,15 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
   if (!force && (ui.video.paused || !ui.detectionToggle.checked)) return;
   const generation = state.detectionGeneration;
   const sequence = state.detectionSequence++;
+  // Everything describing this frame is read before the first await. Dropping a
+  // new video mid-encode reassigns detectionSourceId and bumps the generation,
+  // and reading these afterwards posted old pixels under the new source id --
+  // which the server takes as a source change and uses to reset the tracker
+  // generation the client had only just installed. The image size has the same
+  // problem: the bitmap was already sized from the previous value.
+  const sourceId = state.detectionSourceId;
+  const imageSize = ui.modelImageSize.value;
+  const confidence = Math.min(1, Math.max(0.05, Number(ui.modelConfidence.value) || 0.45));
   state.detectionInFlight = true;
   state.lastDetectionMs = sourceTimeMs;
   try {
@@ -658,15 +690,14 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
       return;
     }
     state.detectionCaptureMs = performance.now() - captureStarted;
-    const confidence = Math.min(1, Math.max(0.05, Number(ui.modelConfidence.value) || 0.45));
     const params = new URLSearchParams({
-      source_id: state.detectionSourceId,
+      source_id: sourceId,
       generation: String(generation),
       sequence: String(sequence),
       source_time_ms: sourceTimeMs.toFixed(3),
       confidence: confidence.toFixed(2),
       iou: "0.45",
-      image_size: ui.modelImageSize.value,
+      image_size: imageSize,
     });
     const postStarted = performance.now();
     const payload = await jsonFetch(`/api/detection/frame?${params}`, {
@@ -889,7 +920,10 @@ function applyDetectionPayload(payload) {
   const fps = durationMs > 0
     ? (state.detectionCompletions.length - 1) * 1000 / durationMs
     : 0;
-  const lagMs = Math.max(0, ui.video.currentTime * 1000 - Number(result.source_time_ms));
+  // Measured against the same clock the overlay uses to decide staleness;
+  // reading video.currentTime here under-reported it by a frame or two and
+  // disagreed with the compensation actually being applied.
+  const lagMs = Math.max(0, currentMediaTime() - Number(result.source_time_ms));
   const timing = payload.timing || {};
   // What one frame actually costs the worker end to end, which is what the
   // automatic pacing has to stay just under.
@@ -972,6 +1006,13 @@ const median = (values) => DetectionMath.median(values);
 const smooth = (previousValue, nextValue, weight = DETECTION_VELOCITY_SMOOTHING) =>
   DetectionMath.smooth(previousValue, nextValue, weight);
 
+function expireDetectionTracks(renderNow) {
+  for (const [key, track] of state.detectionTracks) {
+    if (track.missingSince === null) continue;
+    if (renderNow - track.missingSince >= DETECTION_FADE_MS) state.detectionTracks.delete(key);
+  }
+}
+
 function applyDetectionResult(result, completedNow) {
   const activeKeys = new Set();
   const sourceTimeMs = Number(result.source_time_ms);
@@ -1033,6 +1074,16 @@ function applyDetectionResult(result, completedNow) {
   // median across objects estimates that shared motion far more reliably than
   // two samples of any single box. The median rather than the mean so that a
   // genuinely moving vehicle among stationary ones does not drag the estimate.
+  if (!sampled.length && state.detectionCameraVelocity) {
+    // Nothing measurable this round: a single-object scene, every box on its
+    // first sighting. Holding the last pan indefinitely kept sliding every box
+    // off its object after the camera had already stopped, so it decays toward
+    // rest instead of persisting until the next reset.
+    state.detectionCameraVelocity = {
+      x: smooth(state.detectionCameraVelocity.x, 0, DETECTION_CAMERA_SMOOTHING),
+      y: smooth(state.detectionCameraVelocity.y, 0, DETECTION_CAMERA_SMOOTHING),
+    };
+  }
   if (sampled.length) {
     state.detectionCameraVelocity = {
       x: smooth(
@@ -1107,7 +1158,13 @@ async function pollDetectionResultLoop(token) {
       });
       const payload = await jsonFetch(`/api/detection/result?${params}`);
       if (pollingAbandoned(token)) return;
-      applyDetectionPayload(payload);
+      try {
+        applyDetectionPayload(payload);
+      } catch (error) {
+        // Distinguished from a transport failure on purpose: retrying the same
+        // malformed payload at 2 Hz forever, silently, is not a recovery.
+        console.error("Discarding a detection payload that could not be applied", error);
+      }
       // A backstop, not the pacing mechanism: the server is supposed to hold
       // the request until there is something new. If it ever returns instantly
       // — a bug, a version mismatch, an unexpected payload — this is what keeps
@@ -1153,6 +1210,12 @@ function drawDetections(renderNow = performance.now()) {
   const context = ui.detectionOverlay.getContext("2d");
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, stageWidth, stageHeight);
+  // Expiry runs before anything that can return early. It used to sit inside the
+  // draw loop, past both guards below, so switching the overlay off and then
+  // scrubbing grew the map for the life of the page — forced submissions keep
+  // arriving regardless of the toggle, and every untracked detection takes a
+  // fresh key it can never be given a second sample under.
+  expireDetectionTracks(renderNow);
   if (!state.detectorLoaded || !ui.detectionToggle.checked || !state.detectionTracks.size) return;
 
   const sourceWidth = state.detectionSourceWidth || ui.video.videoWidth;
@@ -1174,10 +1237,7 @@ function drawDetections(renderNow = performance.now()) {
     let opacity = 1;
     if (track.missingSince !== null) {
       opacity = Math.max(0, 1 - (renderNow - track.missingSince) / DETECTION_FADE_MS);
-      if (opacity <= 0) {
-        state.detectionTracks.delete(key);
-        continue;
-      }
+      if (opacity <= 0) continue;
     }
     const detection = track.current;
     const mediaAgeMs = currentMediaTimeMs - detection.sourceTimeMs;
