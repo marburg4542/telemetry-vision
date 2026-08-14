@@ -1,17 +1,22 @@
 "use strict";
 
-const CACHE_NAME = "telemetry-ocr-pwa-v13";
+const CACHE_NAME = "telemetry-ocr-pwa-v14";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
   "/assets/app.css",
   "/assets/app.js",
+  "/assets/detection-math.js",
   "/assets/icons/icon-192.png",
   "/assets/icons/icon-512.png",
   "/assets/icons/icon-maskable-512.png",
 ];
 // Served network-first so a running page never lags behind the server build.
-const CODE_PATHS = new Set(["/assets/app.js", "/assets/app.css"]);
+const CODE_PATHS = new Set([
+  "/assets/app.js",
+  "/assets/detection-math.js",
+  "/assets/app.css",
+]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));

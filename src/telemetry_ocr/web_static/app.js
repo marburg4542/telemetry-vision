@@ -141,6 +141,9 @@ const DETECTION_MAX_SPEED = 1.5;
 // What is drawn this frame is shown at the next repaint, one 60 Hz interval
 // later, by which time the video has moved on again.
 const DETECTION_PRESENTATION_LEAD_MS = 16;
+// No new video frame for this long means stalled, seeking or a background
+// tab, where carrying the clock forward would run away from the picture.
+const DETECTION_STALL_MS = 250;
 // The camera estimate is a median across every box, so it is already denoised
 // spatially and can follow a changing pan faster than a single box's velocity
 // can be trusted to.
@@ -623,12 +626,14 @@ function maybeSubmitDetection(sourceTimeMs) {
 function detectionIntervalMs() {
   const choice = ui.detectionRate.value;
   if (choice !== "auto") return 1000 / Number(choice);
-  const cycle = state.detectionWorkerCycleMs;
-  if (!Number.isFinite(cycle) || cycle <= 0) return 1000 / 10;
-  return Math.min(
+  const paced = DetectionMath.autoIntervalMs(
+    state.detectionWorkerCycleMs,
+    DETECTION_AUTO_HEADROOM,
+    DETECTION_AUTO_MIN_INTERVAL_MS,
     DETECTION_AUTO_MAX_INTERVAL_MS,
-    Math.max(DETECTION_AUTO_MIN_INTERVAL_MS, cycle * DETECTION_AUTO_HEADROOM),
   );
+  // Nothing measured yet, so fall back to a rate that suits a typical machine.
+  return paced === null ? 1000 / 10 : paced;
 }
 
 async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.currentTime * 1000) {
@@ -937,40 +942,28 @@ function formatMs(value) {
 // the exact presentation timestamp of the frame that was just shown; the clock
 // is carried forward from there at the current playback rate.
 function currentMediaTime() {
-  if (state.mediaClockMs === null || ui.video.paused) return ui.video.currentTime * 1000;
-  const elapsed = performance.now() - state.mediaClockWall;
-  // No new video frame for this long means stalled, seeking or a background
-  // tab, where extrapolating the clock would run away from the picture.
-  if (elapsed > 250) return ui.video.currentTime * 1000;
-  const rate = ui.video.playbackRate || 1;
-  // Whatever is drawn now is presented at the next repaint, by which point the
-  // video has advanced again. Leading by one frame lands the box on the picture
-  // the viewer actually sees rather than the one already gone.
-  return state.mediaClockMs + (elapsed + DETECTION_PRESENTATION_LEAD_MS) * rate;
+  return projectMediaTime({
+    clockMs: state.mediaClockMs,
+    clockWallMs: state.mediaClockWall,
+    nowWallMs: performance.now(),
+    playbackRate: ui.video.playbackRate,
+    paused: ui.video.paused,
+    currentTimeMs: ui.video.currentTime * 1000,
+    leadMs: DETECTION_PRESENTATION_LEAD_MS,
+    stallMs: DETECTION_STALL_MS,
+  });
 }
 
-function boxCentre(box, axis) {
-  return axis === "x"
-    ? (Number(box.x1) + Number(box.x2)) / 2
-    : (Number(box.y1) + Number(box.y2)) / 2;
-}
+// Shared with detection-math.js so the arithmetic the page runs is the
+// arithmetic the tests exercise.
+const {
+  boxCentre, letterbox, usableGap, extrapolationReach, projectMediaTime,
+} = DetectionMath;
 
-function clampSpeed(value) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(-DETECTION_MAX_SPEED, Math.min(DETECTION_MAX_SPEED, value));
-}
-
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function smooth(previousValue, nextValue, weight = DETECTION_VELOCITY_SMOOTHING) {
-  return Number.isFinite(previousValue)
-    ? previousValue + (nextValue - previousValue) * weight
-    : nextValue;
-}
+const clampSpeed = (value) => DetectionMath.clampSpeed(value, DETECTION_MAX_SPEED);
+const median = (values) => DetectionMath.median(values);
+const smooth = (previousValue, nextValue, weight = DETECTION_VELOCITY_SMOOTHING) =>
+  DetectionMath.smooth(previousValue, nextValue, weight);
 
 function applyDetectionResult(result, completedNow) {
   const activeKeys = new Set();
@@ -981,7 +974,7 @@ function applyDetectionResult(result, completedNow) {
   // forward a linear guess can be trusted.
   if (Number.isFinite(state.detectionLastResultMs)) {
     const gap = sourceTimeMs - state.detectionLastResultMs;
-    if (gap >= DETECTION_MIN_SAMPLE_GAP_MS && gap <= DETECTION_MAX_SAMPLE_GAP_MS) {
+    if (usableGap(gap, DETECTION_MIN_SAMPLE_GAP_MS, DETECTION_MAX_SAMPLE_GAP_MS)) {
       state.detectionResultGapMs = smooth(state.detectionResultGapMs, gap);
     }
   }
@@ -1002,7 +995,7 @@ function applyDetectionResult(result, completedNow) {
     let velocityX = null;
     let velocityY = null;
     const gap = previous ? current.sourceTimeMs - previous.sourceTimeMs : 0;
-    if (gap >= DETECTION_MIN_SAMPLE_GAP_MS && gap <= DETECTION_MAX_SAMPLE_GAP_MS) {
+    if (usableGap(gap, DETECTION_MIN_SAMPLE_GAP_MS, DETECTION_MAX_SAMPLE_GAP_MS)) {
       velocityX = smooth(
         existing?.velocityX,
         clampSpeed((boxCentre(current, "x") - boxCentre(previous, "x")) / gap),
@@ -1011,7 +1004,12 @@ function applyDetectionResult(result, completedNow) {
         existing?.velocityY,
         clampSpeed((boxCentre(current, "y") - boxCentre(previous, "y")) / gap),
       );
-      sampled.push([velocityX, velocityY]);
+      // A box with a malformed coordinate yields no usable speed. Feeding that
+      // into the median as a zero would invent a stationary object and pull the
+      // camera estimate toward standing still.
+      if (Number.isFinite(velocityX) && Number.isFinite(velocityY)) {
+        sampled.push([velocityX, velocityY]);
+      }
     }
 
     state.detectionTracks.set(key, {
@@ -1153,14 +1151,9 @@ function drawDetections(renderNow = performance.now()) {
   const sourceWidth = state.detectionSourceWidth || ui.video.videoWidth;
   const sourceHeight = state.detectionSourceHeight || ui.video.videoHeight;
   if (!sourceWidth || !sourceHeight) return;
-  const videoRatio = sourceWidth / sourceHeight;
-  const stageRatio = stageWidth / stageHeight;
-  const displayWidth = videoRatio > stageRatio ? stageWidth : stageHeight * videoRatio;
-  const displayHeight = videoRatio > stageRatio ? stageWidth / videoRatio : stageHeight;
-  const offsetX = (stageWidth - displayWidth) / 2;
-  const offsetY = (stageHeight - displayHeight) / 2;
-  const scaleX = displayWidth / sourceWidth;
-  const scaleY = displayHeight / sourceHeight;
+  const { offsetX, offsetY, scaleX, scaleY } = letterbox(
+    stageWidth, stageHeight, sourceWidth, sourceHeight,
+  );
   context.lineWidth = 2;
   context.font = "600 12px ui-monospace, SFMono-Regular, Consolas, monospace";
   context.textBaseline = "top";
@@ -1185,9 +1178,10 @@ function drawDetections(renderNow = performance.now()) {
     // A linear guess holds for roughly two result intervals; past that the box
     // overshoots on every turn, which reads worse than trailing. The reach is
     // therefore tied to the observed cadence rather than to the lag.
-    const reach = Math.min(
+    const reach = extrapolationReach(
+      state.detectionResultGapMs,
+      DETECTION_MIN_EXTRAPOLATION_MS,
       DETECTION_MAX_EXTRAPOLATION_MS,
-      Math.max(DETECTION_MIN_EXTRAPOLATION_MS, 2 * (state.detectionResultGapMs || 0)),
     );
     const extrapolationMs = ui.video.paused
       ? 0
@@ -1380,25 +1374,7 @@ function formatValue(value, fieldId, unit) {
 }
 
 function formatDms(value, degreeDigits, decimalPlaces) {
-  const absolute = Math.abs(value);
-  let degrees = Math.floor(absolute);
-  const minuteValue = (absolute - degrees) * 60;
-  let minutes = Math.floor(minuteValue);
-  let seconds = (minuteValue - minutes) * 60;
-  const scale = 10 ** decimalPlaces;
-  seconds = Math.round(seconds * scale) / scale;
-  if (seconds >= 60) {
-    seconds = 0;
-    minutes += 1;
-  }
-  if (minutes >= 60) {
-    minutes = 0;
-    degrees += 1;
-  }
-  const degreeText = String(degrees).padStart(degreeDigits, "0");
-  const minuteText = String(minutes).padStart(2, "0");
-  const secondText = seconds.toFixed(decimalPlaces).padStart(3 + decimalPlaces, "0");
-  return `${degreeText}°${minuteText}'${secondText}"`;
+  return DetectionMath.formatDms(value, degreeDigits, decimalPlaces).text;
 }
 
 function downloadJsonl() {
