@@ -100,8 +100,11 @@ def render(report: dict[str, Any]) -> str:
             "detection stack (torch + ultralytics)",
             f"  torch {torch_report['torch']} (cuda build: {torch_report['cuda_build']})",
             f"  ultralytics {torch_report.get('ultralytics') or 'NOT INSTALLED'}",
-            f"  cuda available: {cuda}  -> selected device: {torch_report['selected_device']}",
+            f"  cuda available: {cuda}  -> selected device: "
+            f"{torch_report.get('selected_device') or 'UNRESOLVED'}",
         ]
+        if torch_report.get("device_error"):
+            lines += [f"  {line}" for line in str(torch_report["device_error"]).splitlines()]
         for device in torch_report["devices"]:
             lines.append(
                 f"  gpu {device['index']}: {device['name']} "

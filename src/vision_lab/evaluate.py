@@ -11,7 +11,7 @@ import csv
 import json
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -43,7 +43,6 @@ class EvaluationOptions:
     save_video: bool = True
     quiet: bool = False
     log_every: int = 100
-    extra: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -127,7 +126,6 @@ def evaluate(paths: ProjectPaths, options: EvaluationOptions) -> dict[str, Any]:
         "name": run_dir.name,
         "exist_ok": True,
         "verbose": not options.quiet,
-        **options.extra,
     }
     # Ultralytics 8.4 deprecated `half` in favour of `quantize` and warns on
     # every run even when it is False, so only send it when it was asked for.
@@ -234,7 +232,9 @@ def evaluate(paths: ProjectPaths, options: EvaluationOptions) -> dict[str, Any]:
             "max_det": options.max_detections,
             "vid_stride": options.video_stride,
             "device": options.device or "auto",
-            "half": options.half,
+            # None when the argument was never sent, which is not the same
+            # claim as having asked for FP32.
+            "half": True if options.half else None,
             "classes": options.classes,
             "tracker": options.tracker if options.track else None,
         },

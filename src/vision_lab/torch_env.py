@@ -81,7 +81,16 @@ def describe_environment() -> dict[str, Any]:
                     "compute_capability": f"{properties.major}.{properties.minor}",
                 }
             )
-    report["selected_device"] = resolve_torch_device(torch, None)
+    # resolve_torch_device raises when CUDA was demanded and is missing, which
+    # is right for the worker and exactly wrong here: the one configuration
+    # where this command matters most is the one where it would refuse to print
+    # the torch build, the GPU list or the asset table. The diagnostic reports
+    # the fault instead of failing on it.
+    try:
+        report["selected_device"] = resolve_torch_device(torch, None)
+    except DependencyError as exc:
+        report["selected_device"] = None
+        report["device_error"] = str(exc)
 
     try:
         import ultralytics

@@ -1,10 +1,10 @@
 r"""สร้างรายงาน PDF ภาษาไทย อธิบายหลักการและทฤษฎีของโปรเจกต์ YOLOv8 vehicle detection
 
 วิธีใช้:
-    python build_report.py
+    vision-lab report [--run visdrone_custom_6th] [--output out.pdf]
 
 สิ่งที่ต้องติดตั้งก่อน:
-    pip install pypdf reportlab
+    pip install -e ".[report]"
 
 --------------------------------------------------------------------------
 ทำไมถึงใช้ Chrome สร้าง PDF แทน ReportLab โดยตรง
@@ -27,7 +27,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from telemetry_ocr.errors import DependencyError
+from telemetry_ocr.errors import ConfigError, DependencyError
 
 from .paths import ProjectPaths
 
@@ -859,7 +859,26 @@ def build_html(run_dir: Path) -> str:
 # ======================================================================
 # แปลง HTML เป็น PDF ด้วยเบราว์เซอร์ แล้วประทับเลขหน้า
 # ======================================================================
+def require_page_numbering() -> None:
+    """Fail before Chrome runs, not after.
+
+    stamp_page_numbers imports these at the very end, so a missing optional
+    dependency surfaced as a raw traceback once the browser had already spent
+    its time rendering the document. Every other optional import in this project
+    reports a DependencyError naming the command that fixes it.
+    """
+    try:
+        import pypdf  # noqa: F401
+        import reportlab  # noqa: F401
+    except ImportError as exc:
+        raise DependencyError(
+            "การประทับเลขหน้าต้องใช้ pypdf และ reportlab; "
+            'ติดตั้งด้วย `pip install -e ".[report]"`'
+        ) from exc
+
+
 def html_to_pdf(html: str, out_pdf: Path) -> None:
+    require_page_numbering()
     browser = find_browser()
     print(f"ใช้เบราว์เซอร์: {browser}")
     with tempfile.TemporaryDirectory() as tmp:
@@ -877,9 +896,20 @@ def html_to_pdf(html: str, out_pdf: Path) -> None:
             f"--print-to-pdf={raw_pdf}",
             html_file.as_uri(),
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-        if not raw_pdf.is_file():
-            raise DependencyError(f"เบราว์เซอร์สร้าง PDF ไม่สำเร็จ\n{r.stdout}\n{r.stderr}")
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired as exc:
+            # Not an OSError, so without this it escaped the CLI's handler as a
+            # traceback rather than as a message.
+            raise DependencyError(
+                f"เบราว์เซอร์ใช้เวลาเกิน {exc.timeout:.0f} วินาทีในการสร้าง PDF"
+            ) from exc
+        if r.returncode != 0 or not raw_pdf.is_file():
+            # A browser that failed but still left a file behind was being
+            # treated as success.
+            raise DependencyError(
+                f"เบราว์เซอร์สร้าง PDF ไม่สำเร็จ (exit {r.returncode})\n{r.stdout}\n{r.stderr}"
+            )
         stamp_page_numbers(raw_pdf, out_pdf)
 
 
@@ -922,8 +952,16 @@ def build_report(
     run_dir = runs_root / (run_name or DEFAULT_RUN_NAME)
     if not run_dir.is_dir():
         available = ", ".join(sorted(d.name for d in runs_root.glob("*") if d.is_dir()))
-        raise DependencyError(
+        raise ConfigError(
             f"ไม่พบโฟลเดอร์ผลการเทรน: {run_dir}\nที่มีอยู่: {available or 'ไม่มี'}"
+        )
+    if (run_name or DEFAULT_RUN_NAME) != DEFAULT_RUN_NAME:
+        # The prose quotes figures from DEFAULT_RUN_NAME by name, and figure()
+        # degrades to a placeholder rather than complaining, so illustrating it
+        # with another run yields a document whose text and images disagree.
+        print(
+            f"หมายเหตุ: เนื้อหาในรายงานอ้างอิงรอบ {DEFAULT_RUN_NAME} "
+            f"แต่กำลังใช้ภาพจาก {run_dir.name}"
         )
     destination = output or paths.output_dir("pdf") / DEFAULT_PDF_NAME
     html_to_pdf(build_html(run_dir), destination)
