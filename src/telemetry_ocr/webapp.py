@@ -176,12 +176,18 @@ def create_app(
     max_sessions_key = web.AppKey("max_sessions", int)
     detection_state_key = web.AppKey("detection_state", DetectionState)
     detection_pump_key = web.AppKey("detection_pump", asyncio.Task)
-    # Holds the newest sequence the pump has seen and the event waiters block
-    # on. Kept outside app state because aiohttp deprecates mutating that after
-    # startup, and the event is replaced rather than cleared on every result:
-    # that releases each waiter on the old object exactly once and leaves no
-    # window for a waiter to arrive between a set and a clear.
-    pump_state: dict[str, Any] = {"sequence": -1, "ready": asyncio.Event()}
+    # `revision` counts results this server has published. It is deliberately
+    # NOT the client's frame sequence: the page restarts that at zero on every
+    # seek, model change and settings change, so a watermark built on it goes
+    # stale the moment the client resets and then reports "nothing newer" to a
+    # request that is in fact waiting for everything. A counter the client
+    # cannot influence is always comparable.
+    #
+    # Kept outside app state because aiohttp deprecates mutating that after
+    # startup. The event is replaced rather than cleared on each result: that
+    # releases every waiter on the old object exactly once and leaves no window
+    # for a waiter to arrive between a set and a clear.
+    pump_state: dict[str, Any] = {"revision": 0, "seen": None, "ready": asyncio.Event()}
     app = web.Application(
         client_max_size=model_upload_limit,
         middlewares=[guard_middleware, cors_middleware, error_middleware],
@@ -420,6 +426,10 @@ def create_app(
             "latest_result": latest,
             "result_age_ms": result_age_ms,
             "timing": timing,
+            # Echoed back by the client as `after_revision`. It must record this
+            # even for a result it discards, or it would ask for the same
+            # revision forever and never block.
+            "revision": int(pump_state["revision"]),
             "dropped_frames": int(worker_status.get("dropped_frames", 0)),
         }
         return payload, 200 if latest is not None else 202
@@ -479,17 +489,17 @@ def create_app(
         source_time_ms = float(request.query.get("source_time_ms", "0"))
         if not 0 <= source_time_ms < 86_400_000:
             raise ValueError("source_time_ms is outside the supported range")
-        after_sequence = _non_negative_int(
-            request.query.get("after_sequence", "0"), "after_sequence"
+        after_revision = _non_negative_int(
+            request.query.get("after_revision", "0"), "after_revision"
         )
         wait_ms = _non_negative_int(request.query.get("wait_ms", "0"), "wait_ms")
         # Capped so a poll cannot outlive shutdown, and so a client cannot pin a
         # connection open indefinitely.
         wait_ms = min(wait_ms, 1000)
 
-        if wait_ms and request.query.get("after_sequence") is not None:
+        if wait_ms:
             deadline = time.monotonic() + wait_ms / 1000.0
-            while pump_state["sequence"] <= after_sequence:
+            while pump_state["revision"] <= after_revision:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -521,11 +531,21 @@ def create_app(
             try:
                 state.worker.drain()
                 latest = state.worker.latest()
-                sequence = -1 if latest is None else int(latest.get("sequence", -1))
-                if sequence > pump_state["sequence"]:
-                    pump_state["sequence"] = sequence
-                    pump_state["ready"].set()
-                    pump_state["ready"] = asyncio.Event()
+                # Identity rather than ordering: a reset clears the stored
+                # result and the next one may reuse a sequence already seen, so
+                # "different from what was published last" is the only test that
+                # survives the client renumbering itself.
+                seen = None if latest is None else (
+                    latest.get("source_id"),
+                    latest.get("generation"),
+                    latest.get("sequence"),
+                )
+                if seen != pump_state["seen"]:
+                    pump_state["seen"] = seen
+                    if seen is not None:
+                        pump_state["revision"] += 1
+                        pump_state["ready"].set()
+                        pump_state["ready"] = asyncio.Event()
             except asyncio.CancelledError:
                 raise
             except Exception:

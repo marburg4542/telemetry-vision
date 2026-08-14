@@ -97,7 +97,8 @@ const state = {
   detectionResultSequence: -1,
   detectionCompletions: [],
   detectionPollTimer: null,
-  detectionPolling: false,
+  detectionPollToken: 0,
+  detectionRevision: 0,
   detectionModelPollTimer: null,
   detectionRenderFrame: null,
   detectionSourceWidth: 0,
@@ -126,7 +127,10 @@ const APP_BUILD = "0.4.0";
 const DETECTION_MAX_EXTRAPOLATION_MS = 600;
 const DETECTION_MIN_EXTRAPOLATION_MS = 250;
 const DETECTION_MIN_SAMPLE_GAP_MS = 30;
-const DETECTION_MAX_SAMPLE_GAP_MS = 400;
+// Must stay above DETECTION_AUTO_MAX_INTERVAL_MS. When the two were equal, auto
+// pacing at its ceiling put every sample gap exactly on this boundary, so the
+// per-box velocity was thrown away on precisely the slow machines that need it.
+const DETECTION_MAX_SAMPLE_GAP_MS = 600;
 // Weight of each new velocity sample. Detection boxes jitter by a few pixels
 // between frames; without smoothing that jitter is divided by the gap and
 // multiplied by the extrapolation window, which throws the box around.
@@ -146,6 +150,13 @@ const DETECTION_CAMERA_SMOOTHING = 0.7;
 const DETECTION_AUTO_HEADROOM = 1.1;
 const DETECTION_AUTO_MIN_INTERVAL_MS = 1000 / 20;
 const DETECTION_AUTO_MAX_INTERVAL_MS = 400;
+// The server holds a poll open until it has something new, so these are only
+// the floor and the retry gap, never the normal cadence.
+const DETECTION_POLL_FLOOR_MS = 16;
+const DETECTION_POLL_BACKOFF_MS = 500;
+// Generous: a slow machine encoding 960 px still finishes far inside this.
+// It exists to break a wedge, not to police normal timing.
+const DETECTION_ENCODE_TIMEOUT_MS = 4000;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
 
@@ -629,7 +640,18 @@ async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.curre
   state.lastDetectionMs = sourceTimeMs;
   try {
     const captureStarted = performance.now();
-    const blob = await captureDetectionFrame();
+    let blob;
+    try {
+      blob = await captureDetectionFrame();
+    } catch (error) {
+      // A capture failure is local — a dead encoder, a frame the browser cannot
+      // read. Reporting it as a model fault and re-initialising the model would
+      // be wrong, and would start another polling loop for good measure.
+      if (generation === state.detectionGeneration) {
+        setModelStatus(`สร้างเฟรมสำหรับ AI ไม่สำเร็จ: ${error.message}`, true);
+      }
+      return;
+    }
     state.detectionCaptureMs = performance.now() - captureStarted;
     const confidence = Math.min(1, Math.max(0.05, Number(ui.modelConfidence.value) || 0.45));
     const params = new URLSearchParams({
@@ -674,11 +696,14 @@ self.onmessage = async (event) => {
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = canvas.getContext("2d", { alpha: false });
     context.drawImage(bitmap, 0, 0);
-    bitmap.close();
     const blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
     self.postMessage({ id, blob });
   } catch (error) {
     self.postMessage({ id, error: String(error) });
+  } finally {
+    // Transferred, so the main thread cannot release it; without this a failed
+    // encode leaks a full-size backing store every time.
+    bitmap.close();
   }
 };
 `;
@@ -697,16 +722,41 @@ function detectionEncoder() {
       worker.onmessage = (event) => {
         const pending = state.detectionEncodeJobs.get(event.data.id);
         if (!pending) return;
-        state.detectionEncodeJobs.delete(event.data.id);
+        settleEncodeJob(event.data.id);
         if (event.data.error) pending.reject(new Error(event.data.error));
         else pending.resolve(event.data.blob);
       };
+      // Without these a dead worker leaves every job unsettled. The capture is
+      // awaited inside submitDetectionFrame, so its finally never runs, the
+      // in-flight flag stays raised and detection stops for good with nothing
+      // said. A worker that has failed is also discarded rather than reused.
+      worker.onerror = (event) => failEncoder(`worker error: ${event.message || "unknown"}`);
+      worker.onmessageerror = () => failEncoder("worker returned an uncloneable message");
       state.detectionEncoder = worker;
     } catch (error) {
       console.warn("Detection encoder worker unavailable, using the main thread", error);
     }
   }
   return state.detectionEncoder;
+}
+
+function settleEncodeJob(id) {
+  const pending = state.detectionEncodeJobs.get(id);
+  if (!pending) return null;
+  window.clearTimeout(pending.timer);
+  state.detectionEncodeJobs.delete(id);
+  return pending;
+}
+
+// Fails every outstanding encode and drops the worker. The next capture builds
+// a fresh one, or falls back to the main thread if that fails too, so a crashed
+// encoder costs frames rather than the whole feature.
+function failEncoder(reason) {
+  for (const id of [...state.detectionEncodeJobs.keys()]) {
+    settleEncodeJob(id)?.reject(new Error(reason));
+  }
+  if (state.detectionEncoder) state.detectionEncoder.terminate();
+  state.detectionEncoder = undefined;
 }
 
 function detectionFrameSize() {
@@ -731,7 +781,13 @@ async function captureDetectionFrame() {
     });
     const id = ++state.detectionEncodeSequence;
     return new Promise((resolve, reject) => {
-      state.detectionEncodeJobs.set(id, { resolve, reject });
+      // Last line of defence: a worker that is alive but silently never answers
+      // this job would otherwise wedge detection permanently.
+      const timer = window.setTimeout(() => {
+        settleEncodeJob(id);
+        reject(new Error(`encode timed out after ${DETECTION_ENCODE_TIMEOUT_MS} ms`));
+      }, DETECTION_ENCODE_TIMEOUT_MS);
+      state.detectionEncodeJobs.set(id, { resolve, reject, timer });
       worker.postMessage({ id, bitmap, quality: 0.86 }, [bitmap]);
     });
   }
@@ -761,6 +817,11 @@ function resetDetectionFrame() {
   state.detectionSourceHeight = 0;
   state.detectionCaptureMs = null;
   state.detectionPostMs = null;
+  // Abandoned encodes must be failed rather than forgotten, or whatever is
+  // awaiting them never resumes and never clears the in-flight flag.
+  for (const id of [...state.detectionEncodeJobs.keys()]) {
+    settleEncodeJob(id)?.reject(new Error("detection was reset"));
+  }
   // Motion learned from the previous video, model or seek position says nothing
   // about the next one.
   state.detectionCameraVelocity = null;
@@ -795,6 +856,12 @@ async function resetDetectionTracker() {
 
 function applyDetectionPayload(payload) {
   const worker = payload.worker || {};
+  // Recorded before every guard below, and never reset: the server's revision
+  // only climbs, so remembering it is exactly what lets the next poll block.
+  // Skipping it for a result that fails a guard would leave the poll asking for
+  // a revision the server already passed, which is an unthrottled loop.
+  const revision = Number(payload.revision);
+  if (Number.isFinite(revision)) state.detectionRevision = revision;
   ui.detectionDropped.textContent = String(payload.dropped_frames ?? worker.dropped_frames ?? 0);
   if (worker.status && worker.status !== "ready") {
     applyDetectionModelState(worker);
@@ -1004,41 +1071,54 @@ function applyDetectionResult(result, completedNow) {
 // drawn. This loop runs independently of submission and blocks on the server
 // until a newer result exists, so a result reaches the canvas as soon as the
 // worker publishes it.
+// Each loop carries the token it was started with. A boolean could not do this
+// job: stopping only flips it, while the running loop is parked inside a fetch
+// and cannot observe the change until that returns — so a stop immediately
+// followed by a start left the old loop alive beside the new one, and every
+// reset that did not also bump the generation added another.
 function startDetectionResultPolling() {
-  if (state.detectionPolling) return;
-  state.detectionPolling = true;
-  pollDetectionResultLoop(state.detectionGeneration);
+  const token = ++state.detectionPollToken;
+  pollDetectionResultLoop(token);
 }
 
 function stopDetectionResultPolling() {
-  state.detectionPolling = false;
-  window.clearTimeout(state.detectionPollTimer);
-  state.detectionPollTimer = null;
+  // Only invalidates the token. Cancelling the pending delay would leave its
+  // promise unresolved and strand the loop mid-await forever; letting it expire
+  // costs one short timer and the loop then sees the token and exits.
+  ++state.detectionPollToken;
 }
 
-async function pollDetectionResultLoop(generation) {
-  while (
-    state.detectionPolling
-    && state.detectorLoaded
-    && generation === state.detectionGeneration
-  ) {
+function pollingAbandoned(token) {
+  return token !== state.detectionPollToken || !state.detectorLoaded;
+}
+
+async function pollDetectionResultLoop(token) {
+  while (!pollingAbandoned(token)) {
     try {
       const params = new URLSearchParams({
         source_time_ms: (ui.video.currentTime * 1000).toFixed(3),
-        after_sequence: String(Math.max(0, state.detectionResultSequence)),
+        after_revision: String(state.detectionRevision),
         wait_ms: "250",
       });
       const payload = await jsonFetch(`/api/detection/result?${params}`);
-      if (generation !== state.detectionGeneration) return;
+      if (pollingAbandoned(token)) return;
       applyDetectionPayload(payload);
+      // A backstop, not the pacing mechanism: the server is supposed to hold
+      // the request until there is something new. If it ever returns instantly
+      // — a bug, a version mismatch, an unexpected payload — this is what keeps
+      // the page from turning into a flood against the loop that also runs OCR.
+      await pollDelay(DETECTION_POLL_FLOOR_MS);
     } catch (error) {
-      if (generation !== state.detectionGeneration) return;
-      // Back off briefly so a server that is down does not become a busy loop.
-      await new Promise((resolve) => {
-        state.detectionPollTimer = window.setTimeout(resolve, 500);
-      });
+      if (pollingAbandoned(token)) return;
+      await pollDelay(DETECTION_POLL_BACKOFF_MS);
     }
   }
+}
+
+function pollDelay(ms) {
+  return new Promise((resolve) => {
+    state.detectionPollTimer = window.setTimeout(resolve, ms);
+  });
 }
 
 function restartDetectionResultPolling() {
@@ -1461,8 +1541,12 @@ for (const eventName of ["dragleave", "drop"]) {
   });
 }
 ui.videoStage.addEventListener("drop", (event) => handleFile(event.dataTransfer.files[0]));
-if ("ResizeObserver" in window) new ResizeObserver(drawDetections).observe(ui.videoStage);
-else window.addEventListener("resize", drawDetections);
+// Wrapped, not passed directly: both callbacks supply an argument (an entries
+// array, an Event), which would land in drawDetections's renderNow parameter --
+// a default only applies to undefined -- and turn the fade arithmetic into NaN,
+// repainting expiring boxes at full opacity instead of fading them.
+if ("ResizeObserver" in window) new ResizeObserver(() => drawDetections()).observe(ui.videoStage);
+else window.addEventListener("resize", () => drawDetections());
 window.addEventListener("beforeunload", () => {
   if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
   if (state.fallbackTimer) window.clearInterval(state.fallbackTimer);

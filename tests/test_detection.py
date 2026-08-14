@@ -90,10 +90,14 @@ class UltralyticsDetectorAdapterTests(unittest.TestCase):
                 "persist": True,
                 "tracker": "botsort.yaml",
                 "device": "cpu",
-                "half": False,
                 "verbose": False,
             },
         )
+        # Passing half at all — even False — makes Ultralytics 8.4 emit a
+        # deprecation warning on every single call, which reached 17k lines of
+        # log in one session. The default is already FP32, which benchmarks
+        # five times faster than FP16 on this card.
+        self.assertNotIn("half", self.detector.model.options)
 
     def test_reset_and_checkpoint_metadata(self):
         self.detector.reset_tracking()

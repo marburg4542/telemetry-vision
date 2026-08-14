@@ -22,7 +22,7 @@ async def run(args: argparse.Namespace) -> None:
 
     from telemetry_ocr.config import load_config
     from telemetry_ocr.ocr import create_recognizer
-    from telemetry_ocr.webapp import create_app
+    from telemetry_ocr.webapp import GUARD_HEADER, create_app
 
     config = load_config(args.config)
     recognizer = create_recognizer(config.runtime)
@@ -38,7 +38,13 @@ async def run(args: argparse.Namespace) -> None:
     if not encoded_ok:
         raise RuntimeError("Cannot encode the real-video frame")
 
-    client = TestClient(TestServer(create_app(config, recognizer)))
+    # Every mutating /api/ call needs this header; without it the guard
+    # middleware answers 403 and the script fails on a KeyError two lines later.
+    # It rotted silently when the guard landed, because nothing runs it in CI.
+    client = TestClient(
+        TestServer(create_app(config, recognizer)),
+        headers={GUARD_HEADER: "1"},
+    )
     await client.start_server()
     try:
         session_response = await client.post("/api/session")

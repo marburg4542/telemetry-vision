@@ -346,35 +346,90 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await cleared.json())["loaded"])
         self.assertFalse(self.loaded_model_paths[0].exists())
 
-    async def test_result_long_poll_returns_early_and_times_out_cleanly(self):
-        form = self.FormData()
-        form.add_field(
-            "model", b"fake", filename="best.pt", content_type="application/octet-stream"
-        )
-        await self.client.post("/api/detection/model", data=form)
-        await self.client.post(
-            "/api/detection/frame?source_id=video-a&generation=1&sequence=5"
-            "&source_time_ms=500&confidence=0.4&iou=0.5&image_size=640",
+    async def _load_model_and_submit(self, source_id, generation, sequence):
+        if not self.loaded_model_paths:
+            form = self.FormData()
+            form.add_field(
+                "model", b"fake", filename="best.pt", content_type="application/octet-stream"
+            )
+            await self.client.post("/api/detection/model", data=form)
+        response = await self.client.post(
+            f"/api/detection/frame?source_id={source_id}&generation={generation}"
+            f"&sequence={sequence}&source_time_ms=500&confidence=0.4&iou=0.5&image_size=640",
             data=self.jpeg,
             headers={"Content-Type": "image/jpeg"},
         )
+        return await response.json()
 
-        # A result newer than after_sequence already exists, so this must not
+    async def test_result_long_poll_returns_early_and_times_out_cleanly(self):
+        await self._load_model_and_submit("video-a", 1, 5)
+
+        # A revision newer than the one held already exists, so this must not
         # wait out the full window.
         started = time.monotonic()
         early = await self.client.get(
-            "/api/detection/result?source_time_ms=650&after_sequence=0&wait_ms=1000"
+            "/api/detection/result?source_time_ms=650&after_revision=0&wait_ms=1000"
         )
         self.assertEqual(early.status, 200)
         self.assertLess(time.monotonic() - started, 0.9)
-        self.assertEqual((await early.json())["latest_result"]["sequence"], 5)
+        payload = await early.json()
+        self.assertEqual(payload["latest_result"]["sequence"], 5)
+        self.assertGreater(payload["revision"], 0)
 
-        # Nothing newer than sequence 5 will arrive, so this one times out and
-        # still answers with the current payload rather than an error.
+        # Nothing newer will arrive, so this one waits out its window and still
+        # answers with the current payload rather than an error.
+        started = time.monotonic()
         timed_out = await self.client.get(
-            "/api/detection/result?source_time_ms=700&after_sequence=99&wait_ms=60"
+            f"/api/detection/result?source_time_ms=700"
+            f"&after_revision={payload['revision']}&wait_ms=200"
         )
         self.assertEqual(timed_out.status, 200)
+        # It has to have actually blocked. Asserting only the status let a
+        # regression that ignores wait_ms entirely pass unnoticed.
+        self.assertGreaterEqual(time.monotonic() - started, 0.15)
+
+    async def test_a_client_that_renumbers_its_frames_still_blocks(self):
+        """The regression guard for an unthrottled poll loop.
+
+        The page restarts its frame sequence at zero on every seek, model change
+        and settings change. When the server tracked the high-water mark of that
+        sequence, a renumbered client asked for "newer than 0", the server
+        compared it against the pre-reset peak, concluded there was nothing to
+        wait for and answered instantly — every time, as fast as the client
+        could ask. One session logged 1.8 million of those against 19,728 real
+        frames, on the event loop that also serves OCR.
+
+        The revision counter is the server's own and never goes backwards, so
+        renumbering cannot make it look stale.
+        """
+        await self._load_model_and_submit("video-a", 1, 300)
+        after = (await (await self.client.get(
+            "/api/detection/result?source_time_ms=100&after_revision=0&wait_ms=0"
+        )).json())["revision"]
+
+        # Exactly what the client does on a seek: reset, then start again at 0.
+        await self.client.post("/api/detection/reset?source_id=video-a&generation=2")
+        await self._load_model_and_submit("video-a", 2, 0)
+
+        # The renumbered result is newer, so this returns without waiting.
+        fresh = await self.client.get(
+            f"/api/detection/result?source_time_ms=100&after_revision={after}&wait_ms=500"
+        )
+        self.assertEqual(fresh.status, 200)
+        renumbered = await fresh.json()
+        self.assertEqual(renumbered["latest_result"]["sequence"], 0)
+        self.assertGreater(renumbered["revision"], after)
+
+        # And once that one is acknowledged there is nothing newer, so the next
+        # poll blocks instead of returning instantly. This is the assertion the
+        # flood would have failed.
+        started = time.monotonic()
+        blocked = await self.client.get(
+            f"/api/detection/result?source_time_ms=100"
+            f"&after_revision={renumbered['revision']}&wait_ms=200"
+        )
+        self.assertEqual(blocked.status, 200)
+        self.assertGreaterEqual(time.monotonic() - started, 0.15)
 
     async def test_result_long_poll_does_not_starve_the_ocr_path(self):
         """OCR shares this event loop and must stay responsive during a poll.

@@ -169,12 +169,13 @@ class UltralyticsDetector:
             persist=True,
             tracker=tracker,
             device=self.device,
-            # Benchmarked on the GTX 1650 at 640 px: FP32 averages 30.7 ms and
-            # FP16 averages 164.1 ms, for the same 4 tracks and one box of
-            # difference across 256 frames. The card has no tensor cores and
-            # emulates half precision, so it is five times slower rather than
-            # faster. FP32 is not a placeholder here.
-            half=False,
+            # `half` is intentionally not passed. Ultralytics 8.4 deprecated it
+            # in favour of `quantize` and warns once per call whatever the
+            # value, which was 17k lines of log in one session; the default is
+            # already FP32. Benchmarked on the GTX 1650 at 640 px: FP32 averages
+            # 30.7 ms against FP16's 164.1 ms, same 4 tracks and one box of
+            # difference over 256 frames. The card has no tensor cores and
+            # emulates half precision, so FP32 is the fast path, not a stopgap.
             verbose=False,
         )
         return self._parse_results(results)
