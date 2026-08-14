@@ -430,7 +430,15 @@ async function initialize() {
     initializeDetectionModel();
   } catch (error) {
     setEngineStatus("error", "เชื่อมต่อ OCR ไม่สำเร็จ");
-    showToast(`เริ่มระบบไม่ได้: ${error.message}`);
+    // The page is a shell the service worker can serve on its own, so reaching
+    // it says nothing about the server being up. Almost every time this fires
+    // the answer is that the local server is not running, so say so instead of
+    // reporting a fetch failure the reader has to interpret.
+    showToast(
+      `เชื่อมต่อ OCR server ที่ ${location.host} ไม่ได้ — ตรวจว่า server เปิดอยู่หรือไม่`
+      + ` (รัน scripts\\start_windows_ocr_web.ps1 หรือดับเบิลคลิก install-ocr-web-autostart.cmd`
+      + ` เพื่อให้เปิดเองหลัง login) · รายละเอียด: ${error.message}`,
+    );
   }
 }
 
