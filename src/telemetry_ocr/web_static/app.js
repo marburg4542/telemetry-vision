@@ -35,6 +35,9 @@ const ui = {
   ocrToggle: $("ocrToggle"),
   rateSelect: $("rateSelect"),
   resetButton: $("resetButton"),
+  focusModeButton: $("focusModeButton"),
+  fullscreenButton: $("fullscreenButton"),
+  workspace: document.querySelector(".workspace"),
   engineStatus: $("engineStatus"),
   engineStatusText: $("engineStatusText"),
   telemetryList: $("telemetryList"),
@@ -115,6 +118,7 @@ const state = {
   detectionLastResultMs: null,
   mediaClockMs: null,
   mediaClockWall: 0,
+  detectionWorkerCycleMs: null,
 };
 
 // Compared against the server's version at startup. A service worker serving a
@@ -140,6 +144,11 @@ const DETECTION_PRESENTATION_LEAD_MS = 16;
 // spatially and can follow a changing pan faster than a single box's velocity
 // can be trusted to.
 const DETECTION_CAMERA_SMOOTHING = 0.7;
+// Auto pacing bounds. The headroom keeps the queue empty without letting the
+// gap between results grow enough to starve the tracker.
+const DETECTION_AUTO_HEADROOM = 1.1;
+const DETECTION_AUTO_MIN_INTERVAL_MS = 1000 / 20;
+const DETECTION_AUTO_MAX_INTERVAL_MS = 400;
 const DETECTION_STALE_MS = 750;
 const DETECTION_FADE_MS = 150;
 
@@ -591,9 +600,27 @@ function maybeSubmitDetection(sourceTimeMs) {
     || !ui.detectionToggle.checked
     || state.detectionInFlight
   ) return;
-  const intervalMs = 1000 / Number(ui.detectionRate.value);
-  if (sourceTimeMs - state.lastDetectionMs < intervalMs) return;
+  if (sourceTimeMs - state.lastDetectionMs < detectionIntervalMs()) return;
   submitDetectionFrame(false, sourceTimeMs);
+}
+
+// Submitting faster than the worker can keep up makes the boxes worse, not
+// better. When it is oversubscribed it always finishes onto a frame that has
+// been waiting in the queue, so that wait is added to every result; when it is
+// not, each frame goes straight in and the staleness is just the inference. The
+// wasted frames also cost a browser encode and an upload for nothing.
+//
+// Auto therefore paces submissions just under the measured round trip, which is
+// the fastest rate at which nothing has to queue.
+function detectionIntervalMs() {
+  const choice = ui.detectionRate.value;
+  if (choice !== "auto") return 1000 / Number(choice);
+  const cycle = state.detectionWorkerCycleMs;
+  if (!Number.isFinite(cycle) || cycle <= 0) return 1000 / 10;
+  return Math.min(
+    DETECTION_AUTO_MAX_INTERVAL_MS,
+    Math.max(DETECTION_AUTO_MIN_INTERVAL_MS, cycle * DETECTION_AUTO_HEADROOM),
+  );
 }
 
 async function submitDetectionFrame(force = false, sourceTimeMs = ui.video.currentTime * 1000) {
@@ -740,6 +767,7 @@ function resetDetectionFrame() {
   // Motion learned from the previous video, model or seek position says nothing
   // about the next one.
   state.detectionCameraVelocity = null;
+  state.detectionWorkerCycleMs = null;
   state.detectionResultGapMs = 0;
   state.detectionLastResultMs = null;
   state.mediaClockMs = null;
@@ -794,6 +822,12 @@ function applyDetectionPayload(payload) {
     : 0;
   const lagMs = Math.max(0, ui.video.currentTime * 1000 - Number(result.source_time_ms));
   const timing = payload.timing || {};
+  // What one frame actually costs the worker end to end, which is what the
+  // automatic pacing has to stay just under.
+  const workerCycle = Number(result.inference_ms) + Number(timing.transport_ms || 0);
+  if (Number.isFinite(workerCycle) && workerCycle > 0) {
+    state.detectionWorkerCycleMs = smooth(state.detectionWorkerCycleMs, workerCycle);
+  }
   ui.detectionFps.textContent = fps.toFixed(1);
   ui.detectionLatency.textContent = String(Math.round(Number(result.inference_ms) || 0));
   ui.detectionLag.textContent = String(Math.round(lagMs));
@@ -810,6 +844,7 @@ function applyDetectionPayload(payload) {
   // The breakdown has to reconcile with lag, which is the ground truth; it is
   // the only way to tell where the delay actually lives.
   const breakdown = [
+    `rate ${(1000 / detectionIntervalMs()).toFixed(1)} Hz`,
     `cap ${formatMs(state.detectionCaptureMs)}`,
     `post ${formatMs(state.detectionPostMs)}`,
     `infer ${formatMs(result.inference_ms)}`,
@@ -1345,6 +1380,28 @@ function formatBytes(bytes) {
 }
 
 ui.chooseVideoButton.addEventListener("click", () => ui.videoInput.click());
+// Both give the stage more room without changing anything about the picture:
+// the video is object-fit: contain and the overlay recomputes its letterbox
+// from whatever size the stage ends up, so the boxes follow either way.
+ui.focusModeButton.addEventListener("click", () => {
+  const focused = ui.workspace.classList.toggle("is-focused");
+  ui.focusModeButton.setAttribute("aria-pressed", String(focused));
+  ui.focusModeButton.textContent = focused ? "แสดงแผง OCR" : "ซ่อนแผง OCR";
+});
+ui.fullscreenButton.addEventListener("click", async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await ui.videoStage.requestFullscreen();
+  } catch (error) {
+    showToast(`เต็มจอไม่สำเร็จ: ${error.message}`);
+  }
+});
+document.addEventListener("fullscreenchange", () => {
+  ui.fullscreenButton.textContent = document.fullscreenElement ? "ออกจากเต็มจอ" : "เต็มจอ";
+  // The stage just changed size; redraw so the boxes land on the new geometry
+  // rather than waiting for the next detection result.
+  drawDetections();
+});
 ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
 ui.video.addEventListener("loadedmetadata", () => {
   ui.durationTime.textContent = formatTime(ui.video.duration);

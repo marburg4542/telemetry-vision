@@ -48,10 +48,16 @@
               <p class="eyebrow">SOURCE VIDEO</p>
               <h2>วิดีโอต้นฉบับ</h2>
             </div>
-            <label class="file-button" for="videoInput">
-              <span>เลือกวิดีโอ</span>
-              <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
-            </label>
+            <div class="section-actions">
+              <button class="ghost-button" id="focusModeButton" type="button" aria-pressed="false">
+                ซ่อนแผง OCR
+              </button>
+              <button class="ghost-button" id="fullscreenButton" type="button">เต็มจอ</button>
+              <label class="file-button" for="videoInput">
+                <span>เลือกวิดีโอ</span>
+                <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
+              </label>
+            </div>
           </div>
 
           <div class="video-stage" id="videoStage">
@@ -103,9 +109,11 @@
               <label class="rate-control" for="detectionRate">
                 <span>Frame submit</span>
                 <select id="detectionRate" disabled>
+                  <option value="auto" selected>Auto</option>
                   <option value="5">5 Hz</option>
-                  <option value="10" selected>10 Hz</option>
+                  <option value="10">10 Hz</option>
                   <option value="15">15 Hz</option>
+                  <option value="20">20 Hz</option>
                 </select>
               </label>
               <label class="confidence-control" for="modelConfidence">

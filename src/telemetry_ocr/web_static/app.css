@@ -107,7 +107,7 @@ h3 { font-size: 18px; }
    88px topbar + 24px padding-top + 30px shell padding-bottom = 142px. */
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(390px, .82fr);
+  grid-template-columns: minmax(0, 1.9fr) minmax(360px, .8fr);
   gap: 22px;
   height: calc(100vh - 142px);
   padding-top: 24px;
@@ -157,6 +157,12 @@ h3 { font-size: 18px; }
   border-radius: 10px;
   background: #020304;
 }
+.section-actions { display: flex; align-items: center; gap: 8px; }
+/* Hiding the OCR panel hands its width to the video, which is width-bound at
+   this aspect ratio. Fullscreen goes further and gives it the whole display. */
+.workspace.is-focused { grid-template-columns: minmax(0, 1fr); }
+.workspace.is-focused .telemetry-panel { display: none; }
+.video-stage:fullscreen { border: 0; border-radius: 0; background: #000; }
 .video-stage.is-dragging { border-color: var(--accent); box-shadow: inset 0 0 50px rgba(168,240,75,.1); }
 .video-stage video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .detection-overlay { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
