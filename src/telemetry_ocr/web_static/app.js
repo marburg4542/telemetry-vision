@@ -923,11 +923,18 @@ function applyDetectionPayload(payload) {
   // Re-stated on every result: this line is rewritten continuously, so a
   // warning shown once at load time would vanish the moment boxes arrive.
   const mismatch = imageSizeMismatchWarning();
+  // A worker that rejects every frame stays "ready" and simply stops producing
+  // boxes. Without this the overlay just froze and the reason lived only in the
+  // server log.
+  const frameError = worker.frame_error
+    ? `เฟรมล่าสุดประมวลผลไม่สำเร็จ (${worker.frame_errors} ครั้ง): ${worker.frame_error}`
+    : "";
   setModelStatus(
     `${ui.modelName.textContent} · BoT-SORT · ${detectionSummary} · ${fps.toFixed(1)} FPS`
     + ` · lag ${Math.round(lagMs)} ms · ${breakdown}`
-    + (mismatch ? ` · ${mismatch}` : ""),
-    Boolean(mismatch),
+    + (mismatch ? ` · ${mismatch}` : "")
+    + (frameError ? ` · ${frameError}` : ""),
+    Boolean(mismatch || frameError),
   );
 }
 

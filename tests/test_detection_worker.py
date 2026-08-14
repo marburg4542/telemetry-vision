@@ -153,6 +153,60 @@ class DetectionWorkerQueueTests(unittest.TestCase):
             finally:
                 worker.stop()
 
+    def test_stopping_clears_everything_that_described_the_old_model(self):
+        """A cleared model must not keep answering for itself.
+
+        stop() used to leave _latest_result and _metadata in place, so after a
+        DELETE the status payload still advertised the removed model's classes
+        and device and /api/detection/result still served its last detection.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory) / "best.pt"
+            model_path.write_bytes(b"fake")
+            worker = ProcessDetectionWorker(worker_target=_fake_worker)
+            try:
+                worker.start(model_path, "best.pt")
+                _wait_for_status(worker, "ready")
+                worker.reset("video-a", 1)
+                worker.submit(
+                    DetectionFrame(
+                        payload=b"jpeg",
+                        source_id="video-a",
+                        generation=1,
+                        sequence=1,
+                        source_time_ms=100.0,
+                        confidence=0.45,
+                        iou=0.45,
+                        image_size=640,
+                    )
+                )
+                _wait_for_result(worker)
+                self.assertIsNotNone(worker.latest())
+
+                worker.stop()
+                self.assertIsNone(worker.latest())
+                status = worker.status()
+                self.assertEqual(status["status"], "stopped")
+                self.assertEqual(status["dropped_frames"], 0)
+                self.assertNotIn("classes", status)
+            finally:
+                worker.stop()
+
+    def test_put_latest_gives_up_instead_of_spinning_forever(self):
+        """stop() enqueues through this, so an unbounded spin hangs shutdown."""
+
+        class NeverAccepts:
+            def put_nowait(self, item):
+                raise queue.Full
+
+            def get_nowait(self):
+                raise queue.Empty
+
+        started = time.monotonic()
+        dropped = put_latest(NeverAccepts(), {"kind": "shutdown"}, deadline_s=0.05)
+        self.assertEqual(dropped, 0)
+        self.assertLess(time.monotonic() - started, 2.0)
+
     def test_process_worker_reports_an_unexpected_crash(self):
         with tempfile.TemporaryDirectory() as directory:
             model_path = Path(directory) / "best.pt"

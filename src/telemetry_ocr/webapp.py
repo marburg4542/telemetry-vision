@@ -7,7 +7,7 @@ import time
 import uuid
 import webbrowser
 from collections.abc import Callable, Iterable
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -175,7 +175,6 @@ def create_app(
     ocr_lock_key = web.AppKey("ocr_lock", asyncio.Lock)
     max_sessions_key = web.AppKey("max_sessions", int)
     detection_state_key = web.AppKey("detection_state", DetectionState)
-    detection_pump_key = web.AppKey("detection_pump", asyncio.Task)
     # `revision` counts results this server has published. It is deliberately
     # NOT the client's frame sequence: the page restarts that at zero on every
     # seek, model change and settings change, so a watermark built on it goes
@@ -187,7 +186,16 @@ def create_app(
     # startup. The event is replaced rather than cleared on each result: that
     # releases every waiter on the old object exactly once and leaves no window
     # for a waiter to arrive between a set and a clear.
-    pump_state: dict[str, Any] = {"revision": 0, "seen": None, "ready": asyncio.Event()}
+    pump_state: dict[str, Any] = {
+        "revision": 0,
+        "seen": None,
+        "ready": asyncio.Event(),
+        # The task handle lives here for the same reason the event does:
+        # aiohttp freezes the Application before on_startup runs, so storing
+        # it in app state warns on every assignment and is slated to become
+        # an error.
+        "task": None,
+    }
     app = web.Application(
         client_max_size=model_upload_limit,
         middlewares=[guard_middleware, cors_middleware, error_middleware],
@@ -370,7 +378,8 @@ def create_app(
             previous_path = state.model_path
             # Spawning the worker process is slow enough to stall every other
             # request, including the OCR frames the page is still sending.
-            await asyncio.to_thread(state.worker.start, model_path, filename)
+            async with pump_paused():
+                await asyncio.to_thread(state.worker.start, model_path, filename)
             state.model_path = model_path
             state.filename = filename
             state.size_bytes = written
@@ -384,7 +393,8 @@ def create_app(
 
     async def clear_detection_model(_: Any) -> Any:
         state = app[detection_state_key]
-        await asyncio.to_thread(state.worker.stop)
+        async with pump_paused():
+            await asyncio.to_thread(state.worker.stop)
         if state.model_path is not None:
             state.model_path.unlink(missing_ok=True)
         state.model_path = None
@@ -396,13 +406,17 @@ def create_app(
         state = app[detection_state_key]
         if state.model_path is None:
             return web.json_response({"error": "No YOLO model is available"}, status=409)
-        await asyncio.to_thread(state.worker.restart)
+        async with pump_paused():
+            await asyncio.to_thread(state.worker.restart)
         return web.json_response(detection_status_payload(), status=202)
 
     async def reset_detection(request: Any) -> Any:
         source_id = _source_id(request.query.get("source_id", ""))
         generation = _non_negative_int(request.query.get("generation", "0"), "generation")
-        app[detection_state_key].worker.reset(source_id, generation)
+        # reset() drains the frame queue, which is blocking IPC with up to 8 MB
+        # of pickled JPEG to unpickle and throw away. Every other worker call is
+        # already off the loop for the same reason.
+        await asyncio.to_thread(app[detection_state_key].worker.reset, source_id, generation)
         return web.json_response(
             {
                 "reset": True,
@@ -554,11 +568,30 @@ def create_app(
                 _LOG.exception("Detection result pump failed")
             await asyncio.sleep(0.01)
 
+    @asynccontextmanager
+    async def pump_paused() -> Any:
+        """Hold the pump still while the worker's queues are torn down.
+
+        stop() closes both queues from a thread; a pump tick landing in that
+        window calls get_nowait() on a closed queue and logs a stack trace every
+        ten milliseconds until the teardown finishes. cleanup already ordered
+        things this way — these are the paths that did not.
+        """
+        pump = pump_state["task"]
+        if pump is not None:
+            pump.cancel()
+            with suppress(asyncio.CancelledError):
+                await pump
+        try:
+            yield
+        finally:
+            pump_state["task"] = asyncio.create_task(pump_detection_results(None))
+
     async def start_pump(_: Any) -> None:
-        app[detection_pump_key] = asyncio.create_task(pump_detection_results(None))
+        pump_state["task"] = asyncio.create_task(pump_detection_results(None))
 
     async def cleanup(_: Any) -> None:
-        pump = app.get(detection_pump_key)
+        pump = pump_state["task"]
         if pump is not None:
             pump.cancel()
             with suppress(asyncio.CancelledError):
@@ -566,8 +599,12 @@ def create_app(
         # Released after the pump stops so a long poll cannot outlive it.
         pump_state["ready"].set()
         state = app[detection_state_key]
-        await asyncio.to_thread(state.worker.stop)
-        state.temp_dir.cleanup()
+        try:
+            await asyncio.to_thread(state.worker.stop)
+        finally:
+            # Without the finally a failing stop() stranded the uploaded
+            # checkpoint — up to 256 MB — and its directory for good.
+            state.temp_dir.cleanup()
 
     app.router.add_get("/", index)
     app.router.add_get("/manifest.webmanifest", manifest)
