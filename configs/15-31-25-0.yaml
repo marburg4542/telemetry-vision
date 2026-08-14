@@ -1,3 +1,13 @@
+# SUPERSEDED — kept for reference, used by nothing.
+#
+# The working config for 15-31-25-0.mp4 before calibration produced
+# roi_calibrated.yaml. No code, script or document points at it, and its runtime
+# settings are older than the shipped ones: ocr_hz 12.0 against 10.1,
+# cpu_threads 4, confidence_threshold 0.80, and no recognizer_workers at all.
+#
+# Its ROI boxes are frozen at that moment too, so they drift further from the
+# calibrated config every time those are refined. Use roi_calibrated.yaml, or
+# roi_calibrated_cuda.yaml on a GPU.
 version: 1
 
 runtime:

@@ -23,9 +23,26 @@ models/
 *.engine
 
 # --- Training-run artefacts ---
-# The curves, confusion matrices and results.csv of each run ARE tracked: they
-# are the record of what was trained and the report renders from them.
+# Tracked: the curves, confusion matrices, results.csv and args.yaml. They are
+# the record of what was trained, they are small, and report.py renders from
+# them.
+#
+# Not tracked: weights, the sample-batch previews and the TensorBoard event
+# files. Nothing in the repository reads the event files, and the previews are
+# illustrative dumps that add roughly 7 MB per run — the three runs already
+# committed account for 20 of the 23 MB in git.
+#
+# These rules stop the growth rather than rewriting it: files already committed
+# stay tracked, because git ignore only applies to untracked paths and removing
+# them from HEAD would not shrink the history anyway.
 runs/*/weights/
+runs/*/events.out.tfevents.*
+runs/*/train_batch*.jpg
+runs/*/val_batch*.jpg
+runs/*/labels_correlogram.jpg
+# train_batch0 and val_batch0_pred are the two the report embeds, so they stay.
+!runs/*/train_batch0.jpg
+!runs/*/val_batch0_pred.jpg
 
 # --- Media and datasets ---
 # Roughly 8 GB, kept outside the repository at configs/paths.yaml `asset_root`.

@@ -11,7 +11,7 @@ Pipeline ของ OCR คือ:
 
 ```text
 video decoder (30 FPS)
-  -> scheduler + bounded newest-frame queue (12 Hz)
+  -> scheduler + bounded newest-frame queue (10.1 Hz ตาม config ที่ shipped)
   -> fixed ROI crops
   -> per-field color/contrast preprocessing
   -> batched PaddleOCR TextRecognition
@@ -29,9 +29,10 @@ src/telemetry_ocr/     realtime OCR + web UI + detection worker (ห้าม im
 src/vision_lab/        dataset, evaluation, report (import torch ได้)
 configs/               ROI configs และ paths.yaml
 configs/paths.yaml     ทะเบียน checkpoint และตำแหน่งของสื่อขนาดใหญ่
-models/yolo/           YOLO checkpoints (~150 MB, ไม่เข้า git)
+models/yolo/           YOLO checkpoints (~106 MB, ไม่เข้า git)
 models/paddlex/        PaddleOCR model cache
-runs/                  ผลการเทรนแต่ละรอบ — curve, results.csv, args.yaml เข้า git; weights ไม่เข้า
+runs/                  ผลการเทรนแต่ละรอบ — curve, results.csv, args.yaml เข้า git;
+                       weights, TensorBoard log และภาพ batch ตัวอย่างไม่เข้า
 notebooks/             train_colab.py สำหรับรันบน Google Colab
 output/                ผลลัพธ์ทั้งหมดที่ generate ได้ใหม่
 ```
@@ -55,7 +56,7 @@ output/                ผลลัพธ์ทั้งหมดที่ gener
 - Production ที่แนะนำ: WSL2/Ubuntu, Python 3.10–3.12 (แนะนำ 3.11), CPU x86-64
 - Native Windows ใช้ได้เมื่อปิด `enable_hpi` แต่ประสิทธิภาพอาจต่ำกว่า
 - PaddleOCR/PaddlePaddle และ OpenCV
-- ROI สูงสุดเริ่มต้น 10 ช่อง, วิดีโอเป้าหมาย 1080p30, OCR 12 Hz
+- ROI สูงสุดเริ่มต้น 10 ช่อง, วิดีโอเป้าหมาย 1080p30, OCR 10.1 Hz (เป้าหมายระยะยาว 12 Hz)
 
 เครื่องนี้ยังไม่มี WSL และ system Python เป็น 3.13 แต่ได้สร้าง local Python 3.12 virtual environment และทดสอบ PaddleOCR CPU inference จริงบน native Windows แล้ว ส่วน HPI ยังต้องใช้ WSL/Docker ตามขั้นตอนด้านล่าง
 
@@ -320,18 +321,33 @@ PaddleOCR โดยสิ้นเชิง จึงไม่ใช้ model ob
 OCR และหน้าเว็บจะทำงานต่อ พร้อมแสดงปุ่ม **Restart worker**
 
 - ใช้ `model.track(..., persist=True, tracker="botsort.yaml")` บน CPU และส่ง `track_id` กลับมาพร้อม class, confidence และ bounding box
-- ค่าเริ่มต้นของหน้าเว็บคือส่งเฟรม 10 Hz, confidence `0.45`, IoU `0.45`, image size 416 px และจำกัด PyTorch/OpenCV ไว้ 2 CPU threads
+- ค่าเริ่มต้นของหน้าเว็บคือ Frame submit **Auto**, confidence `0.45`, IoU `0.45`,
+  image size ตามที่ checkpoint เทรนมา และจำกัด PyTorch/OpenCV ไว้ 2 CPU threads
+- **Auto** กำหนดจังหวะส่งจาก round trip ที่วัดได้จริง เพราะการส่งเร็วกว่าที่ worker
+  ระบายคิวได้ทำให้ผล **ช้าลง** ไม่ใช่เร็วขึ้น — เมื่อคิวล้น inference จะเริ่มบนเฟรมที่รออยู่แล้วเสมอ
+  วัดที่ cycle 117 ms ได้ staleness 117 ms เทียบกับ 134 ms ที่ 10 Hz และ 184 ms ที่ 20 Hz
+  เลือกอัตราคงที่ 5/10/15/20 Hz เองได้ถ้าต้องการเทียบ
 - **image size ถูกตั้งให้ตรงกับที่ checkpoint เทรนมาโดยอัตโนมัติ** (อ่านจาก `trained_image_size`
   ของ worker) เพราะการรันคนละขนาดกับตอนเทรนทำให้ตำแหน่งกรอบคลาดเคลื่อนโดยตรง ไม่เกี่ยวกับ latency
   ถ้าเลือกเองแล้วไม่ตรง แผงสถานะจะเตือน บน CPU ค่าอัตโนมัติถูกจำกัดไว้ที่ 640 px
   เพราะ 960 px บน CPU ช้าเกินใช้งาน
 - browser ย่อด้านยาวของภาพตาม image size ก่อนสร้าง JPEG; server รับเฟรมแบบ non-blocking และ queue เก็บได้หนึ่งเฟรม โดยเฟรมใหม่แทนเฟรมที่ค้างอยู่
-- overlay ใช้สองตำแหน่งล่าสุดของแต่ละ `track_id` คาด**เฉพาะจุดศูนย์กลาง** (คงขนาดกรอบจากผลล่าสุด
-  เพราะ jitter ของ BoT-SORT อยู่ที่ขนาดเป็นหลัก) ระยะคาดผูกกับ cadence จริงที่ 2 เท่าของช่วงห่าง
-  ระหว่างสองผล จำกัดที่ 250–600 ms และใช้คู่ตัวอย่างเฉพาะเมื่อห่างกัน 30–400 ms
+- overlay คาด**เฉพาะจุดศูนย์กลาง** (คงขนาดกรอบจากผลล่าสุด เพราะ jitter ของ BoT-SORT
+  อยู่ที่ขนาดเป็นหลัก) ระยะคาดผูกกับ cadence จริงที่ 2 เท่าของช่วงห่างระหว่างผล จำกัดที่ 250–600 ms
+  และใช้คู่ตัวอย่างเฉพาะเมื่อห่างกัน 30–600 ms
+- **กล่องที่เพิ่งเห็นครั้งแรกใช้การเคลื่อนที่ร่วมของกล้อง** ซึ่งประมาณจาก median ของทุกกล่องบนจอ
+  เพราะเวลาอากาศยานเคลื่อน วัตถุทุกชิ้นในเฟรมเลื่อนไปด้วยกัน ค่านี้นิ่งกว่าการใช้สอง sample
+  ของกล่องเดียว และใช้ได้ทันทีกับ track ID ที่เพิ่งตั้งใหม่หรือ detection ที่ tracker ไม่เคยให้ ID
+  (สองกรณีนี้เดิมไม่ขยับเลย) เมื่อไม่มีอะไรวัดได้ ค่าจะสลายเข้าหาศูนย์แทนที่จะค้าง
+- เวลาที่ใช้วัดความเก่าของผลมาจาก `requestVideoFrameCallback` ไม่ใช่ `video.currentTime`
+  ซึ่งถูกปัดเป็นขอบเฟรมและอ่านช้ากว่าภาพจริง บวกล่วงหน้าอีกหนึ่งเฟรมเพราะสิ่งที่วาดจะปรากฏที่ repaint ถัดไป
   ส่วน fade กรอบที่หายภายใน 150 ms และซ่อนผลที่ช้ากว่าวิดีโอเกิน 750 ms ยังเหมือนเดิม
 - tracker จะ reset เมื่อเลือก/seek วิดีโอ, เปลี่ยน confidence หรือ image size, เปลี่ยนโมเดล และเมื่อ source timestamp กระโดดเกินหนึ่งวินาที
-- แผงสถานะแสดง detection FPS ที่ได้จริง, inference latency, result lag และจำนวนเฟรมที่ queue ทิ้ง
+- แผงสถานะแสดง detection FPS ที่ได้จริง, inference latency, result lag, **Capture**
+  (เวลา encode JPEG ในเบราว์เซอร์), **Wait** (เวลาที่ผลนอนรออยู่ใน server) และจำนวนเฟรมที่ queue ทิ้ง
+  ส่วนบรรทัดสถานะแยกให้เห็นทุกช่วง: `rate · cap · post · infer · transport · wait`
+- checkbox **Track ID** เปิดให้แสดงเลขประจำตัวของ BoT-SORT ต่อท้ายชื่อ class ค่าเริ่มต้นปิด
+  เลขนี้มีไว้ดีบัก tracker — ถ้ามันกระโดดไปมาแปลว่า tracker หลุดและจับเป็นวัตถุใหม่
 - หากไม่มีกรอบ แผงสถานะจะระบุว่าโมเดลไม่พบวัตถุ หรือพบผลแต่ผลเกิน 750 ms จึงถูกซ่อน
 - รอบ inference แรกมักช้ากว่ารอบถัดไป เพราะ PyTorch ต้อง warm up โมเดล
 - อัปโหลดเฉพาะ `.pt` ที่เชื่อถือได้ เพราะ checkpoint ของ PyTorch สามารถบรรจุโค้ดที่ทำงานตอนโหลดได้
@@ -352,7 +368,9 @@ Detection API ที่หน้าเว็บใช้งานมี lifecycl
 - `POST /api/detection/model` — เก็บโมเดลชั่วคราว, เปิด worker และตอบ `202 loading`
 - `GET /api/detection/model` — อ่าน `loading/ready/error`, PID, classes, epochs, trained image size, tracker และ device
 - `POST /api/detection/frame` — enqueue JPEG แล้วคืนผลล่าสุดทันที หรือ `202` หากยังไม่มีผล
-- `GET /api/detection/result` — poll ผลล่าสุดโดยไม่ส่งเฟรมซ้ำ
+- `GET /api/detection/result` — อ่านผลล่าสุดโดยไม่ส่งเฟรมซ้ำ รับ `after_revision`
+  และ `wait_ms` (จำกัดที่ 1000) เพื่อค้าง request ไว้จนกว่าจะมีผลใหม่กว่า `after_revision`
+  โดย `revision` เป็นตัวนับของ server เองที่ไม่ถอยหลัง client ส่งค่าที่ได้รับล่าสุดกลับไปตรงๆ
 - `POST /api/detection/reset` — reset tracker เมื่อ source หรือเวลาเล่นเปลี่ยน
 - `POST /api/detection/restart` — เริ่ม worker ใหม่หลัง process ล่ม
 

@@ -1,9 +1,11 @@
 # Where the project finds models, videos and datasets.
 #
-# Checkpoints and training metrics live inside the repository because tooling
-# needs them on every run and they are a few hundred megabytes in total. The
-# source videos, the extracted frames and the Roboflow dataset are ~8 GB and
-# stay outside it; `asset_root` is how the CLI finds them.
+# Checkpoints and training metrics live inside the working tree because tooling
+# needs them on every run. Note "working tree", not "git": .gitignore excludes
+# models/ and *.pt, so a fresh clone has the registry below but none of the
+# files it names — `vision-lab check` lists which are actually present. The
+# source videos, extracted frames and Roboflow dataset are ~8 GB and stay
+# outside the project entirely; `asset_root` is how the CLI finds those.
 #
 # Every path is either absolute or relative to the repository root, except the
 # entries under `asset_dirs`, which are relative to `asset_root`.
