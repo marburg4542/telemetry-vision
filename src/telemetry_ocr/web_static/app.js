@@ -35,9 +35,6 @@ const ui = {
   ocrToggle: $("ocrToggle"),
   rateSelect: $("rateSelect"),
   resetButton: $("resetButton"),
-  focusModeButton: $("focusModeButton"),
-  fullscreenButton: $("fullscreenButton"),
-  workspace: document.querySelector(".workspace"),
   engineStatus: $("engineStatus"),
   engineStatusText: $("engineStatusText"),
   telemetryList: $("telemetryList"),
@@ -1380,28 +1377,10 @@ function formatBytes(bytes) {
 }
 
 ui.chooseVideoButton.addEventListener("click", () => ui.videoInput.click());
-// Both give the stage more room without changing anything about the picture:
-// the video is object-fit: contain and the overlay recomputes its letterbox
-// from whatever size the stage ends up, so the boxes follow either way.
-ui.focusModeButton.addEventListener("click", () => {
-  const focused = ui.workspace.classList.toggle("is-focused");
-  ui.focusModeButton.setAttribute("aria-pressed", String(focused));
-  ui.focusModeButton.textContent = focused ? "แสดงแผง OCR" : "ซ่อนแผง OCR";
-});
-ui.fullscreenButton.addEventListener("click", async () => {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await ui.videoStage.requestFullscreen();
-  } catch (error) {
-    showToast(`เต็มจอไม่สำเร็จ: ${error.message}`);
-  }
-});
-document.addEventListener("fullscreenchange", () => {
-  ui.fullscreenButton.textContent = document.fullscreenElement ? "ออกจากเต็มจอ" : "เต็มจอ";
-  // The stage just changed size; redraw so the boxes land on the new geometry
-  // rather than waiting for the next detection result.
-  drawDetections();
-});
+// The browser's own fullscreen still works on the video element itself; the
+// overlay is a sibling of it rather than a child, so it does not come along.
+// Redraw whenever anything leaves fullscreen so the boxes match the new size.
+document.addEventListener("fullscreenchange", () => drawDetections());
 ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
 ui.video.addEventListener("loadedmetadata", () => {
   ui.durationTime.textContent = formatTime(ui.video.duration);

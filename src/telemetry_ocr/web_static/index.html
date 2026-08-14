@@ -22,25 +22,6 @@
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar">
-        <div class="brand-block">
-          <div class="brand-mark" aria-hidden="true"><span></span></div>
-          <div>
-            <p class="eyebrow">FLIGHT DATA LAB</p>
-            <h1>Telemetry OCR</h1>
-          </div>
-        </div>
-        <div class="topbar-actions">
-          <button class="install-button" id="installAppButton" type="button" hidden>
-            ติดตั้งแอป
-          </button>
-          <div class="engine-status is-loading" id="engineStatus" role="status" aria-live="polite">
-            <span class="status-dot"></span>
-            <span id="engineStatusText">กำลังเตรียม OCR</span>
-          </div>
-        </div>
-      </header>
-
       <main class="workspace">
         <section class="video-column" aria-label="วิดีโอต้นฉบับ">
           <div class="section-heading">
@@ -48,16 +29,10 @@
               <p class="eyebrow">SOURCE VIDEO</p>
               <h2>วิดีโอต้นฉบับ</h2>
             </div>
-            <div class="section-actions">
-              <button class="ghost-button" id="focusModeButton" type="button" aria-pressed="false">
-                ซ่อนแผง OCR
-              </button>
-              <button class="ghost-button" id="fullscreenButton" type="button">เต็มจอ</button>
-              <label class="file-button" for="videoInput">
-                <span>เลือกวิดีโอ</span>
-                <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
-              </label>
-            </div>
+            <label class="file-button" for="videoInput">
+              <span>เลือกวิดีโอ</span>
+              <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
+            </label>
           </div>
 
           <div class="video-stage" id="videoStage">
@@ -194,7 +169,16 @@
               <p class="eyebrow">LIVE EXTRACTION</p>
               <h2>Telemetry stream</h2>
             </div>
-            <span class="record-count" id="recordCount">0 records</span>
+            <div class="panel-heading-meta">
+              <button class="install-button" id="installAppButton" type="button" hidden>
+                ติดตั้งแอป
+              </button>
+              <div class="engine-status is-loading" id="engineStatus" role="status" aria-live="polite">
+                <span class="status-dot"></span>
+                <span id="engineStatusText">กำลังเตรียม OCR</span>
+              </div>
+              <span class="record-count" id="recordCount">0 records</span>
+            </div>
           </div>
 
           <div class="metric-grid" aria-label="สถิติ OCR">

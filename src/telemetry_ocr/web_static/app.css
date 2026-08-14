@@ -36,62 +36,40 @@ button:focus-visible, select:focus-visible, input:focus-visible, label:has(input
   outline-offset: 3px;
 }
 
-.app-shell { width: min(1720px, 100%); margin: 0 auto; padding: 0 26px 30px; }
+.app-shell { width: min(1720px, 100%); margin: 0 auto; padding: 18px 26px 22px; }
 
-.topbar {
-  height: 88px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--line);
-}
-
-.brand-block, .topbar-actions, .section-heading, .panel-heading, .source-strip,
+.section-heading, .panel-heading, .source-strip,
 .engine-status, .file-summary, .toggle-control, .playback-time, .panel-actions {
   display: flex;
   align-items: center;
 }
 
-.brand-block { gap: 14px; }
-.topbar-actions { gap: 9px; }
-.brand-mark {
-  position: relative;
-  width: 37px;
-  height: 37px;
-  border: 1px solid rgba(168, 240, 75, 0.5);
-  transform: rotate(45deg);
-}
-.brand-mark::before, .brand-mark::after, .brand-mark span {
-  content: "";
-  position: absolute;
-  background: var(--accent);
-}
-.brand-mark::before { width: 1px; height: 49px; left: 17px; top: -7px; opacity: 0.35; }
-.brand-mark::after { width: 49px; height: 1px; left: -7px; top: 17px; opacity: 0.35; }
-.brand-mark span { width: 7px; height: 7px; left: 14px; top: 14px; box-shadow: 0 0 16px var(--accent); }
-
 h1, h2, h3, p { margin: 0; }
-h1 { font-size: 19px; line-height: 1.1; letter-spacing: 0.01em; }
 h2 { font-size: 19px; font-weight: 630; }
 h3 { font-size: 18px; }
 .eyebrow { margin-bottom: 5px; color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: 0.17em; }
 
+/* Moved out of the removed header and into the panel heading, so it has to be
+   small enough to sit beside the record count without crowding it. */
+.panel-heading-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
 .engine-status {
-  gap: 9px;
-  padding: 8px 12px;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 9px;
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10px;
   background: rgba(255,255,255,0.02);
 }
+.engine-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .engine-status.is-ready .status-dot { background: var(--accent); box-shadow: 0 0 10px rgba(168,240,75,.8); }
 .engine-status.is-error .status-dot { background: var(--danger); }
 .engine-status.is-loading .status-dot { background: var(--cyan); animation: pulse 1.3s ease-in-out infinite; }
 .install-button {
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 26px;
+  padding: 0 10px;
   border: 1px solid rgba(168,240,75,.45);
   border-radius: 999px;
   color: var(--accent);
@@ -102,15 +80,14 @@ h3 { font-size: 18px; }
 .install-button:hover { border-color: var(--accent); background: rgba(168,240,75,.18); }
 .install-button[hidden] { display: none; }
 
-/* One screen, no page scrolling: the workspace claims exactly what is left
-   below the topbar and the video stage absorbs whatever the panels do not use.
-   88px topbar + 24px padding-top + 30px shell padding-bottom = 142px. */
+/* One screen, no page scrolling. With the header gone the workspace is the
+   whole page less the shell's own padding, 18px top and 22px bottom, and the
+   video stage absorbs whatever the panels below it do not use. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.9fr) minmax(360px, .8fr);
   gap: 22px;
-  height: calc(100vh - 142px);
-  padding-top: 24px;
+  height: calc(100vh - 40px);
 }
 .video-column, .telemetry-panel {
   min-width: 0;
@@ -157,12 +134,6 @@ h3 { font-size: 18px; }
   border-radius: 10px;
   background: #020304;
 }
-.section-actions { display: flex; align-items: center; gap: 8px; }
-/* Hiding the OCR panel hands its width to the video, which is width-bound at
-   this aspect ratio. Fullscreen goes further and gives it the whole display. */
-.workspace.is-focused { grid-template-columns: minmax(0, 1fr); }
-.workspace.is-focused .telemetry-panel { display: none; }
-.video-stage:fullscreen { border: 0; border-radius: 0; background: #000; }
 .video-stage.is-dragging { border-color: var(--accent); box-shadow: inset 0 0 50px rgba(168,240,75,.1); }
 .video-stage video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .detection-overlay { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
@@ -376,10 +347,8 @@ h3 { font-size: 18px; }
 
 @media (max-width: 640px) {
   .app-shell { padding: 0 12px 18px; }
-  .topbar { height: 72px; }
   .engine-status { max-width: 150px; }
   .install-button { padding: 0 9px; font-size: 10px; }
-  .engine-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .video-column, .telemetry-panel { padding: 14px; }
   .file-button { min-height: 34px; padding: 0 11px; font-size: 11px; }
   .drop-state { padding: 18px; }
