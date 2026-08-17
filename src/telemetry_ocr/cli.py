@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .config import clone_config, dump_config, load_config
 from .errors import TelemetryOCRError
+from .pipeline import is_stream_source
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,15 +25,53 @@ def build_parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate-config", help="Validate ROI configuration only")
     validate.add_argument("--config", required=True, type=Path)
 
-    run = commands.add_parser("run", help="Run real-time telemetry extraction")
-    run.add_argument("--video", required=True, type=Path)
+    run = commands.add_parser(
+        "run", help="Run real-time telemetry extraction on a file or a live stream"
+    )
+    # A string, not a Path: an rtsp:// URL survives Path() on POSIX but has its
+    # double slash collapsed on Windows, which produces a URL the backend cannot
+    # open and an error that blames the camera.
+    run.add_argument(
+        "--video",
+        required=True,
+        help="Video file, or a stream URL such as rtsp://user:pass@host:554/stream",
+    )
     run.add_argument("--config", required=True, type=Path)
     run.add_argument("--jsonl", type=Path, default=Path("output/telemetry.jsonl"))
     run.add_argument("--csv", type=Path, default=Path("output/telemetry.csv"))
     run.add_argument(
         "--no-realtime",
         action="store_true",
-        help="Decode as fast as possible; stale scheduled frames are still dropped",
+        help=(
+            "Decode a file as fast as possible; stale scheduled frames are still "
+            "dropped. Ignored for streams, which already arrive at their own rate"
+        ),
+    )
+    run.add_argument(
+        "--max-seconds",
+        type=float,
+        help="Stop after this long. A stream otherwise runs until Ctrl+C",
+    )
+    run.add_argument(
+        "--detect-model",
+        help=(
+            "Also run YOLO on the same frames: a name from configs/paths.yaml or a "
+            "path to a .pt checkpoint. Runs in a separate process, as the web UI does"
+        ),
+    )
+    run.add_argument(
+        "--detections",
+        type=Path,
+        default=Path("output/detections.jsonl"),
+        help="Where detections go when --detect-model is given",
+    )
+    run.add_argument("--detect-confidence", type=float, default=0.45)
+    run.add_argument("--detect-iou", type=float, default=0.45)
+    run.add_argument(
+        "--detect-image-size",
+        type=int,
+        default=640,
+        help="Match the size the checkpoint was trained at",
     )
 
     web = commands.add_parser(
@@ -105,7 +146,13 @@ def main(argv: list[str] | None = None) -> int:
         from .ocr import create_recognizer
 
         config = load_config(args.config)
-        if hasattr(args, "video") and not args.video.is_file():
+        # A stream URL has nothing to check on disk; whether it is reachable is
+        # the decoder's answer to give, with the backend's own message.
+        if (
+            hasattr(args, "video")
+            and not is_stream_source(args.video)
+            and not Path(args.video).is_file()
+        ):
             raise ValueError(f"Video file not found: {args.video}")
         if args.command == "preview-rois":
             from .preview import save_roi_preview
@@ -129,8 +176,40 @@ def main(argv: list[str] | None = None) -> int:
             if args.no_realtime:
                 config = clone_config(config)
                 config.runtime.realtime = False
+            if args.max_seconds is not None and args.max_seconds <= 0:
+                parser.error("--max-seconds must be positive")
+
+            sidecar = None
+            if args.detect_model:
+                from .detect_sidecar import DetectionSidecar
+
+                sidecar = DetectionSidecar(
+                    _resolve_checkpoint(args.detect_model),
+                    args.detections,
+                    confidence=args.detect_confidence,
+                    iou=args.detect_iou,
+                    image_size=args.detect_image_size,
+                )
+                # Started before the recognizer so a bad checkpoint fails before
+                # PaddleOCR spends time loading its own model.
+                sidecar.start()
+
             recognizer = create_recognizer(config.runtime)
-            summary = TelemetryPipeline(config, recognizer).run(args.video, args.jsonl, args.csv)
+            if is_stream_source(args.video):
+                print(f"Reading stream: {args.video}")
+                if args.max_seconds is None:
+                    print("Press Ctrl+C to stop.")
+            try:
+                summary = TelemetryPipeline(config, recognizer).run(
+                    args.video,
+                    args.jsonl,
+                    args.csv,
+                    max_seconds=args.max_seconds,
+                    on_frame=None if sidecar is None else _detect_step(sidecar),
+                )
+            finally:
+                if sidecar is not None:
+                    print(json.dumps(sidecar.close(), indent=2, ensure_ascii=False))
             print(json.dumps(asdict(summary), indent=2, ensure_ascii=False))
             return 0
         if args.command == "web":
@@ -193,6 +272,43 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 1
+
+
+def _detect_step(sidecar: Any) -> Callable[[Any], None]:
+    """Submit, then collect, once per scheduled frame.
+
+    Deliberately not a wait: the worker's input queue is newest-wins, so a frame
+    submitted now may be superseded before it is ever inferred. Draining what has
+    already finished keeps the OCR loop free-running while still emptying the
+    result queue often enough that the worker never discards a finished result.
+    """
+
+    def step(packet: Any) -> None:
+        sidecar.submit(packet)
+        sidecar.drain()
+
+    return step
+
+
+def _resolve_checkpoint(reference: str) -> Path:
+    """Accept a path, or a short name from the vision_lab registry.
+
+    Importing vision_lab.paths is safe here -- it reads YAML and touches no ML
+    framework -- and it means `--detect-model best50` works the same way it does
+    for `vision-lab evaluate`.
+    """
+    direct = Path(reference)
+    if direct.is_file():
+        return direct
+    try:
+        from vision_lab.paths import load_paths
+
+        return load_paths().resolve_model(reference)
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot resolve checkpoint {reference!r}: not a file, and the "
+            f"configs/paths.yaml registry could not resolve it ({exc})"
+        ) from exc
 
 
 def _parse_threads(value: str) -> list[int]:

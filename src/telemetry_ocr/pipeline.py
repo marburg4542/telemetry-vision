@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import math
 import queue
 import statistics
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,8 @@ from .output import RecordWriter, TelemetryRecord
 from .preprocess import apply_recipe, extract_roi
 from .temporal import TemporalStabilizer
 from .validation import ValidatedValue, prefer_candidate, validate_text
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +41,10 @@ class PipelineSummary:
     update_hz: float
     latency_mean_ms: float
     latency_p95_ms: float
+    # Zero for a file. On a stream these are how the connection behaved, which
+    # is the difference between "OCR is struggling" and "the feed is unreliable".
+    reconnects: int = 0
+    decode_failures: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +56,26 @@ class _Candidate:
 
 
 _END = object()
+
+# Anything OpenCV opens over a network rather than off disk. A live source
+# differs from a file in every way that matters to the decoder below: it has no
+# length, cannot be sought, sets its own frame rate, and can drop out and come
+# back. Detected by scheme rather than by asking the user, because getting it
+# wrong silently produces the worst outcome — pacing a live feed against its own
+# timestamps adds unbounded delay.
+_STREAM_SCHEMES = ("rtsp://", "rtsps://", "rtmp://", "rtmps://", "udp://", "tcp://",
+                   "http://", "https://", "mms://", "srt://")
+
+# A stream that has dropped is retried rather than treated as end of input.
+_RECONNECT_BACKOFF_S = (0.5, 1.0, 2.0, 4.0)
+# Consecutive failed retrieves tolerated before the connection is considered bad.
+# A single corrupt packet is normal on a network source; a run of them is not.
+_MAX_CONSECUTIVE_RETRIEVE_FAILURES = 30
+
+
+def is_stream_source(source: str | Path) -> bool:
+    """Whether this source is a live network stream rather than a file."""
+    return str(source).lower().startswith(_STREAM_SCHEMES)
 
 
 class VideoDecoder:
@@ -62,10 +90,17 @@ class VideoDecoder:
         self.video_path = str(video_path)
         self.output_queue = output_queue
         self.ocr_hz = ocr_hz
-        self.realtime = realtime
+        self.stream = is_stream_source(video_path)
+        # Pacing exists to stop a file being decoded faster than it plays. A live
+        # source already arrives at its own rate, so pacing it against its own
+        # timestamps can only add delay — and that delay accumulates for as long
+        # as the stream is up.
+        self.realtime = realtime and not self.stream
         self.stop_event = stop_event
         self.scheduled_frames = 0
         self.dropped_frames = 0
+        self.reconnects = 0
+        self.decode_failures = 0
         self.error: Exception | None = None
         self.thread = threading.Thread(target=self._run, name="video-decoder", daemon=True)
 
@@ -81,18 +116,15 @@ class VideoDecoder:
                 import cv2
             except ImportError as exc:
                 raise DependencyError("OpenCV is required to decode video") from exc
-            capture = cv2.VideoCapture(self.video_path)
-            if not capture.isOpened():
-                raise VideoError(f"Cannot open video: {self.video_path}")
+            capture = self._open(cv2)
             try:
-                fps = float(capture.get(cv2.CAP_PROP_FPS))
-                if not math.isfinite(fps) or fps <= 0:
-                    fps = 30.0
+                fps = self._frame_rate(capture, cv2)
                 interval_ms = 1000.0 / self.ocr_hz
                 next_ocr_ms = 0.0
                 first_source_ms: float | None = None
                 start_wall = time.perf_counter()
                 frame_index = 0
+                retrieve_failures = 0
                 while not self.stop_event.is_set():
                     # Inter-frame codecs still need every packet to be grabbed,
                     # but BGR conversion/copy is only needed for scheduled OCR
@@ -100,12 +132,21 @@ class VideoDecoder:
                     # the source frame rate.
                     ok = capture.grab()
                     if not ok:
-                        break
-                    source_time_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
-                    if not math.isfinite(source_time_ms) or source_time_ms < 0:
-                        source_time_ms = frame_index * 1000.0 / fps
-                    if frame_index > 0 and source_time_ms == 0:
-                        source_time_ms = frame_index * 1000.0 / fps
+                        if not self.stream:
+                            break
+                        # A file that stops grabbing has ended. A stream that
+                        # stops has dropped, and dropping is normal — reconnect
+                        # rather than reporting the feed as finished.
+                        capture = self._reconnect(cv2, capture)
+                        if capture is None:
+                            break
+                        fps = self._frame_rate(capture, cv2)
+                        retrieve_failures = 0
+                        continue
+
+                    source_time_ms = self._source_time_ms(
+                        capture, cv2, frame_index, fps, start_wall
+                    )
                     if first_source_ms is None:
                         first_source_ms = source_time_ms
                     if self.realtime:
@@ -117,9 +158,24 @@ class VideoDecoder:
                     if source_time_ms + epsilon_ms >= next_ocr_ms:
                         ok, frame = capture.retrieve()
                         if not ok:
-                            raise VideoError(
-                                f"Cannot retrieve scheduled frame {frame_index}: {self.video_path}"
-                            )
+                            self.decode_failures += 1
+                            if not self.stream:
+                                raise VideoError(
+                                    f"Cannot retrieve scheduled frame {frame_index}: "
+                                    f"{self.video_path}"
+                                )
+                            # One corrupt packet on a network source is routine;
+                            # a run of them means the connection is unusable.
+                            retrieve_failures += 1
+                            if retrieve_failures >= _MAX_CONSECUTIVE_RETRIEVE_FAILURES:
+                                capture = self._reconnect(cv2, capture)
+                                if capture is None:
+                                    break
+                                fps = self._frame_rate(capture, cv2)
+                                retrieve_failures = 0
+                            frame_index += 1
+                            continue
+                        retrieve_failures = 0
                         self._put_latest(
                             FramePacket(frame, frame_index, source_time_ms, time.perf_counter())
                         )
@@ -130,7 +186,8 @@ class VideoDecoder:
                 if frame_index == 0:
                     raise VideoError(f"Video contains no decodable frames: {self.video_path}")
             finally:
-                capture.release()
+                if capture is not None:
+                    capture.release()
         except Exception as exc:
             self.error = exc
         finally:
@@ -141,6 +198,66 @@ class VideoDecoder:
                         break
                     except queue.Full:
                         continue
+
+    def _open(self, cv2: Any) -> Any:
+        capture = cv2.VideoCapture(self.video_path)
+        if not capture.isOpened():
+            raise VideoError(f"Cannot open video: {self.video_path}")
+        if self.stream:
+            # Ask the backend to hold as little as possible. Whatever it buffers
+            # is latency this pipeline cannot see or undo, and the queue between
+            # the decoder and OCR is already newest-wins for the same reason.
+            # Not every backend honours it, so this is a request, not a promise.
+            with suppress(Exception):
+                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return capture
+
+    def _frame_rate(self, capture: Any, cv2: Any) -> float:
+        fps = float(capture.get(cv2.CAP_PROP_FPS))
+        if not math.isfinite(fps) or fps <= 0:
+            # Live sources frequently report nothing useful here. The value is
+            # only used for the scheduling epsilon and the fallback clock, so a
+            # sane assumption beats refusing to run.
+            return 30.0
+        return fps
+
+    def _source_time_ms(
+        self, capture: Any, cv2: Any, frame_index: int, fps: float, start_wall: float
+    ) -> float:
+        if self.stream:
+            # Wall clock, deliberately. A live feed's container timestamps restart
+            # at zero on reconnect and are often absent altogether, and every
+            # downstream consumer — temporal voting, max_delta_per_second, the
+            # latency figures — needs a clock that only moves forward. Elapsed
+            # time since the first frame is the only one available that does.
+            return max(0.0, (time.perf_counter() - start_wall) * 1000.0)
+        source_time_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
+        if not math.isfinite(source_time_ms) or source_time_ms < 0:
+            return frame_index * 1000.0 / fps
+        if frame_index > 0 and source_time_ms == 0:
+            return frame_index * 1000.0 / fps
+        return source_time_ms
+
+    def _reconnect(self, cv2: Any, capture: Any) -> Any | None:
+        """Reopen a dropped stream, backing off. None means give up."""
+        with suppress(Exception):
+            capture.release()
+        for delay in _RECONNECT_BACKOFF_S:
+            if self.stop_event.wait(delay):
+                return None
+            self.reconnects += 1
+            _LOG.warning(
+                "Stream dropped; reconnect attempt %d to %s", self.reconnects, self.video_path
+            )
+            try:
+                reopened = self._open(cv2)
+            except VideoError:
+                continue
+            return reopened
+        raise VideoError(
+            f"Stream did not come back after {len(_RECONNECT_BACKOFF_S)} attempts: "
+            f"{self.video_path}"
+        )
 
     def _put_latest(self, packet: FramePacket) -> None:
         while not self.stop_event.is_set():
@@ -194,7 +311,20 @@ class TelemetryPipeline:
         video_path: str | Path,
         jsonl_path: str | Path,
         csv_path: str | Path,
+        *,
+        max_seconds: float | None = None,
+        on_frame: Callable[[FramePacket], None] | None = None,
     ) -> PipelineSummary:
+        """Read a file or a live stream and write telemetry until it ends.
+
+        A file ends by itself. A stream does not, so it stops on Ctrl+C or on
+        max_seconds, and either is a normal end rather than an error -- the
+        summary is still returned.
+
+        on_frame is called with each scheduled frame before OCR runs on it, which
+        is how the detection side gets the same frames without this module
+        needing to know anything about torch.
+        """
         runtime = self.config.runtime
         self._warmup(video_path)
         frame_queue: queue.Queue[FramePacket | object] = queue.Queue(maxsize=runtime.queue_size)
@@ -210,13 +340,26 @@ class TelemetryPipeline:
         writer.start()
         decoder.start()
         caught: BaseException | None = None
+        deadline = None if max_seconds is None else start_wall + max_seconds
         try:
             while True:
-                item = frame_queue.get()
+                if deadline is not None and time.perf_counter() >= deadline:
+                    break
+                try:
+                    # A timeout rather than a blocking get, so a deadline is
+                    # honoured and Ctrl+C is noticed even while a stream is
+                    # silent.
+                    item = frame_queue.get(timeout=0.25)
+                except queue.Empty:
+                    if decoder.error is not None or not decoder.thread.is_alive():
+                        break
+                    continue
                 try:
                     if item is _END:
                         break
                     assert isinstance(item, FramePacket)
+                    if on_frame is not None:
+                        on_frame(item)
                     records, latency = self.process_frame(item)
                     for record in records:
                         writer.write(record)
@@ -225,6 +368,11 @@ class TelemetryPipeline:
                     latencies.append(latency)
                 finally:
                     frame_queue.task_done()
+        except KeyboardInterrupt:
+            # Asking a live feed to stop is how it is meant to end, so the run
+            # reports what it captured instead of a traceback.
+            _LOG.info("Stopping on interrupt")
+            stop_event.set()
         except BaseException as exc:
             caught = exc
             stop_event.set()
@@ -252,6 +400,8 @@ class TelemetryPipeline:
             update_hz=processed / wall_time,
             latency_mean_ms=statistics.fmean(latencies) if latencies else 0.0,
             latency_p95_ms=percentile(latencies, 95),
+            reconnects=decoder.reconnects,
+            decode_failures=decoder.decode_failures,
         )
 
     def _warmup(self, video_path: str | Path) -> None:

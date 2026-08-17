@@ -266,6 +266,60 @@ Decoder จะเดินตาม source timestamp ของไฟล์ แ�
 
 เมื่อ primary OCR มี confidence ต่ำกว่า `0.80` หรือไม่ผ่าน regex/range ระบบจะประมวลผล fallback recipe เฉพาะ ROI นั้น และเลือก validity ก่อน confidence การแก้ `O→0`, `I/l→1`, `S→5`, `B→8` จะทำเฉพาะเมื่อผลเดิมไม่ผ่าน validation
 
+## รับ RTSP stream แบบ realtime
+
+`run` รับได้ทั้งไฟล์และ stream URL — ตรวจจาก scheme (`rtsp://`, `rtsps://`, `http://`,
+`udp://`, `srt://` ฯลฯ) ไม่ต้องบอกระบบเอง:
+
+```powershell
+.\.venv-cuda\Scripts	elemetry-ocr.exe run `
+  --video rtsp://user:pass@192.168.1.50:554/stream1 `
+  --config configsoi_calibrated_cuda.yaml `
+  --jsonl output	elemetry.jsonl --csv output	elemetry.csv
+```
+
+กด Ctrl+C เพื่อหยุด ซึ่งถือเป็นการจบปกติ — summary ยังถูกพิมพ์ออกมา หรือใช้
+`--max-seconds` เพื่อกำหนดเวลาไว้ล่วงหน้า
+
+### stream ต่างจากไฟล์อย่างไร
+
+| เรื่อง | ไฟล์ | stream |
+|---|---|---|
+| การหน่วงให้ตรงเวลา | หน่วงตาม timestamp ของไฟล์ | **ไม่หน่วง** — เครือข่ายกำหนดจังหวะมาแล้ว |
+| นาฬิกา | `CAP_PROP_POS_MSEC` | **wall clock** นับจากเฟรมแรก |
+| เมื่ออ่านไม่ได้ | จบไฟล์ | **reconnect** พร้อม backoff 0.5/1/2/4 วินาที |
+| เฟรมเสีย | เป็น error | ทนได้ถึง 30 เฟรมติดกันแล้วจึง reconnect |
+| จุดจบ | ท้ายไฟล์ | Ctrl+C หรือ `--max-seconds` |
+
+**ทำไมต้องใช้ wall clock:** timestamp ของ stream เริ่มนับใหม่ที่ศูนย์ทุกครั้งที่ reconnect
+และบ่อยครั้งไม่มีมาเลย ขณะที่ temporal voting, `max_delta_per_second` และตัวเลข latency
+ทั้งหมดต้องการนาฬิกาที่เดินหน้าทางเดียว
+
+**ทำไมต้องไม่หน่วง:** การหน่วง stream ตาม timestamp ของตัวเองมีแต่จะเพิ่ม delay
+และ delay นั้นสะสมไปเรื่อยๆ ตลอดเวลาที่ stream ยังไม่หลุด ระบบจึงขอ `CAP_PROP_BUFFERSIZE = 1`
+จาก backend ด้วย เพราะอะไรที่ backend buffer ไว้คือ latency ที่ pipeline มองไม่เห็นและแก้ไม่ได้
+
+summary จะรายงาน `reconnects` และ `decode_failures` เพิ่มมาด้วย ซึ่งเป็นตัวแยกระหว่าง
+"OCR ตามไม่ทัน" กับ "สัญญาณไม่นิ่ง"
+
+### รัน YOLO บนเฟรมเดียวกันพร้อมกัน
+
+```powershell
+.\.venv-cuda\Scripts	elemetry-ocr.exe run `
+  --video rtsp://user:pass@192.168.1.50:554/stream1 `
+  --config configsoi_calibrated_cuda.yaml `
+  --detect-model best50 --detections output\detections.jsonl
+```
+
+`--detect-model` รับได้ทั้งชื่อย่อจาก [configs/paths.yaml](configs/paths.yaml) และ path เต็ม
+YOLO ทำงานใน **spawn process แยก** แบบเดียวกับที่ web UI ทำ ด้วยเหตุผลเดิม: process ที่ถือ
+PaddleOCR ต้องไม่ import torch
+
+คิวขาเข้าของ worker เป็น newest-wins เฟรมที่ YOLO ตามไม่ทันจะถูกทิ้ง ไม่ใช่ทำให้ OCR รอ
+วัดบนวิดีโอจริง 12 วินาทีที่ 640 px: OCR ได้ 9.95 Hz (latency mean 48.4 ms, p95 91.5 ms)
+ส่วน detection ได้ 66 จาก 120 เฟรมที่ส่งไป โดย OCR ไม่ตกเฟรม — เทียบกับ OCR อย่างเดียว
+ที่ latency mean 33.4 ms ส่วนต่างคือราคาของการแบ่ง GPU 4 GB กัน
+
 ## Web UI สำหรับทดสอบวิดีโอ
 
 ### ติดตั้งเป็น PWA และเปิด OCR server อัตโนมัติ
