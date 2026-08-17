@@ -120,6 +120,8 @@ class CommandLineTests(unittest.TestCase):
             ["extract-frames", "--interval", "0.5"],
             ["evaluate", "clip.mp4", "--model", "best50", "--track"],
             ["report", "--run", "visdrone_custom_7th"],
+            ["handbook"],
+            ["handbook", "--run", "visdrone_custom_6th"],
         ):
             with self.subTest(argv=argv):
                 self.assertTrue(parser.parse_args(argv).command)

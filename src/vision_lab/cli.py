@@ -76,6 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
     report = commands.add_parser("report", help="Build the Thai theory and dataset PDF")
     report.add_argument("--output", type=Path, help="Destination PDF path")
     report.add_argument("--run", help="Training run to illustrate (default: visdrone_custom_6th)")
+
+    handbook = commands.add_parser(
+        "handbook",
+        help="Build the full Thai handbook: both pipelines, every parameter and why",
+    )
+    handbook.add_argument("--output", type=Path, help="Destination PDF path")
+    handbook.add_argument("--run", help="Training run to illustrate (default: visdrone_custom_7th)")
     return parser
 
 
@@ -153,6 +160,13 @@ def main(argv: list[str] | None = None) -> int:
                 log_every=args.log_every,
             )
             evaluate(paths, options)
+            return 0
+
+        if args.command == "handbook":
+            from .handbook import build_handbook
+
+            destination = build_handbook(paths, output=args.output, run_name=args.run)
+            print(f"{destination} ({destination.stat().st_size / 1024:.0f} KB)")
             return 0
 
         if args.command == "report":
