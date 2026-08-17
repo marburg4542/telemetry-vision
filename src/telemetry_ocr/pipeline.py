@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import queue
 import statistics
 import threading
@@ -68,6 +69,27 @@ _STREAM_SCHEMES = ("rtsp://", "rtsps://", "rtmp://", "rtmps://", "udp://", "tcp:
 
 # A stream that has dropped is retried rather than treated as end of input.
 _RECONNECT_BACKOFF_S = (0.5, 1.0, 2.0, 4.0)
+
+# How long a stream is given to hand over usable data before it is called
+# unreachable, both when connecting and when already running.
+#
+# These have to be OpenCV's own properties. Measured against a real RTSP server
+# that answers OPTIONS and then never replies to DESCRIBE, every FFmpeg timeout
+# option -- stimeout, timeout, rw_timeout, with and without rtsp_transport;tcp --
+# was ignored by this build (OpenCV 4.10, avformat 58) and VideoCapture() blocked
+# indefinitely. CAP_PROP_OPEN_TIMEOUT_MSEC installs an interrupt callback inside
+# the FFmpeg wrapper instead, and that one is honoured: the same URL failed in
+# 4.08 s when asked for 4000 ms. Without it an unreachable camera hangs the
+# decoder thread forever with no error and no output, which is the worst possible
+# way for this to fail.
+#
+# Generous rather than tight: connecting to a distant camera and negotiating a
+# keyframe can legitimately take seconds, and the cost of being wrong here is a
+# reconnect, not a wrong answer.
+_STREAM_OPEN_TIMEOUT_MS = 10000
+# Applies to grab()/retrieve() once running. A stall that exceeds it surfaces as
+# a failed grab, which is already the reconnect path.
+_STREAM_READ_TIMEOUT_MS = 10000
 # Consecutive failed retrieves tolerated before the connection is considered bad.
 # A single corrupt packet is normal on a network source; a run of them is not.
 _MAX_CONSECUTIVE_RETRIEVE_FAILURES = 30
@@ -200,17 +222,57 @@ class VideoDecoder:
                         continue
 
     def _open(self, cv2: Any) -> Any:
-        capture = cv2.VideoCapture(self.video_path)
+        if not self.stream:
+            capture = cv2.VideoCapture(self.video_path)
+            if not capture.isOpened():
+                raise VideoError(f"Cannot open video: {self.video_path}")
+            return capture
+
+        self._prefer_tcp_for_rtsp()
+        capture = cv2.VideoCapture(
+            self.video_path,
+            cv2.CAP_FFMPEG,
+            [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
+                _STREAM_OPEN_TIMEOUT_MS,
+                cv2.CAP_PROP_READ_TIMEOUT_MSEC,
+                _STREAM_READ_TIMEOUT_MS,
+            ],
+        )
         if not capture.isOpened():
-            raise VideoError(f"Cannot open video: {self.video_path}")
-        if self.stream:
-            # Ask the backend to hold as little as possible. Whatever it buffers
-            # is latency this pipeline cannot see or undo, and the queue between
-            # the decoder and OCR is already newest-wins for the same reason.
-            # Not every backend honours it, so this is a request, not a promise.
-            with suppress(Exception):
-                capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            raise VideoError(
+                # ASCII only: this reaches a Windows console whose code page
+                # turns anything else into a replacement character, and an error
+                # message is the one place that must stay readable.
+                f"Cannot open stream: {self.video_path} - no usable video within "
+                f"{_STREAM_OPEN_TIMEOUT_MS / 1000:g}s. The host may be unreachable, "
+                "the path may be wrong, or the feed may not be publishing right now. "
+                "A server that accepts the connection but never sends video looks "
+                "identical to one that is switched off."
+            )
+        # Ask the backend to hold as little as possible. Whatever it buffers is
+        # latency this pipeline cannot see or undo, and the queue between the
+        # decoder and OCR is already newest-wins for the same reason. Not every
+        # backend honours it, so this is a request, not a promise.
+        with suppress(Exception):
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return capture
+
+    def _prefer_tcp_for_rtsp(self) -> None:
+        """Carry RTSP over TCP unless the operator has said otherwise.
+
+        UDP is RTSP's default and is the wrong one here: it is commonly blocked
+        between networks, and where it does get through, lost packets become
+        corrupt frames that this decoder can only count and discard. There is no
+        OpenCV property for transport, so the FFmpeg wrapper's environment
+        variable is the only way in -- left alone if already set, since a tuned
+        value belongs to whoever set it.
+        """
+        if not self.video_path.lower().startswith(("rtsp://", "rtsps://")):
+            return
+        if os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+            return
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
     def _frame_rate(self, capture: Any, cv2: Any) -> float:
         fps = float(capture.get(cv2.CAP_PROP_FPS))
@@ -326,7 +388,11 @@ class TelemetryPipeline:
         needing to know anything about torch.
         """
         runtime = self.config.runtime
-        self._warmup(video_path)
+        # A stream is warmed from its first delivered frame, so the camera is
+        # connected to exactly once.
+        pending_warmup = is_stream_source(video_path)
+        if not pending_warmup:
+            self._warmup(video_path)
         frame_queue: queue.Queue[FramePacket | object] = queue.Queue(maxsize=runtime.queue_size)
         stop_event = threading.Event()
         decoder = VideoDecoder(
@@ -358,6 +424,11 @@ class TelemetryPipeline:
                     if item is _END:
                         break
                     assert isinstance(item, FramePacket)
+                    if pending_warmup:
+                        # Before OCR runs on it, so the first measured frame is
+                        # not the one that paid for kernel compilation.
+                        self._warmup_from_frame(item.frame)
+                        pending_warmup = False
                     if on_frame is not None:
                         on_frame(item)
                     records, latency = self.process_frame(item)
@@ -405,6 +476,14 @@ class TelemetryPipeline:
         )
 
     def _warmup(self, video_path: str | Path) -> None:
+        """Compile the OCR kernels against a frame of this video, for files only.
+
+        A stream is warmed from its first delivered frame instead -- see
+        _warmup_from_frame. Opening a live source a second time just to fetch one
+        frame is wrong twice over: many cameras allow a single session at a time,
+        and even where they do not, it pays the whole connect-and-wait-for-keyframe
+        cost again before the run has started.
+        """
         iterations = self.config.runtime.warmup_iterations
         if iterations == 0:
             return
@@ -421,6 +500,12 @@ class TelemetryPipeline:
             capture.release()
         if not ok:
             raise VideoError(f"Cannot decode the first frame for OCR warm-up: {video_path}")
+        self._warmup_from_frame(frame)
+
+    def _warmup_from_frame(self, frame: Any) -> None:
+        iterations = self.config.runtime.warmup_iterations
+        if iterations == 0:
+            return
         images: list[Any] = []
         for item in self.config.fields:
             if item.derive_from_source_time:

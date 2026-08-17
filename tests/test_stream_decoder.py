@@ -8,6 +8,7 @@ decoder at an mp4, so the capture is faked and made to misbehave on purpose.
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -51,12 +52,20 @@ class _FakeCapture:
     # rate keeps the window narrow.
     grab_delay_s = 0.004
 
-    def __init__(self, script: list[str], fps: float = 1000.0) -> None:
+    def __init__(
+        self,
+        script: list[str],
+        fps: float = 1000.0,
+        api: int | None = None,
+        params: list[int] | None = None,
+    ) -> None:
         self.script = list(script)
         self.fps = fps
         self.position = 0
         self.released = False
         self.buffersize: int | None = None
+        self.api = api
+        self.params = dict(zip(params[::2], params[1::2], strict=True)) if params else {}
         _FakeCapture.instances.append(self)
 
     def isOpened(self) -> bool:  # mirrors the OpenCV API
@@ -96,13 +105,18 @@ class _FakeCv2:
     CAP_PROP_FPS = 5
     CAP_PROP_POS_MSEC = 0
     CAP_PROP_BUFFERSIZE = 38
+    CAP_PROP_OPEN_TIMEOUT_MSEC = 53
+    CAP_PROP_READ_TIMEOUT_MSEC = 54
+    CAP_FFMPEG = 1900
 
     def __init__(self) -> None:
         self.scripts: list[list[str]] = []
 
-    def VideoCapture(self, source: str) -> _FakeCapture:
+    def VideoCapture(
+        self, source: str, api: int | None = None, params: list[int] | None = None
+    ) -> _FakeCapture:
         script = self.scripts.pop(0) if self.scripts else []
-        return _FakeCapture(script)
+        return _FakeCapture(script, api=api, params=params)
 
 
 _FAKE_CV2 = _FakeCv2()
@@ -195,6 +209,71 @@ class StreamDecoderTests(unittest.TestCase):
         self.addCleanup(watchdog.cancel)
         self._drain(decoder, output)
         self.assertEqual(_FakeCapture.instances[0].buffersize, 1)
+
+    def test_a_stream_open_is_bounded_by_a_timeout(self) -> None:
+        """An unreachable camera must fail, not hang.
+
+        Measured against a real RTSP server that answers OPTIONS and then never
+        replies to DESCRIBE, every FFmpeg timeout option was ignored and
+        VideoCapture() blocked forever. These two OpenCV properties are the only
+        thing that bounds it, so losing them would reintroduce a hang with no
+        error and no output.
+        """
+        _FAKE_CV2.scripts = [["ok"]]
+        output: queue.Queue = queue.Queue(maxsize=2)
+        stop = threading.Event()
+        decoder = VideoDecoder("rtsp://cam/stream", output, 1000.0, False, stop)
+        watchdog = threading.Timer(3.0, stop.set)
+        watchdog.start()
+        self.addCleanup(watchdog.cancel)
+        self._drain(decoder, output)
+        capture = _FakeCapture.instances[0]
+        self.assertEqual(capture.api, _FAKE_CV2.CAP_FFMPEG)
+        self.assertGreater(capture.params[_FAKE_CV2.CAP_PROP_OPEN_TIMEOUT_MSEC], 0)
+        self.assertGreater(capture.params[_FAKE_CV2.CAP_PROP_READ_TIMEOUT_MSEC], 0)
+
+    def test_a_file_is_opened_without_forcing_a_backend(self) -> None:
+        # The timeouts are a stream concern. Forcing FFMPEG on a local file would
+        # give up whatever backend OpenCV would otherwise have chosen for it.
+        _FAKE_CV2.scripts = [["ok", "ok"]]
+        output: queue.Queue = queue.Queue(maxsize=4)
+        decoder = VideoDecoder("clip.mp4", output, 1000.0, False, threading.Event())
+        self._drain(decoder, output)
+        self.assertIsNone(_FakeCapture.instances[0].api)
+        self.assertEqual(_FakeCapture.instances[0].params, {})
+
+    def test_rtsp_is_carried_over_tcp_unless_already_configured(self) -> None:
+        """UDP is RTSP's default and the wrong one across networks.
+
+        Lost UDP packets arrive here as corrupt frames this decoder can only
+        count and discard, and there is no OpenCV property for transport.
+        """
+        _FAKE_CV2.scripts = [["ok"], ["ok"]]
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
+            output: queue.Queue = queue.Queue(maxsize=2)
+            stop = threading.Event()
+            watchdog = threading.Timer(3.0, stop.set)
+            watchdog.start()
+            self.addCleanup(watchdog.cancel)
+            self._drain(VideoDecoder("rtsp://cam/stream", output, 1000.0, False, stop), output)
+            self.assertEqual(
+                os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS"), "rtsp_transport;tcp"
+            )
+
+            # A value already there belongs to whoever set it.
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
+            stop2 = threading.Event()
+            watchdog2 = threading.Timer(3.0, stop2.set)
+            watchdog2.start()
+            self.addCleanup(watchdog2.cancel)
+            self._drain(
+                VideoDecoder("rtsp://cam/stream", queue.Queue(maxsize=2), 1000.0, False, stop2),
+                output,
+            )
+            self.assertEqual(
+                os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS"), "rtsp_transport;udp"
+            )
 
     def test_stream_timestamps_come_from_the_wall_clock(self) -> None:
         """A live feed's own timestamps restart at zero when it reconnects.
