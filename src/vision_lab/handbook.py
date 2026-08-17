@@ -25,13 +25,27 @@ FIGURE_RUN = "visdrone_custom_7th"
 
 
 def _cover() -> str:
+    """หน้าปกต้องจบด้วย page_break เสมอ
+
+    `@page :first` ตั้ง margin เป็น 0 เพื่อให้แถบสีบนสุดชนขอบกระดาษ และ `.cover`
+    ชดเชยด้วย padding ของตัวเอง ถ้าเนื้อหาบทแรกไหลต่อลงมาในหน้าเดียวกัน มันจะถูก
+    จัดหน้าโดยไม่มี margin เลย — ตารางและข้อความจะชนขอบกระดาษทั้งสองด้าน
+    """
+    meta = table([], [
+        ["ขอบเขต", "เส้นทาง OCR และเส้นทาง object detection ทั้งสองฝั่ง"],
+        ["โมเดล", "PaddleOCR PP-OCRv6_tiny_rec · Ultralytics YOLOv8m + BoT-SORT"],
+        ["ฮาร์ดแวร์ที่วัด", "NVIDIA GTX 1650 (4 GB, compute 7.5), Windows"],
+        ["ที่มาของตัวเลข", "configs, args.yaml, results.csv และค่าคงที่ในโค้ด"],
+    ]).replace("<thead><tr></tr></thead>", "")
     return (
         '<div class="cover-bar"></div>'
         '<div class="cover">'
         "<h1>คู่มือหลักการและทฤษฎี</h1>"
-        "<h2>Telemetry Vision — OCR และ Object Detection</h2>"
-        "<p>อธิบายการทำงานทุกขั้นตอน พร้อมเหตุผลของทุกค่าที่ตั้งไว้</p>"
+        '<div class="sub">Telemetry Vision — OCR และ Object Detection</div>'
+        "<p>อธิบายการทำงานทุกขั้นตอน พร้อมเหตุผลว่าทำไมทุกค่าถึงเป็นค่านั้น</p>"
+        f"{meta}"
         "</div>"
+        f"{page_break()}"
     )
 
 
