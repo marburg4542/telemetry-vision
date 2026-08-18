@@ -376,16 +376,26 @@ class TelemetryPipeline:
         *,
         max_seconds: float | None = None,
         on_frame: Callable[[FramePacket], None] | None = None,
+        on_records: Callable[[Sequence[TelemetryRecord], FramePacket], None] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> PipelineSummary:
         """Read a file or a live stream and write telemetry until it ends.
 
-        A file ends by itself. A stream does not, so it stops on Ctrl+C or on
-        max_seconds, and either is a normal end rather than an error -- the
-        summary is still returned.
+        A file ends by itself. A stream does not, so it stops on Ctrl+C, on
+        max_seconds, or on stop_event, and all three are a normal end rather than
+        an error -- the summary is still returned.
 
         on_frame is called with each scheduled frame before OCR runs on it, which
         is how the detection side gets the same frames without this module
         needing to know anything about torch.
+
+        on_records is called with what OCR made of that frame, already written.
+        A long-running stream has no end at which to read the file back, so a
+        caller that wants to show telemetry as it arrives has to be handed it.
+
+        stop_event lets a caller that is not a console -- a web server, say --
+        end the run. Passing one in also means the caller can stop a stream that
+        is blocked waiting for a camera that has gone quiet.
         """
         runtime = self.config.runtime
         # A stream is warmed from its first delivered frame, so the camera is
@@ -394,7 +404,7 @@ class TelemetryPipeline:
         if not pending_warmup:
             self._warmup(video_path)
         frame_queue: queue.Queue[FramePacket | object] = queue.Queue(maxsize=runtime.queue_size)
-        stop_event = threading.Event()
+        stop_event = threading.Event() if stop_event is None else stop_event
         decoder = VideoDecoder(
             video_path, frame_queue, runtime.ocr_hz, runtime.realtime, stop_event
         )
@@ -434,6 +444,8 @@ class TelemetryPipeline:
                     records, latency = self.process_frame(item)
                     for record in records:
                         writer.write(record)
+                    if on_records is not None:
+                        on_records(records, item)
                     processed += 1
                     emitted += len(records)
                     latencies.append(latency)
