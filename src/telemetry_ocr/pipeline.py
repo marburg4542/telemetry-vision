@@ -23,6 +23,9 @@ from .validation import ValidatedValue, prefer_candidate, validate_text
 
 _LOG = logging.getLogger(__name__)
 
+# Serialises every use of the recognizer in this process. See process_frame.
+_RECOGNIZER_LOCK = threading.Lock()
+
 
 @dataclass(frozen=True, slots=True)
 class FramePacket:
@@ -534,6 +537,12 @@ class TelemetryPipeline:
         iterations = self.config.runtime.warmup_iterations
         if iterations == 0:
             return
+        # Same recognizer, same lock. A warm-up racing a capture's re-read would
+        # be the very first thing to hit the collision this guards against.
+        with _RECOGNIZER_LOCK:
+            self._warmup_images(frame, iterations)
+
+    def _warmup_images(self, frame: Any, iterations: int) -> None:
         images: list[Any] = []
         for item in self.config.fields:
             if item.derive_from_source_time:
@@ -547,6 +556,17 @@ class TelemetryPipeline:
             )
 
     def process_frame(self, packet: FramePacket) -> tuple[list[TelemetryRecord], float]:
+        # One recognizer per process, and now more than one thread wanting it:
+        # a running stream reads frames on its own thread while a capture may ask
+        # to re-read a saved image on another. PaddleOCR makes no thread-safety
+        # promise, so every entry is serialised here rather than by whichever
+        # caller happens to remember. Uncontended it costs nothing; contended it
+        # costs one frame's wait, which is the correct price for not corrupting
+        # both readings.
+        with _RECOGNIZER_LOCK:
+            return self._process_frame_locked(packet)
+
+    def _process_frame_locked(self, packet: FramePacket) -> tuple[list[TelemetryRecord], float]:
         primary_images: list[Any] = []
         primary_indexes: list[int] = []
         candidates: list[_Candidate | None] = [None] * len(self.config.fields)

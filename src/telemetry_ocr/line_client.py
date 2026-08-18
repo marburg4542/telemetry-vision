@@ -50,6 +50,22 @@ _LAYOUT: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SENS", ("eo_detail", "ir_detail")),
 )
 
+# Short names for the disagreement lines, where the full layout label is not
+# available because a field is listed on its own.
+_SHORT_LABELS = {
+    "acft_lat_dms": "ACFT N",
+    "acft_lon_dms": "ACFT E",
+    "acft_alt_m": "ACFT ALT",
+    "tag_lat_dms": "TAG N",
+    "tag_lon_dms": "TAG E",
+    "tag_alt_m": "TAG ALT",
+    "sensor_angle_deg": "CAM yaw",
+    "elevation_deg": "CAM pitch",
+    "lrf_m": "LRF",
+    "eo_detail": "EO",
+    "ir_detail": "IR",
+}
+
 _UNITS = {
     "acft_alt_m": " m",
     "tag_alt_m": " m",
@@ -139,9 +155,23 @@ def describe_detections(summary: Any) -> str:
     counts = getattr(summary, "counts", {}) or {}
     if not counts:
         return "ตรวจจับ: ไม่พบวัตถุ"
+    scores = getattr(summary, "confidence", {}) or {}
     # Most numerous first, then by name, so the same scene always reads the same.
     ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    listed = ", ".join(f"{name} {count}" for name, count in ordered)
+    parts = []
+    for name, count in ordered:
+        stat = scores.get(name)
+        if not stat:
+            parts.append(f"{name} {count}")
+            continue
+        # The lowest score is what decides whether the count can be trusted, so
+        # it is shown whenever it differs from the average; three boxes at 0.9
+        # and three where one sits at 0.31 are different claims.
+        if count > 1 and abs(stat.get("min", 0.0) - stat.get("mean", 0.0)) >= 0.02:
+            parts.append(f"{name} {count} (conf {stat['mean']:.2f}, ต่ำสุด {stat['min']:.2f})")
+        else:
+            parts.append(f"{name} {count} (conf {stat.get('mean', 0.0):.2f})")
+    listed = ", ".join(parts)
     total = getattr(summary, "total", sum(counts.values()))
     line = f"ตรวจจับได้: {listed} (รวม {total})"
 
@@ -152,6 +182,43 @@ def describe_detections(summary: Any) -> str:
         # useful than quietly presenting them as matching.
         line += f"\n  (ผลตรวจจับเก่ากว่าภาพ {age / 1000:.1f} วินาที)"
     return line
+
+
+def _same(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return abs(float(left) - float(right)) < 1e-6
+    return str(left).strip() == str(right).strip()
+
+
+def describe_verification(verification: Any, lagging: dict[str, Any]) -> str:
+    """Say where the numbers came from, and where the live feed had trailed.
+
+    The values above are read from the saved image. This says how much of that
+    reading matched what the live feed had published at the same instant --
+    which is a statement about temporal voting catching up, not about OCR being
+    wrong.
+    """
+    status = getattr(verification, "status", "skipped")
+    if status == "unreadable":
+        return "ค่าจาก: สตรีมสด (อ่านไฟล์ภาพซ้ำไม่ได้)"
+    if status == "failed":
+        return "ค่าจาก: สตรีมสด (ตรวจซ้ำไม่สำเร็จ)"
+    if status != "ok":
+        return "ค่าจาก: สตรีมสด"
+
+    agreed = getattr(verification, "agreed", 0)
+    disagreed = getattr(verification, "disagreed", 0)
+    head = f"ค่าอ่านจากไฟล์ภาพนี้โดยตรง (ข้อความตรงกับสตรีม {agreed}/{agreed + disagreed})"
+    if not lagging:
+        return head
+
+    # Only the count. The values above are already the ones this image gives, so
+    # listing every field the live feed trailed on turned a report into a diff:
+    # eight lines of detail nobody reading a phone notification needs, about
+    # behaviour that is working as designed.
+    return f"{head}\n  (สตรีมสดยังตามไม่ทัน {len(lagging)} ฟิลด์ ซึ่งปกติของ temporal voting)"
 
 
 def format_capture_message(shot: Any, directory: str | Path | None = None) -> str:
@@ -165,6 +232,25 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
         # point of a capture is to report what was on screen, and silently
         # dropping the fields that were hardest to read would misrepresent it.
         values[field_id] = record
+
+    # Where the saved image was re-read, its values replace the live ones.
+    #
+    # The live value is whatever temporal voting had last confirmed, which on a
+    # moving field trails the frame on purpose; the re-read is what this exact
+    # picture says. Since the message names that picture and someone may open it,
+    # the numbers beside it have to be the ones it contains.
+    verification = getattr(shot, "verification", None)
+    lagging: dict[str, Any] = {}
+    for item in getattr(verification, "fields", []) or []:
+        values[item.field_id] = {
+            "field_id": item.field_id,
+            "value": item.value,
+            "raw_text": item.raw_text,
+            "confidence": item.confidence,
+            "confirmed": item.confirmed,
+        }
+        if item.live_value is not None and not _same(item.value, item.live_value):
+            lagging[item.field_id] = item
 
     lines = [f"[Capture] {getattr(shot, 'captured_at', '')}"]
     session = getattr(shot, "session", "")
@@ -180,6 +266,7 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
 
     lines.append("")
     lines.append(describe_detections(getattr(shot, "detections", None)))
+    lines.append(describe_verification(verification, lagging))
 
     if directory is not None:
         lines.append(f"รูป: {Path(directory) / image}")

@@ -98,6 +98,9 @@ class StreamService:
         # it whenever the operator presses the button rather than only in the
         # instant between decode and encode.
         self._last_frame: Any = None
+        # The frame the current snapshot was read from. Distinct from
+        # _last_frame, which is simply the newest decoded one.
+        self._read_frame: Any = None
         self._frame_ready = threading.Event()
         self._encoder = threading.Thread(
             target=self._encode_loop, name="stream-preview", daemon=True
@@ -144,9 +147,35 @@ class StreamService:
             return self._preview, self._preview_revision
 
     def last_frame(self) -> Any:
-        """The most recent decoded frame, full resolution, for a capture shot."""
+        """The frame the published telemetry was read from, full resolution.
+
+        Deliberately not the newest decoded frame. A capture pairs a picture with
+        its numbers, and OCR finishes behind the decoder, so the newest frame and
+        the newest reading are different moments -- which produced saved captures
+        whose telemetry described a frame they did not contain. Falls back to the
+        newest decoded frame only before the first reading exists, when there is
+        nothing better and no telemetry to contradict.
+        """
         with self._lock:
-            return self._last_frame
+            return self._read_frame if self._read_frame is not None else self._last_frame
+
+    def current_reading(self) -> tuple[Any, StreamSnapshot]:
+        """The picture and its telemetry, taken together.
+
+        Two separate calls were not enough. Even with the frame and the snapshot
+        published as a pair, a caller reading them one after the other can have a
+        new reading land in between and walk away with frame N and snapshot N+1 --
+        which is the same mismatch, just narrower.
+        """
+        with self._lock:
+            frame = self._read_frame if self._read_frame is not None else self._last_frame
+            return frame, StreamSnapshot(
+                revision=self._snapshot.revision,
+                source_time_ms=self._snapshot.source_time_ms,
+                frame_index=self._snapshot.frame_index,
+                fields=dict(self._snapshot.fields),
+                latency_ms=self._snapshot.latency_ms,
+            )
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -230,6 +259,13 @@ class StreamService:
                 fields=fields,
                 latency_ms=latency,
             )
+            # Published together, under one lock, because a capture needs the
+            # picture these numbers were read from -- not merely a recent one.
+            # Pairing the newest decoded frame with the newest reading looked
+            # equivalent and was not: OCR finishes behind the decoder, so the two
+            # came from different moments and a saved capture carried telemetry
+            # describing a frame it did not contain.
+            self._read_frame = packet.frame
         self._notify()
 
     def _encode_loop(self) -> None:

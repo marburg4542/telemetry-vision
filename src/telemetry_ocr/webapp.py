@@ -914,9 +914,23 @@ def create_app(
             return DetectionSummary("unknown")
         if not latest:
             return DetectionSummary("no_result")
-        counts = Counter(
-            str(item.get("label", "?")) for item in (latest.get("detections") or [])
-        )
+        boxes = latest.get("detections") or []
+        counts = Counter(str(item.get("label", "?")) for item in boxes)
+        scores: dict[str, list[float]] = {}
+        for item in boxes:
+            with suppress(TypeError, ValueError):
+                scores.setdefault(str(item.get("label", "?")), []).append(
+                    float(item.get("confidence", 0.0))
+                )
+        confidence = {
+            label: {
+                "mean": round(sum(values) / len(values), 3),
+                "min": round(min(values), 3),
+                "max": round(max(values), 3),
+            }
+            for label, values in scores.items()
+            if values
+        }
         result_time = latest.get("source_time_ms")
         age = (
             abs(source_time_ms - float(result_time))
@@ -924,8 +938,27 @@ def create_app(
             else None
         )
         return DetectionSummary(
-            status="ok", counts=dict(counts), total=sum(counts.values()), age_ms=age
+            status="ok",
+            counts=dict(counts),
+            confidence=confidence,
+            total=sum(counts.values()),
+            age_ms=age,
         )
+
+    def shot_verifier(live_records: list[Any]) -> Any:
+        """Build the callback that re-reads a saved frame.
+
+        Deliberately a fresh pipeline each time: feeding the frame through the
+        one that produced the live reading would put it into the same temporal
+        voting, and a check sharing state with the thing it checks is not a
+        check.
+        """
+        from .capture_service import verify_shot
+
+        def verify(image_path: Path) -> Any:
+            return verify_shot(image_path, live_records, new_pipeline())
+
+        return verify
 
     def capture_session_for(name: str, source: str, is_stream: bool = False) -> Any:
         from .capture_service import CaptureSession
@@ -963,12 +996,12 @@ def create_app(
 
         service = stream_state["service"]
         if service is not None and service.running:
-            frame = service.last_frame()
+            # One call, one lock: see StreamService.current_reading.
+            frame, snapshot = service.current_reading()
             if frame is None:
                 return web.json_response(
                     {"error": "The stream has not produced a frame yet"}, status=409
                 )
-            snapshot = service.snapshot()
             records = [
                 {
                     "source_time_ms": snapshot.source_time_ms,
@@ -990,7 +1023,9 @@ def create_app(
                 snapshot.source_time_ms,
                 records,
                 detection_summary_now(snapshot.source_time_ms),
+                shot_verifier(records),
             )
+            session.record_verification(shot)
             return web.json_response(asdict(shot))
 
         browser_session = app[sessions_key].get(request.query.get("session_id", ""))
@@ -1015,7 +1050,9 @@ def create_app(
             source_time_ms,
             recognised,
             detection_summary_now(source_time_ms),
+            shot_verifier([_as_record(item) for item in recognised]),
         )
+        session.record_verification(shot)
         return web.json_response(asdict(shot))
 
     async def line_status(_: Any) -> Any:
@@ -1183,6 +1220,13 @@ def run_web_app(
         app.on_startup.append(launch_browser)
     print(f"Telemetry OCR web UI: {url}")
     web.run_app(app, host=host, port=port, print=None)
+
+
+def _as_record(record: Any) -> dict[str, Any]:
+    """A TelemetryRecord as the plain dict the verifier compares against."""
+    from dataclasses import asdict as _asdict
+
+    return _asdict(record)
 
 
 def _decode_image(payload: bytes) -> Any:
