@@ -264,3 +264,95 @@ class RecognizerLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_IMAGE_DEPS, "NumPy/OpenCV not installed")
+class AnnotationTests(unittest.TestCase):
+    """Boxes drawn onto a copy, never onto the record."""
+
+    def _frame(self) -> Any:
+        import numpy as np
+
+        return np.full((1080, 1920, 3), 40, dtype=np.uint8)
+
+    def _boxes(self) -> list[dict[str, Any]]:
+        # In the detector's own space, which is a downscaled copy of the frame.
+        return [
+            {"x1": 100.0, "y1": 50.0, "x2": 200.0, "y2": 130.0,
+             "confidence": 0.91, "class_id": 0, "label": "car"}
+        ]
+
+    def test_boxes_are_scaled_from_the_detector_space_to_the_frame(self) -> None:
+        """Unscaled boxes land in the corner at a fraction of their size.
+
+        Which looks like a tracking failure rather than a units mistake, so it
+        is worth pinning that the scaling happens at all.
+        """
+        import numpy as np
+
+        from telemetry_ocr.capture_service import annotate_frame
+
+        frame = self._frame()
+        marked = annotate_frame(frame, self._boxes(), 640, 360)
+        changed = np.nonzero(np.abs(marked.astype(int) - frame.astype(int)).sum(axis=2) > 30)
+        xs, ys = changed[1], changed[0]
+        # 100/640 of 1920 is 300; 200/640 is 600. Allow for line width and label.
+        self.assertGreater(xs.max(), 500)
+        self.assertLess(xs.min(), 340)
+        self.assertGreater(ys.max(), 300)
+
+    def test_the_original_frame_is_never_written_on(self) -> None:
+        # The clean frame is the record and the thing OCR is re-read from; a box
+        # across an OSD field would corrupt the reading taken from it.
+        import numpy as np
+
+        from telemetry_ocr.capture_service import annotate_frame
+
+        frame = self._frame()
+        before = frame.copy()
+        annotate_frame(frame, self._boxes(), 640, 360)
+        self.assertTrue(np.array_equal(frame, before))
+
+    def test_the_label_carries_the_class_and_its_confidence(self) -> None:
+        import numpy as np
+
+        from telemetry_ocr.capture_service import annotate_frame
+
+        frame = self._frame()
+        plain = annotate_frame(frame, [{**self._boxes()[0], "confidence": None}], 640, 360)
+        with_conf = annotate_frame(frame, self._boxes(), 640, 360)
+        # The confidence text makes the label wider, so more pixels differ.
+        plain_changed = np.count_nonzero(
+            np.abs(plain.astype(int) - frame.astype(int)).sum(axis=2) > 30
+        )
+        conf_changed = np.count_nonzero(
+            np.abs(with_conf.astype(int) - frame.astype(int)).sum(axis=2) > 30
+        )
+        self.assertGreater(conf_changed, plain_changed)
+
+    def test_a_malformed_box_is_skipped_not_fatal(self) -> None:
+        # One unusable box must not cost the whole annotation.
+        from telemetry_ocr.capture_service import annotate_frame
+
+        boxes = [{"x1": "nonsense"}, *self._boxes()]
+        marked = annotate_frame(self._frame(), boxes, 640, 360)
+        self.assertEqual(marked.shape, (1080, 1920, 3))
+
+    def test_the_message_points_at_the_annotated_copy(self) -> None:
+        from telemetry_ocr.capture_service import ShotResult
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = ShotResult(
+            session="s",
+            frame_index=0,
+            image="frames/00000000.jpg",
+            source_time_ms=0.0,
+            captured_at="2026-08-18T05:00:00+00:00",
+            bytes=1,
+            records=[],
+            annotated="frames/00000000.boxes.jpg",
+        )
+        text = format_capture_message(shot, directory="out")
+        self.assertIn("00000000.boxes.jpg", text)
+        # And still names the original, which is the record.
+        self.assertIn("00000000.jpg", text)

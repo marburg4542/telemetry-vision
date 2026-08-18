@@ -889,6 +889,25 @@ def create_app(
             pass
         return response
 
+    def detection_boxes_now() -> tuple[list[Any], tuple[int, int] | None]:
+        """The raw boxes behind the counts, for drawing on the saved frame.
+
+        Separate from the summary because they are needed in the detector's own
+        coordinate space, which the summary deliberately does not carry.
+        """
+        state = app[detection_state_key]
+        try:
+            if state.worker.status().get("status") != "ready":
+                return [], None
+            latest = state.worker.latest()
+        except Exception:
+            return [], None
+        if not latest:
+            return [], None
+        width = int(latest.get("width") or 0)
+        height = int(latest.get("height") or 0)
+        return list(latest.get("detections") or []), ((width, height) if width else None)
+
     def detection_summary_now(source_time_ms: float) -> Any:
         """Count what the detector last saw, for the frame being captured.
 
@@ -1017,6 +1036,7 @@ def create_app(
                 for field_id, item in snapshot.fields.items()
             ]
             session = capture_session_for(name, service.url, is_stream=True)
+            stream_boxes, stream_box_source = detection_boxes_now()
             shot = await asyncio.to_thread(
                 session.save,
                 frame,
@@ -1024,6 +1044,8 @@ def create_app(
                 records,
                 detection_summary_now(snapshot.source_time_ms),
                 shot_verifier(records),
+                stream_boxes,
+                stream_box_source,
             )
             session.record_verification(shot)
             return web.json_response(asdict(shot))
@@ -1044,6 +1066,7 @@ def create_app(
                 browser_session.pipeline.process_frame, packet
             )
         session = capture_session_for(name, request.query.get("source", "browser"))
+        posted_boxes, posted_box_source = detection_boxes_now()
         shot = await asyncio.to_thread(
             session.save,
             frame,
@@ -1051,6 +1074,8 @@ def create_app(
             recognised,
             detection_summary_now(source_time_ms),
             shot_verifier([_as_record(item) for item in recognised]),
+            posted_boxes,
+            posted_box_source,
         )
         session.record_verification(shot)
         return web.json_response(asdict(shot))

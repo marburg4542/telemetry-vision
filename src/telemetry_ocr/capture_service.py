@@ -132,6 +132,10 @@ class ShotResult:
     records: list[dict[str, Any]]
     detections: DetectionSummary = field(default_factory=lambda: DetectionSummary("unknown"))
     verification: Verification = field(default_factory=lambda: Verification("skipped"))
+    # The copy with boxes drawn on it, when the detector had any. None when no
+    # model was loaded or nothing was found -- an annotated file identical to the
+    # original would only waste disk and invite the question of what it adds.
+    annotated: str | None = None
 
 
 class CaptureSession:
@@ -198,6 +202,8 @@ class CaptureSession:
         records: list[Any],
         detections: DetectionSummary | None = None,
         verify: Any = None,
+        boxes: list[dict[str, Any]] | None = None,
+        box_source: tuple[int, int] | None = None,
     ) -> ShotResult:
         import cv2
 
@@ -214,6 +220,23 @@ class CaptureSession:
         captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
         summary = detections or DetectionSummary("unknown")
+
+        annotated_name: str | None = None
+        if boxes and box_source:
+            # After the clean frame is on disk, so a failure here costs the
+            # annotation and never the record.
+            try:
+                marked = annotate_frame(frame, boxes, box_source[0], box_source[1])
+                annotated_name = f"{FRAME_DIR}/{index:08d}.boxes.jpg"
+                if not cv2.imwrite(
+                    str(self.directory / annotated_name),
+                    marked,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY],
+                ):
+                    annotated_name = None
+            except Exception:
+                _LOG.exception("Could not annotate frame %d", index)
+                annotated_name = None
         # Between writing the picture and writing the line that describes it, so
         # the manifest records the second reading in the same entry rather than
         # needing the file rewritten afterwards.
@@ -246,6 +269,7 @@ class CaptureSession:
                     **_as_dict(entry),
                     "detections": _as_dict(summary),
                     "verification": _as_dict(shot_verification),
+                    "annotated": annotated_name,
                 },
             )
             for item in payload:
@@ -262,6 +286,7 @@ class CaptureSession:
             records=payload,
             detections=summary,
             verification=shot_verification,
+            annotated=annotated_name,
         )
         with self._lock:
             # Remembered so sending it somewhere afterwards does not have to
@@ -343,6 +368,7 @@ class CaptureSession:
                 lagging=int(raw_verify.get("lagging", 0)),
                 duration_ms=float(raw_verify.get("duration_ms", 0.0)),
             ),
+            annotated=entry.get("annotated"),
         )
 
     def status(self) -> dict[str, Any]:
@@ -360,6 +386,90 @@ class CaptureSession:
         (self.directory / SESSION_NAME).write_text(
             _dumps(_as_dict(self.info)), encoding="utf-8"
         )
+
+
+def annotate_frame(
+    frame: Any, boxes: list[dict[str, Any]], source_width: int, source_height: int
+) -> Any:
+    """Draw the detector's boxes and labels onto a copy of the frame.
+
+    A copy, always. The clean frame is the record and the thing OCR is re-read
+    from, and a box drawn across an OSD field would corrupt the reading taken
+    from it -- which is why the annotated picture is written beside the original
+    rather than instead of it.
+
+    Boxes arrive in the coordinate space of whatever the detector was given,
+    which is a downscaled copy, so they are scaled back up here. Using them
+    unscaled would put every box in the top-left corner at a fraction of its
+    size, which looks like a tracking failure rather than a units mistake.
+    """
+    import cv2
+
+    annotated = frame.copy()
+    height, width = annotated.shape[:2]
+    if not source_width or not source_height:
+        return annotated
+    scale_x = width / float(source_width)
+    scale_y = height / float(source_height)
+
+    # Line and text scaled to the frame: what reads well on 640 px is invisible
+    # at 1920, and this is written once per capture rather than per video frame.
+    thickness = max(2, round(width / 640))
+    font_scale = max(0.5, width / 1600.0)
+
+    for box in boxes:
+        try:
+            x1 = int(float(box["x1"]) * scale_x)
+            y1 = int(float(box["y1"]) * scale_y)
+            x2 = int(float(box["x2"]) * scale_x)
+            y2 = int(float(box["y2"]) * scale_y)
+        except (KeyError, TypeError, ValueError):
+            continue
+        colour = _class_colour(int(box.get("class_id", 0) or 0))
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), colour, thickness)
+
+        label = str(box.get("label", "?"))
+        confidence = box.get("confidence")
+        if isinstance(confidence, (int, float)):
+            label = f"{label} {float(confidence):.2f}"
+        (text_w, text_h), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+        )
+        # Above the box, unless that would be off the top of the frame.
+        top = y1 - text_h - baseline
+        if top < 0:
+            top = y2
+        cv2.rectangle(
+            annotated,
+            (x1, top),
+            (x1 + text_w + 6, top + text_h + baseline + 4),
+            colour,
+            -1,
+        )
+        cv2.putText(
+            annotated,
+            label,
+            (x1 + 3, top + text_h + 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (16, 16, 16),
+            thickness,
+            cv2.LINE_AA,
+        )
+    return annotated
+
+
+def _class_colour(class_id: int) -> tuple[int, int, int]:
+    """The same hue the web overlay gives this class, as BGR.
+
+    Matching on purpose: an operator who saw a green box on screen should get a
+    green box in the file, or they will wonder whether it is the same detection.
+    """
+    import colorsys
+
+    hue = ((class_id * 67 + 88) % 360) / 360.0
+    red, green, blue = colorsys.hls_to_rgb(hue, 0.62, 0.88)
+    return (int(blue * 255), int(green * 255), int(red * 255))
 
 
 def verify_shot(

@@ -269,7 +269,15 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
     lines.append(describe_verification(verification, lagging))
 
     if directory is not None:
-        lines.append(f"รูป: {Path(directory) / image}")
+        # The annotated copy when there is one, since that is the picture with
+        # the boxes someone opening this would expect. The clean original is
+        # named too: it is the record, and the one OCR was re-read from.
+        annotated = getattr(shot, "annotated", None)
+        if annotated:
+            lines.append(f"รูป (มีกรอบ): {Path(directory) / annotated}")
+            lines.append(f"รูปต้นฉบับ: {Path(directory) / image}")
+        else:
+            lines.append(f"รูป: {Path(directory) / image}")
 
     text = "\n".join(lines)
     if len(text) > MAX_TEXT:
