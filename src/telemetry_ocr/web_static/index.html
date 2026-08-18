@@ -43,6 +43,18 @@
                 />
               </label>
               <button class="ghost-button" id="streamButton" type="button">เปิดสตรีม</button>
+              <button class="capture-button" id="captureButton" type="button" disabled>
+                <span class="capture-dot" aria-hidden="true"></span>
+                <span id="captureButtonText">Capture</span>
+              </button>
+              <button class="capture-button" id="captureButton" type="button" disabled>
+                <span class="capture-dot" aria-hidden="true"></span>
+                <span id="captureButtonText">Capture</span>
+              </button>
+              <button class="capture-button" id="captureButton" type="button" disabled>
+                <span class="capture-dot" aria-hidden="true"></span>
+                <span id="captureButtonText">Capture</span>
+              </button>
               <label class="file-button" for="videoInput">
                 <span>เลือกวิดีโอ</span>
                 <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
@@ -69,6 +81,9 @@
             <div class="processing-badge" id="processingBadge" hidden>
               <span></span> OCR LIVE
             </div>
+            <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
+            <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
+            <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
             <div class="stream-badge" id="streamBadge" hidden>
               <span></span> <span id="streamBadgeText">LIVE</span>
             </div>
@@ -222,6 +237,10 @@
           </div>
 
           <div class="telemetry-list" id="telemetryList" aria-live="polite"></div>
+
+          <p class="capture-status" id="captureStatus">
+            กด <strong>Capture</strong> เพื่อเก็บภาพเฟรมนี้พร้อม telemetry ของมันไว้ตรวจย้อนหลัง
+          </p>
 
           <div class="panel-actions">
             <button class="secondary-button" id="downloadJsonButton" type="button" disabled>

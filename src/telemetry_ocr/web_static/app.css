@@ -221,6 +221,64 @@ h3 { font-size: 18px; }
 }
 
 .source-picker { display: flex; align-items: center; gap: 8px; }
+
+/* Deliberately the loudest control on the row. It is the only one that writes
+   anything permanent, and it is pressed while watching rather than while
+   looking for it. */
+.capture-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,107,107,.45);
+  background: rgba(255,107,107,.12);
+  color: #ff8f8f;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  cursor: pointer;
+}
+.capture-button:hover:not(:disabled) { background: rgba(255,107,107,.22); }
+.capture-button:disabled { opacity: .4; cursor: not-allowed; }
+.capture-button .capture-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff6b6b;
+}
+.capture-button.is-recording .capture-dot { animation: pulse 1s ease-in-out infinite; }
+
+/* One frame of white over the video, so a shot is confirmed where the operator
+   is already looking instead of in a panel they would have to glance away to. */
+.capture-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+.capture-flash.is-firing { animation: capture-flash .32s ease-out; }
+@keyframes capture-flash {
+  0% { opacity: .55; }
+  100% { opacity: 0; }
+}
+
+.capture-status {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.07);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted, #98a4ad);
+}
+.capture-status.is-error { border-color: rgba(255,107,107,.4); color: #ff8f8f; }
 .stream-field { display: flex; }
 .stream-field input {
   width: 210px;

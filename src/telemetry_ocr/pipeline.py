@@ -108,6 +108,7 @@ class VideoDecoder:
         ocr_hz: float,
         realtime: bool,
         stop_event: threading.Event,
+        drop_when_full: bool = True,
     ):
         self.video_path = str(video_path)
         self.output_queue = output_queue
@@ -119,6 +120,13 @@ class VideoDecoder:
         # as the stream is up.
         self.realtime = realtime and not self.stream
         self.stop_event = stop_event
+        # Realtime OCR wants the newest frame and throws away whatever it could
+        # not keep up with, because a late reading is worse than a missing one.
+        # Capturing to disk wants the opposite: every scheduled frame, with the
+        # decoder made to wait when the writer falls behind. A dropped frame
+        # there is a hole in the record that no amount of later processing can
+        # fill.
+        self.drop_when_full = drop_when_full
         self.scheduled_frames = 0
         self.dropped_frames = 0
         self.reconnects = 0
@@ -322,6 +330,14 @@ class VideoDecoder:
         )
 
     def _put_latest(self, packet: FramePacket) -> None:
+        if not self.drop_when_full:
+            while not self.stop_event.is_set():
+                try:
+                    self.output_queue.put(packet, timeout=0.1)
+                    return
+                except queue.Full:
+                    continue
+            return
         while not self.stop_event.is_set():
             try:
                 self.output_queue.put_nowait(packet)

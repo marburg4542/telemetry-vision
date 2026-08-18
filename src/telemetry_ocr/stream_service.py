@@ -93,6 +93,11 @@ class StreamService:
         # Encoding on the OCR thread would add its cost to every measured
         # latency, to serve a preview that is not what this application is for.
         self._pending_frame: Any = None
+        # Kept separately from _pending_frame, which the encoder clears as soon
+        # as it has a preview. A shot needs the full-resolution frame, and needs
+        # it whenever the operator presses the button rather than only in the
+        # instant between decode and encode.
+        self._last_frame: Any = None
         self._frame_ready = threading.Event()
         self._encoder = threading.Thread(
             target=self._encode_loop, name="stream-preview", daemon=True
@@ -137,6 +142,11 @@ class StreamService:
     def preview(self) -> tuple[bytes | None, int]:
         with self._lock:
             return self._preview, self._preview_revision
+
+    def last_frame(self) -> Any:
+        """The most recent decoded frame, full resolution, for a capture shot."""
+        with self._lock:
+            return self._last_frame
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -190,6 +200,7 @@ class StreamService:
         # charge the OCR thread for the preview a second time.
         with self._lock:
             self._pending_frame = packet.frame
+            self._last_frame = packet.frame
         self._frame_ready.set()
         if self._on_frame is not None:
             self._on_frame(packet)

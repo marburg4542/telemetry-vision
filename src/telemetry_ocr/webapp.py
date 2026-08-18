@@ -208,6 +208,10 @@ def create_app(
     # replace-on-notify idiom as the pump above, for the same reason: it is set
     # from the service's own threads by way of the loop, and replacing it wakes
     # every waiter exactly once with no window between a set and a clear.
+    # Open capture sessions, by name. Held for the life of the server so that
+    # pressing the button repeatedly appends to one recording rather than
+    # reopening a directory and re-reading its numbering every time.
+    capture_sessions: dict[str, Any] = {}
     stream_state: dict[str, Any] = {
         "service": None,
         "ready": asyncio.Event(),
@@ -855,6 +859,94 @@ def create_app(
             pass
         return response
 
+    def capture_session_for(name: str, source: str, is_stream: bool = False) -> Any:
+        from .capture_service import CaptureSession
+
+        existing = capture_sessions.get(name)
+        if existing is not None:
+            return existing
+        session = CaptureSession(
+            stream_output_dir / "sessions",
+            name,
+            source,
+            [field.field_id for field in web_config.fields],
+            is_stream=is_stream,
+        )
+        capture_sessions[name] = session
+        return session
+
+    async def capture_shot(request: Any) -> Any:
+        """Keep this frame and what it says.
+
+        Two sources, because two different things own the video. A running
+        stream is already being read by this process, so the reading it has just
+        published is reused: recognising the frame again would put a second
+        thread inside PaddleOCR, which is the collision the stream guard exists
+        to prevent, and would answer slightly differently for the same picture.
+        A file playing in the browser is not being read by anyone until asked,
+        so the posted frame is recognised here.
+        """
+        name = (request.query.get("session") or "").strip()
+        if not name:
+            raise ValueError("session is required")
+        source_time_ms = float(request.query.get("source_time_ms", "0"))
+        if not 0 <= source_time_ms < 86_400_000:
+            raise ValueError("source_time_ms is outside the supported range")
+
+        service = stream_state["service"]
+        if service is not None and service.running:
+            frame = service.last_frame()
+            if frame is None:
+                return web.json_response(
+                    {"error": "The stream has not produced a frame yet"}, status=409
+                )
+            snapshot = service.snapshot()
+            records = [
+                {
+                    "source_time_ms": snapshot.source_time_ms,
+                    "frame_index": snapshot.frame_index,
+                    "field_id": field_id,
+                    "value": item.get("value"),
+                    "raw_text": item.get("raw_text"),
+                    "confidence": item.get("confidence"),
+                    "confirmed": item.get("confirmed"),
+                    "preprocess_variant": item.get("preprocess_variant", ""),
+                    "latency_ms": snapshot.latency_ms,
+                }
+                for field_id, item in snapshot.fields.items()
+            ]
+            session = capture_session_for(name, service.url, is_stream=True)
+            shot = await asyncio.to_thread(
+                session.save, frame, snapshot.source_time_ms, records
+            )
+            return web.json_response(asdict(shot))
+
+        browser_session = app[sessions_key].get(request.query.get("session_id", ""))
+        if browser_session is None:
+            raise web.HTTPNotFound(
+                text='{"error":"Session not found"}', content_type="application/json"
+            )
+        browser_session.last_access = time.monotonic()
+        payload = await request.read()
+        if not payload:
+            raise ValueError("Capture frame body is empty")
+        frame = await asyncio.to_thread(_decode_image, payload)
+        packet = FramePacket(frame, 0, source_time_ms, time.perf_counter())
+        async with app[ocr_lock_key]:
+            recognised, _ = await asyncio.to_thread(
+                browser_session.pipeline.process_frame, packet
+            )
+        session = capture_session_for(name, request.query.get("source", "browser"))
+        shot = await asyncio.to_thread(session.save, frame, source_time_ms, recognised)
+        return web.json_response(asdict(shot))
+
+    async def capture_status(request: Any) -> Any:
+        name = (request.query.get("session") or "").strip()
+        session = capture_sessions.get(name)
+        if session is None:
+            return web.json_response({"session": name, "frames": 0, "open": False})
+        return web.json_response({**session.status(), "open": True})
+
     app.router.add_get("/", index)
     app.router.add_get("/manifest.webmanifest", manifest)
     app.router.add_get("/service-worker.js", service_worker)
@@ -876,6 +968,8 @@ def create_app(
     app.router.add_get("/api/stream/telemetry", stream_telemetry)
     app.router.add_get("/api/stream/frame.jpg", stream_frame)
     app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
+    app.router.add_post("/api/capture/shot", capture_shot)
+    app.router.add_get("/api/capture/status", capture_status)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     app.router.add_static("/assets/", assets, show_index=False)
     app.on_startup.append(start_pump)

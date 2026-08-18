@@ -74,6 +74,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Match the size the checkpoint was trained at",
     )
 
+    capture = commands.add_parser(
+        "capture",
+        help="Record frames and a manifest into a session directory",
+        description=(
+            "The other half of `run`. Nothing is dropped: the decoder waits when "
+            "the writer falls behind, because a missing frame is a hole no later "
+            "processing can fill."
+        ),
+    )
+    capture.add_argument(
+        "--video",
+        required=True,
+        help="Video file, or a stream URL such as rtsp://user:pass@host:554/stream",
+    )
+    capture.add_argument("--config", required=True, type=Path)
+    capture.add_argument(
+        "--session",
+        required=True,
+        type=Path,
+        help="Directory to record into. Must not already contain frames",
+    )
+    capture.add_argument(
+        "--capture-hz",
+        type=float,
+        help="Frames recorded per second of source time. Defaults to the config's ocr_hz",
+    )
+    capture.add_argument("--max-seconds", type=float, help="Stop after this long")
+    capture.add_argument("--max-frames", type=int, help="Stop after this many frames")
+    capture.add_argument(
+        "--format",
+        dest="image_format",
+        choices=("jpeg", "png"),
+        default="jpeg",
+        help=(
+            "jpeg (default) measured identical to png on 2,340 readings while "
+            "capturing 3x faster and 3x smaller. png is lossless if the overlay "
+            "is smaller, dimmer or on a busier background"
+        ),
+    )
+    capture.add_argument("--jpeg-quality", type=int, default=95)
+
+    extract = commands.add_parser(
+        "extract",
+        help="Read telemetry from a captured session",
+        description=(
+            "Every record names the image it was read from, so a value that looks "
+            "wrong can be checked against the picture that produced it."
+        ),
+    )
+    extract.add_argument("--session", required=True, type=Path)
+    extract.add_argument("--config", required=True, type=Path)
+    extract.add_argument("--jsonl", type=Path, default=Path("output/telemetry.jsonl"))
+    extract.add_argument("--csv", type=Path, default=Path("output/telemetry.csv"))
+    extract.add_argument(
+        "--limit", type=int, help="Only read the first N frames, for a quick check"
+    )
+
+    session_info = commands.add_parser("session-info", help="Summarise a captured session")
+    session_info.add_argument("--session", required=True, type=Path)
+
     web = commands.add_parser(
         "web", help="Open the local browser UI for interactive video OCR"
     )
@@ -150,6 +210,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Configuration OK: {len(config.fields)} fields at {config.runtime.ocr_hz:g} Hz")
             return 0
 
+        if args.command == "session-info":
+            from .capture import load_session
+
+            info, records = load_session(args.session)
+            total = sum(item.bytes for item in records)
+            span = (records[-1].source_time_ms - records[0].source_time_ms) if records else 0.0
+            print(
+                json.dumps(
+                    {
+                        **asdict(info),
+                        "frames_on_manifest": len(records),
+                        "megabytes": round(total / 1024**2, 1),
+                        "source_span_seconds": round(span / 1000.0, 2),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+            return 0
+
         from .ocr import create_recognizer
 
         config = load_config(args.config)
@@ -177,6 +257,51 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Validation crops exported; fill expected values in: {manifest}")
             return 0
+        if args.command == "capture":
+            from .capture import capture_session
+
+            if args.max_seconds is not None and args.max_seconds <= 0:
+                parser.error("--max-seconds must be positive")
+            if args.max_frames is not None and args.max_frames <= 0:
+                parser.error("--max-frames must be positive")
+            if is_stream_source(args.video):
+                print(f"Capturing stream: {args.video}")
+                if args.max_seconds is None and args.max_frames is None:
+                    print("Press Ctrl+C to stop.")
+            captured = capture_session(
+                args.video,
+                args.session,
+                config,
+                capture_hz=args.capture_hz,
+                max_seconds=args.max_seconds,
+                max_frames=args.max_frames,
+                image_format=args.image_format,
+                jpeg_quality=args.jpeg_quality,
+                on_progress=_capture_progress,
+            )
+            print()
+            print(json.dumps(asdict(captured), indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "extract":
+            from .extract import extract_session
+
+            if args.limit is not None and args.limit <= 0:
+                parser.error("--limit must be positive")
+            recognizer = create_recognizer(config.runtime)
+            extracted = extract_session(
+                args.session,
+                config,
+                recognizer,
+                args.jsonl,
+                args.csv,
+                limit=args.limit,
+                on_progress=_extract_progress,
+            )
+            print()
+            print(json.dumps(asdict(extracted), indent=2, ensure_ascii=False))
+            return 0
+
         if args.command == "run":
             from .pipeline import TelemetryPipeline
 
@@ -282,6 +407,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 1
+
+
+def _capture_progress(frames: int, written: int) -> None:
+    # Capture is the slow, silent half and can run for minutes; without this
+    # there is no telling a working recording from a stalled one.
+    #
+    # ASCII only. A middle dot here raised UnicodeEncodeError on a Windows
+    # console whose code page cannot encode it, which killed the capture rather
+    # than merely the decoration.
+    print(f"\rcaptured {frames} frames, {written / 1024**2:.0f} MB", end="", flush=True)
+
+
+def _extract_progress(position: int, total: int) -> None:
+    print(f"\rread {position}/{total} frames", end="", flush=True)
 
 
 def _detect_step(sidecar: Any) -> Callable[[Any], None]:

@@ -21,6 +21,10 @@ class TelemetryRecord:
     confirmed: bool
     preprocess_variant: str
     latency_ms: float
+    # The captured frame this reading came from. Empty when the source was read
+    # live rather than from a session: a realtime record has no image to point
+    # at, which is exactly the checkability that capturing first buys.
+    image: str = ""
 
 
 _STOP = object()
@@ -37,6 +41,7 @@ class RecordWriter:
         "confirmed",
         "preprocess_variant",
         "latency_ms",
+        "image",
     ]
 
     def __init__(self, jsonl_path: str | Path, csv_path: str | Path, queue_size: int = 100):

@@ -11,6 +11,10 @@ const ui = {
   streamUrl: $("streamUrl"),
   streamButton: $("streamButton"),
   streamBadge: $("streamBadge"),
+  captureButton: $("captureButton"),
+  captureButtonText: $("captureButtonText"),
+  captureStatus: $("captureStatus"),
+  captureFlash: $("captureFlash"),
   streamBadgeText: $("streamBadgeText"),
   dropState: $("dropState"),
   processingBadge: $("processingBadge"),
@@ -131,6 +135,13 @@ const state = {
   streamClockMs: null,
   streamClockWall: 0,
   streamRenderFrame: null,
+  // Capture: one session per page load unless the operator is holding the
+  // button down, in which case shots keep appending to the same one.
+  captureSession: null,
+  captureInFlight: false,
+  captureCount: 0,
+  captureHolding: false,
+  captureTimer: null,
   detectionWorkerCycleMs: null,
 };
 
@@ -1420,6 +1431,7 @@ async function startStream(url) {
   resetDetectionFrame();
   resetCurrentValues();
   setEngineStatus("ready", `${state.config.model} · stream live`);
+  updateCaptureAvailability();
   startStreamTelemetryPolling();
   startStreamRenderLoop();
 }
@@ -1455,6 +1467,8 @@ function leaveStreamMode() {
   ui.ocrToggle.disabled = !state.file;
   ui.rateSelect.disabled = !state.file;
   if (!state.file) ui.dropState.hidden = false;
+  stopCaptureHold();
+  updateCaptureAvailability();
   drawDetections();
 }
 
@@ -1516,6 +1530,11 @@ function applyStreamTelemetry(payload) {
   // server has already passed and never blocks again.
   if (Number.isFinite(revision)) state.streamRevision = revision;
   state.streamRunning = Boolean(payload.running);
+  // Here rather than in the render loop. requestAnimationFrame does not run in
+  // a tab that is not being composited, which left the capture button disabled
+  // for a stream that was demonstrably working. This poll is driven by the
+  // server and keeps running wherever the tab is.
+  updateCaptureAvailability();
   const sourceTimeMs = Number(payload.source_time_ms);
   if (Number.isFinite(sourceTimeMs)) {
     state.streamClockMs = sourceTimeMs;
@@ -1541,6 +1560,140 @@ function applyStreamTelemetry(payload) {
     records,
   });
   ui.streamBadgeText.textContent = `LIVE · ${Math.round(sourceTimeMs / 1000)}s`;
+}
+
+
+// ---------------------------------------------------------------------------
+// Capture
+//
+// Everything else here is for watching: it answers while the video plays and
+// keeps nothing. This is the one control that writes something permanent -- the
+// frame on screen, and what OCR made of it, in the session format `extract`
+// reads. Pressing it is how a value that matters stops being a thing that went
+// past and becomes a thing that can be checked.
+//
+// Click takes one shot. Holding takes them until released, which is what a
+// moving readout needs; a single click there almost always lands on the frame
+// after the interesting one.
+// ---------------------------------------------------------------------------
+
+const CAPTURE_HOLD_INTERVAL_MS = 400;
+
+function captureSessionName() {
+  if (state.captureSession) return state.captureSession;
+  // Named for when it started rather than what it contains, because what it
+  // contains is not known yet and a timestamp sorts correctly in a file browser.
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "-",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+  ].join("");
+  state.captureSession = `session-${stamp}`;
+  return state.captureSession;
+}
+
+function setCaptureStatus(message, isError = false) {
+  ui.captureStatus.textContent = message;
+  ui.captureStatus.classList.toggle("is-error", Boolean(isError));
+}
+
+function flashCapture() {
+  // Restarting the animation needs the class gone for a frame, or a second shot
+  // taken quickly gives no feedback at all.
+  ui.captureFlash.classList.remove("is-firing");
+  void ui.captureFlash.offsetWidth;
+  ui.captureFlash.classList.add("is-firing");
+}
+
+async function takeCaptureShot() {
+  if (state.captureInFlight) return;
+  if (!sourceReady()) {
+    setCaptureStatus("ยังไม่มีภาพให้เก็บ เลือกวิดีโอหรือเปิดสตรีมก่อน", true);
+    return;
+  }
+  state.captureInFlight = true;
+  try {
+    const params = new URLSearchParams({
+      session: captureSessionName(),
+      source_time_ms: Math.max(0, currentMediaTime()).toFixed(3),
+    });
+    // In stream mode the server already holds the frame and its reading, so
+    // sending one would be both wasteful and a different picture than the one
+    // it read. Only the file path has to post pixels.
+    let options = { method: "POST" };
+    if (!state.streamMode) {
+      params.set("session_id", state.sessionId);
+      params.set("source", state.file ? state.file.name : "browser");
+      const blob = await captureFullFrame();
+      options = {
+        method: "POST",
+        headers: { "Content-Type": "image/jpeg" },
+        body: blob,
+      };
+    }
+    const shot = await jsonFetch(`/api/capture/shot?${params}`, options);
+    state.captureCount += 1;
+    flashCapture();
+    const confirmed = (shot.records || []).filter((item) => item.confirmed).length;
+    setCaptureStatus(
+      `เก็บแล้ว ${state.captureCount} เฟรม · ล่าสุด ${shot.image}`
+      + ` · ${confirmed}/${(shot.records || []).length} ฟิลด์ยืนยัน`
+      + ` · session ${shot.session}`,
+    );
+  } catch (error) {
+    setCaptureStatus(`Capture ไม่สำเร็จ: ${error.message}`, true);
+  } finally {
+    state.captureInFlight = false;
+  }
+}
+
+// The whole frame, not the ROI-only montage the OCR path sends. A capture that
+// kept only the strips it read would be unable to answer the question it exists
+// for, which is what the rest of the picture looked like at that moment.
+function captureFullFrame() {
+  const width = sourceWidth();
+  const height = sourceHeight();
+  ui.canvas.width = width;
+  ui.canvas.height = height;
+  const context = ui.canvas.getContext("2d", { alpha: false });
+  context.drawImage(sourceElement(), 0, 0, width, height);
+  return new Promise((resolve, reject) => {
+    ui.canvas.toBlob(
+      (blob) => blob ? resolve(blob) : reject(new Error("สร้างภาพเฟรมไม่สำเร็จ")),
+      "image/jpeg",
+      0.95,
+    );
+  });
+}
+
+function startCaptureHold() {
+  if (state.captureHolding) return;
+  state.captureHolding = true;
+  ui.captureButton.classList.add("is-recording");
+  ui.captureButtonText.textContent = "Capturing";
+  takeCaptureShot();
+  state.captureTimer = window.setInterval(() => {
+    if (!state.captureHolding) return;
+    takeCaptureShot();
+  }, CAPTURE_HOLD_INTERVAL_MS);
+}
+
+function stopCaptureHold() {
+  if (!state.captureHolding) return;
+  state.captureHolding = false;
+  window.clearInterval(state.captureTimer);
+  state.captureTimer = null;
+  ui.captureButton.classList.remove("is-recording");
+  ui.captureButtonText.textContent = "Capture";
+}
+
+function updateCaptureAvailability() {
+  ui.captureButton.disabled = !sourceReady();
 }
 
 function maybeSubmit(sourceTimeMs, suggestedFrame) {
@@ -1752,6 +1905,22 @@ ui.chooseVideoButton.addEventListener("click", () => ui.videoInput.click());
 document.addEventListener("fullscreenchange", () => drawDetections());
 ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
 ui.streamButton.addEventListener("click", () => toggleStream());
+ui.captureButton.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  startCaptureHold();
+});
+for (const name of ["pointerup", "pointerleave", "pointercancel"]) {
+  ui.captureButton.addEventListener(name, () => stopCaptureHold());
+}
+// A pointer released anywhere else still ends the hold; without this, releasing
+// outside the button leaves it capturing with no visible cause.
+window.addEventListener("pointerup", () => stopCaptureHold());
+ui.captureButton.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    takeCaptureShot();
+  }
+});
 ui.streamUrl.addEventListener("keydown", (event) => {
   if (event.key === "Enter") toggleStream();
 });
@@ -1769,6 +1938,7 @@ ui.video.addEventListener("loadedmetadata", () => {
   ui.durationTime.textContent = formatTime(ui.video.duration);
   ui.fileDetails.textContent = `${formatBytes(state.file.size)} · ${ui.video.videoWidth}×${ui.video.videoHeight} · ${formatTime(ui.video.duration)}`;
   ui.ocrToggle.disabled = false;
+  updateCaptureAvailability();
   ui.rateSelect.disabled = false;
   ui.resetButton.disabled = false;
   drawDetections();
