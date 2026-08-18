@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy this to configs/line.json and fill it in. That file is gitignored. Environment variables TELEMETRY_OCR_LINE_TOKEN and TELEMETRY_OCR_LINE_TO take precedence and never touch the disk.",
+  "_token": "LINE Developers Console -> your Messaging API channel -> Channel access token (long-lived)",
+  "_to": "The user, group or room id to push to. A user id starts with U, a group id with C. It is NOT the LINE display name or the @handle of the Official Account.",
+  "channel_access_token": "",
+  "to": ""
+}

@@ -14,6 +14,14 @@ venv/
 # --- Generated output ---
 output/
 
+# --- Credentials ---
+# A LINE channel access token is a bearer token: anyone holding it can push
+# messages as this Official Account until it is revoked. configs/line.example.json
+# is the template that IS tracked; the filled-in copy must never be.
+configs/line.json
+*.local.json
+.env
+
 # --- Model weights ---
 # Hundreds of megabytes per checkpoint. They live in models/ and runs/*/weights
 # on disk and are listed in configs/paths.yaml, but git never carries them.

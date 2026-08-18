@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,28 @@ _JPEG_QUALITY = 95
 
 
 @dataclass(slots=True)
+class DetectionSummary:
+    """What YOLO had to say about this frame, recorded when it was taken.
+
+    Counted at capture time rather than when something later asks. A count taken
+    on demand would describe whatever the detector happens to be looking at then,
+    which for a shot reviewed minutes afterwards is a different scene entirely.
+
+    `status` separates three things a bare count of zero cannot: no model loaded,
+    a model that has not produced a result for this source yet, and a model that
+    looked and found nothing. They are fixed in completely different ways.
+    """
+
+    status: str
+    counts: dict[str, int] = field(default_factory=dict)
+    total: int = 0
+    # How far behind the captured frame the detection result was. Detection runs
+    # at its own pace, so this is rarely zero, and a large value is the signal
+    # that the counts describe a different moment than the picture.
+    age_ms: float | None = None
+
+
+@dataclass(slots=True)
 class ShotResult:
     session: str
     frame_index: int
@@ -50,6 +72,7 @@ class ShotResult:
     captured_at: str
     bytes: int
     records: list[dict[str, Any]]
+    detections: DetectionSummary = field(default_factory=lambda: DetectionSummary("unknown"))
 
 
 class CaptureSession:
@@ -87,6 +110,7 @@ class CaptureSession:
             config_fields=list(field_ids),
         )
         self.bytes_written = 0
+        self.last_shot: ShotResult | None = None
         self._write_session()
 
     def _resume_index(self) -> int:
@@ -113,6 +137,7 @@ class CaptureSession:
         frame: Any,
         source_time_ms: float,
         records: list[Any],
+        detections: DetectionSummary | None = None,
     ) -> ShotResult:
         import cv2
 
@@ -128,6 +153,7 @@ class CaptureSession:
         relative = f"{FRAME_DIR}/{name}"
         captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
+        summary = detections or DetectionSummary("unknown")
         entry = FrameRecord(
             frame_index=index,
             file=relative,
@@ -141,12 +167,18 @@ class CaptureSession:
         with self._lock:
             self.bytes_written += size
             self.info.frame_count = self._next_index
-            _append_json(self.directory / MANIFEST_NAME, _as_dict(entry))
+            # The manifest carries the counts alongside the frame, so a session
+            # read back later still knows what was in the picture without having
+            # to run the detector over it again.
+            _append_json(
+                self.directory / MANIFEST_NAME,
+                {**_as_dict(entry), "detections": _as_dict(summary)},
+            )
             for item in payload:
                 _append_json(self.directory / "telemetry.jsonl", item)
             self._write_session()
 
-        return ShotResult(
+        shot = ShotResult(
             session=self.name,
             frame_index=index,
             image=relative,
@@ -154,6 +186,60 @@ class CaptureSession:
             captured_at=captured_at,
             bytes=int(size),
             records=payload,
+            detections=summary,
+        )
+        with self._lock:
+            # Remembered so sending it somewhere afterwards does not have to
+            # re-read and re-parse the session to find the frame just taken.
+            self.last_shot = shot
+        return shot
+
+    def shot_at(self, frame_index: int) -> ShotResult | None:
+        """Rebuild an earlier shot from what was written.
+
+        Only the last one is held in memory; anything older is reconstructed
+        from the manifest and the telemetry beside it, which is the same source
+        `extract` reads and therefore cannot drift from it.
+        """
+        import json
+
+        manifest = self.directory / MANIFEST_NAME
+        telemetry = self.directory / "telemetry.jsonl"
+        if not manifest.is_file():
+            return None
+        entry = None
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            candidate = json.loads(line)
+            if int(candidate.get("frame_index", -1)) == frame_index:
+                entry = candidate
+                break
+        if entry is None:
+            return None
+        records = []
+        if telemetry.is_file():
+            for line in telemetry.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if record.get("image") == entry["file"]:
+                    records.append(record)
+        raw = entry.get("detections") or {}
+        return ShotResult(
+            session=self.name,
+            frame_index=int(entry["frame_index"]),
+            image=str(entry["file"]),
+            source_time_ms=float(entry["source_time_ms"]),
+            captured_at=str(entry["captured_at"]),
+            bytes=int(entry["bytes"]),
+            records=records,
+            detections=DetectionSummary(
+                status=str(raw.get("status", "unknown")),
+                counts=dict(raw.get("counts") or {}),
+                total=int(raw.get("total", 0)),
+                age_ms=raw.get("age_ms"),
+            ),
         )
 
     def status(self) -> dict[str, Any]:

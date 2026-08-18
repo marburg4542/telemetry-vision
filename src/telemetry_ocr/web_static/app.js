@@ -15,6 +15,8 @@ const ui = {
   captureButtonText: $("captureButtonText"),
   captureStatus: $("captureStatus"),
   captureFlash: $("captureFlash"),
+  lineSendButton: $("lineSendButton"),
+  lineSendButtonText: $("lineSendButtonText"),
   streamBadgeText: $("streamBadgeText"),
   dropState: $("dropState"),
   processingBadge: $("processingBadge"),
@@ -142,6 +144,8 @@ const state = {
   captureCount: 0,
   captureHolding: false,
   captureTimer: null,
+  lineConfigured: false,
+  lineSending: false,
   detectionWorkerCycleMs: null,
 };
 
@@ -491,6 +495,7 @@ async function initialize() {
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
     initializeDetectionModel();
     adoptRunningStream();
+    checkLineConfigured();
   } catch (error) {
     setEngineStatus("error", "เชื่อมต่อ OCR ไม่สำเร็จ");
     // The page is a shell the service worker can serve on its own, so reaching
@@ -1663,6 +1668,7 @@ async function takeCaptureShot() {
     }
     const shot = await jsonFetch(`/api/capture/shot?${params}`, options);
     state.captureCount += 1;
+    updateLineAvailability();
     flashCapture();
     const confirmed = (shot.records || []).filter((item) => item.confirmed).length;
     setCaptureStatus(
@@ -1719,6 +1725,60 @@ function stopCaptureHold() {
 
 function updateCaptureAvailability() {
   ui.captureButton.disabled = !sourceReady();
+  updateLineAvailability();
+}
+
+// ---------------------------------------------------------------------------
+// Sending to LINE
+//
+// Separate from Capture on purpose. Capture can be held down and takes a frame
+// every 400 ms; tying a push to it would spend the account's monthly message
+// quota by the handful. This is pressed once, deliberately, when a shot is worth
+// telling someone about.
+// ---------------------------------------------------------------------------
+
+function updateLineAvailability() {
+  // Needs somewhere to send to and something to send.
+  ui.lineSendButton.disabled =
+    state.lineSending || !state.lineConfigured || state.captureCount === 0;
+}
+
+async function checkLineConfigured() {
+  try {
+    const status = await jsonFetch("/api/line/status");
+    state.lineConfigured = Boolean(status.configured);
+    ui.lineSendButton.title = status.configured
+      ? `ส่งเฟรมล่าสุดไปยัง ${status.to}`
+      : status.how || "ยังไม่ได้ตั้งค่า LINE";
+  } catch {
+    // Not configured and not reachable look the same from here, and neither is
+    // a reason to hold up the rest of the page.
+    state.lineConfigured = false;
+  }
+  updateLineAvailability();
+}
+
+async function sendLatestToLine() {
+  if (state.lineSending || !state.captureSession) return;
+  state.lineSending = true;
+  ui.lineSendButtonText.textContent = "กำลังส่ง...";
+  updateLineAvailability();
+  try {
+    const params = new URLSearchParams({ session: state.captureSession });
+    const result = await jsonFetch(`/api/line/send?${params}`, { method: "POST" });
+    setCaptureStatus(
+      `ส่งเข้า LINE แล้ว · เฟรม ${result.frame_index} · ${result.characters} ตัวอักษร`,
+    );
+  } catch (error) {
+    // The server passes LINE's own wording through, because a wrong token, a
+    // wrong destination and an exhausted quota are fixed in three different
+    // places and "ส่งไม่สำเร็จ" would hide which one happened.
+    setCaptureStatus(`ส่งเข้า LINE ไม่สำเร็จ: ${error.message}`, true);
+  } finally {
+    state.lineSending = false;
+    ui.lineSendButtonText.textContent = "ส่งเข้า LINE";
+    updateLineAvailability();
+  }
 }
 
 function maybeSubmit(sourceTimeMs, suggestedFrame) {
@@ -1940,6 +2000,7 @@ for (const name of ["pointerup", "pointerleave", "pointercancel"]) {
 // A pointer released anywhere else still ends the hold; without this, releasing
 // outside the button leaves it capturing with no visible cause.
 window.addEventListener("pointerup", () => stopCaptureHold());
+ui.lineSendButton.addEventListener("click", () => sendLatestToLine());
 ui.captureButton.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();

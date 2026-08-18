@@ -92,6 +92,10 @@ class FrameRecord:
     width: int
     height: int
     bytes: int
+    # Present when the shot was taken through the web UI with a detector loaded:
+    # what YOLO counted in this frame, recorded at the time so the numbers belong
+    # to the picture. A whole-span capture from the CLI leaves it empty.
+    detections: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -310,6 +314,19 @@ def _write_manifest(
             handle.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
 
 
+def _known_fields(kind: type, data: dict[str, Any]) -> dict[str, Any]:
+    """Drop keys this version does not know about.
+
+    A session written by a later build carries fields this one has never heard
+    of, and refusing to open it over an unknown key would make recordings
+    unreadable by exactly the tooling meant to outlive them.
+    """
+    from dataclasses import fields
+
+    allowed = {item.name for item in fields(kind)}
+    return {key: value for key, value in data.items() if key in allowed}
+
+
 def load_session(session_dir: str | Path) -> tuple[SessionInfo, list[FrameRecord]]:
     """Read back what capture_session wrote."""
     session_dir = Path(session_dir)
@@ -320,11 +337,11 @@ def load_session(session_dir: str | Path) -> tuple[SessionInfo, list[FrameRecord
             f"{session_dir} is not a capture session: expected {SESSION_NAME} and "
             f"{MANIFEST_NAME}"
         )
-    info = SessionInfo(**json.loads(session_file.read_text(encoding="utf-8")))
+    info = SessionInfo(**_known_fields(SessionInfo, json.loads(session_file.read_text("utf-8"))))
     records = []
     for line in manifest.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            records.append(FrameRecord(**json.loads(line)))
+            records.append(FrameRecord(**_known_fields(FrameRecord, json.loads(line))))
     # Frames are read back in capture order because temporal voting depends on
     # it; a manifest reordered by hand would silently change the readings.
     records.sort(key=lambda item: item.frame_index)

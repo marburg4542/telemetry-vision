@@ -251,6 +251,26 @@ h3 { font-size: 18px; }
 }
 .capture-button.is-recording .capture-dot { animation: pulse 1s ease-in-out infinite; }
 
+/* Quieter than Capture on purpose. Capture is pressed while watching and has to
+   be findable without looking; this one is pressed deliberately, afterwards. */
+.line-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: 6px;
+  border: 1px solid rgba(6,199,85,.45);
+  background: rgba(6,199,85,.1);
+  color: #4fd882;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  cursor: pointer;
+}
+.line-button:hover:not(:disabled) { background: rgba(6,199,85,.2); }
+.line-button:disabled { opacity: .4; cursor: not-allowed; }
+
 /* One frame of white over the video, so a shot is confirmed where the operator
    is already looking instead of in a panel they would have to glance away to. */
 .capture-flash {

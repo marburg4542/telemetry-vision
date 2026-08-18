@@ -50,6 +50,11 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 SESSION_TTL_SECONDS = 3600.0
 
+# Smallest gap between two LINE pushes. Every push spends one message from the
+# account's monthly quota, so a wedged client or a held button must not be able
+# to drain it; three seconds is far below anything a person does deliberately.
+_LINE_MIN_INTERVAL_S = 3.0
+
 # How often the supervisor re-checks a configured stream. Long enough that an
 # unreachable camera costs one connection attempt every half minute rather than
 # a tight loop, short enough that a camera coming up is picked up promptly.
@@ -229,6 +234,9 @@ def create_app(
     # pressing the button repeatedly appends to one recording rather than
     # reopening a directory and re-reading its numbering every time.
     capture_sessions: dict[str, Any] = {}
+    # When the last LINE push went out, so the rate limit survives across
+    # requests without being stored on the frozen Application.
+    line_state: dict[str, float] = {"last_sent": 0.0}
     stream_state: dict[str, Any] = {
         "service": None,
         "ready": asyncio.Event(),
@@ -881,6 +889,44 @@ def create_app(
             pass
         return response
 
+    def detection_summary_now(source_time_ms: float) -> Any:
+        """Count what the detector last saw, for the frame being captured.
+
+        Read here rather than when something later asks for it, so the counts
+        belong to the picture. Detection runs at its own pace and never lands
+        exactly on the captured frame, so the gap is recorded too -- a large one
+        means these numbers describe a visibly different moment.
+        """
+        from collections import Counter
+
+        from .capture_service import DetectionSummary
+
+        state = app[detection_state_key]
+        try:
+            status = state.worker.status()
+            if status.get("status") != "ready":
+                return DetectionSummary("no_model")
+            latest = state.worker.latest()
+        except Exception:
+            # A worker mid-restart must not cost the operator the capture; the
+            # frame and its telemetry matter more than the counts.
+            _LOG.exception("Could not read detections for a capture")
+            return DetectionSummary("unknown")
+        if not latest:
+            return DetectionSummary("no_result")
+        counts = Counter(
+            str(item.get("label", "?")) for item in (latest.get("detections") or [])
+        )
+        result_time = latest.get("source_time_ms")
+        age = (
+            abs(source_time_ms - float(result_time))
+            if isinstance(result_time, (int, float))
+            else None
+        )
+        return DetectionSummary(
+            status="ok", counts=dict(counts), total=sum(counts.values()), age_ms=age
+        )
+
     def capture_session_for(name: str, source: str, is_stream: bool = False) -> Any:
         from .capture_service import CaptureSession
 
@@ -939,7 +985,11 @@ def create_app(
             ]
             session = capture_session_for(name, service.url, is_stream=True)
             shot = await asyncio.to_thread(
-                session.save, frame, snapshot.source_time_ms, records
+                session.save,
+                frame,
+                snapshot.source_time_ms,
+                records,
+                detection_summary_now(snapshot.source_time_ms),
             )
             return web.json_response(asdict(shot))
 
@@ -959,8 +1009,92 @@ def create_app(
                 browser_session.pipeline.process_frame, packet
             )
         session = capture_session_for(name, request.query.get("source", "browser"))
-        shot = await asyncio.to_thread(session.save, frame, source_time_ms, recognised)
+        shot = await asyncio.to_thread(
+            session.save,
+            frame,
+            source_time_ms,
+            recognised,
+            detection_summary_now(source_time_ms),
+        )
         return web.json_response(asdict(shot))
+
+    async def line_status(_: Any) -> Any:
+        from .line_client import load_line_config
+
+        config = load_line_config()
+        if config is None:
+            return web.json_response(
+                {
+                    "configured": False,
+                    "how": (
+                        "ตั้ง TELEMETRY_OCR_LINE_TOKEN และ TELEMETRY_OCR_LINE_TO "
+                        "หรือสร้าง configs/line.json"
+                    ),
+                }
+            )
+        # The destination is masked and the token is never included at all.
+        return web.json_response({"configured": True, "to": config.masked_to})
+
+    async def line_send(request: Any) -> Any:
+        """Push one captured shot to LINE as text.
+
+        Rate limited on this side rather than only by disabling the button. The
+        endpoint can be called directly, and every call spends a message from the
+        account's monthly quota, so a stuck caller must not be able to drain it.
+        """
+        from .line_client import format_capture_message, load_line_config, push_text
+
+        config = load_line_config()
+        if config is None:
+            raise ValueError(
+                "ยังไม่ได้ตั้งค่า LINE: ต้องมี TELEMETRY_OCR_LINE_TOKEN และ "
+                "TELEMETRY_OCR_LINE_TO หรือไฟล์ configs/line.json"
+            )
+
+        name = (request.query.get("session") or "").strip()
+        if not name:
+            raise ValueError("session is required")
+        session = capture_sessions.get(name)
+        if session is None:
+            raise web.HTTPNotFound(
+                text='{"error":"No such capture session"}', content_type="application/json"
+            )
+
+        raw_index = request.query.get("frame_index")
+        if raw_index is None or raw_index == "":
+            shot = session.last_shot
+        else:
+            shot = await asyncio.to_thread(
+                session.shot_at, _non_negative_int(raw_index, "frame_index")
+            )
+        if shot is None:
+            return web.json_response(
+                {"error": "ยังไม่มีเฟรมที่ capture ไว้ใน session นี้"}, status=409
+            )
+
+        now = time.monotonic()
+        waited = now - float(line_state["last_sent"])
+        if waited < _LINE_MIN_INTERVAL_S:
+            return web.json_response(
+                {
+                    "error": (
+                        f"ส่งถี่เกินไป รออีก {_LINE_MIN_INTERVAL_S - waited:.1f} วินาที"
+                    ),
+                    "retry_after_s": round(_LINE_MIN_INTERVAL_S - waited, 1),
+                },
+                status=429,
+            )
+        line_state["last_sent"] = now
+
+        text = format_capture_message(shot, directory=session.directory)
+        result = await push_text(config, text)
+        payload = {**result, "session": name, "frame_index": shot.frame_index, "text": text}
+        if not result["ok"]:
+            # Released so a failed send is not also a lockout; the operator will
+            # want to retry immediately once they have fixed the cause.
+            line_state["last_sent"] = 0.0
+            return web.json_response(payload, status=502)
+        return web.json_response(payload)
 
     async def capture_status(request: Any) -> Any:
         name = (request.query.get("session") or "").strip()
@@ -992,6 +1126,8 @@ def create_app(
     app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
+    app.router.add_get("/api/line/status", line_status)
+    app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     app.router.add_static("/assets/", assets, show_index=False)
     app.on_startup.append(start_pump)
