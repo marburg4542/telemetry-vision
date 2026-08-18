@@ -136,6 +136,16 @@ h3 { font-size: 18px; }
 }
 .video-stage.is-dragging { border-color: var(--accent); box-shadow: inset 0 0 50px rgba(168,240,75,.1); }
 .video-stage video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* Identical geometry to the video, because the overlay's letterbox arithmetic
+   is written once and has to hold for whichever of the two is on screen. */
+.video-stage img#streamImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.video-stage img#streamImage[hidden] { display: none; }
 .detection-overlay { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
 .drop-state {
   position: absolute;
@@ -181,6 +191,57 @@ h3 { font-size: 18px; }
   letter-spacing: .12em;
 }
 .processing-badge[hidden] { display: none; }
+/* Sits under the OCR badge so both can show at once: a live stream is running
+   OCR too, and seeing only one of them would be misleading. */
+.stream-badge {
+  position: absolute;
+  z-index: 4;
+  top: 48px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  color: #ff6b6b;
+  background: rgba(5,10,8,.82);
+  border: 1px solid rgba(255,107,107,.35);
+  backdrop-filter: blur(8px);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.stream-badge[hidden] { display: none; }
+.stream-badge span:first-child {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff6b6b;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.source-picker { display: flex; align-items: center; gap: 8px; }
+.stream-field { display: flex; }
+.stream-field input {
+  width: 210px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+}
+.stream-field input:focus { outline: none; border-color: var(--accent); }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .processing-badge span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 
 /* The file summary and the OCR controls used to be two stacked rows plus a

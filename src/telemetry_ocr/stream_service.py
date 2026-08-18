@@ -203,6 +203,10 @@ class StreamService:
                 "raw_text": record.raw_text,
                 "confidence": record.confidence,
                 "confirmed": record.confirmed,
+                # Carried so the stream renders through the same row code as a
+                # file, rather than a near-copy that drifts from it.
+                "preprocess_variant": record.preprocess_variant,
+                "field_id": record.field_id,
             }
             for record in records
         }
