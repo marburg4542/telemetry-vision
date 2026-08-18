@@ -272,10 +272,10 @@ Decoder จะเดินตาม source timestamp ของไฟล์ แ�
 `udp://`, `srt://` ฯลฯ) ไม่ต้องบอกระบบเอง:
 
 ```powershell
-.\.venv-cuda\Scripts	elemetry-ocr.exe run `
+.\.venv-cuda\Scripts\telemetry-ocr.exe run `
   --video rtsp://user:pass@192.168.1.50:554/stream1 `
-  --config configsoi_calibrated_cuda.yaml `
-  --jsonl output	elemetry.jsonl --csv output	elemetry.csv
+  --config configs\roi_calibrated_cuda.yaml `
+  --jsonl output\telemetry.jsonl --csv output\telemetry.csv
 ```
 
 กด Ctrl+C เพื่อหยุด ซึ่งถือเป็นการจบปกติ — summary ยังถูกพิมพ์ออกมา หรือใช้
@@ -305,9 +305,9 @@ summary จะรายงาน `reconnects` และ `decode_failures` เพ
 ### รัน YOLO บนเฟรมเดียวกันพร้อมกัน
 
 ```powershell
-.\.venv-cuda\Scripts	elemetry-ocr.exe run `
+.\.venv-cuda\Scripts\telemetry-ocr.exe run `
   --video rtsp://user:pass@192.168.1.50:554/stream1 `
-  --config configsoi_calibrated_cuda.yaml `
+  --config configs\roi_calibrated_cuda.yaml `
   --detect-model best50 --detections output\detections.jsonl
 ```
 
@@ -341,6 +341,46 @@ Scheduled Task นี้เปิดเฉพาะ standalone OCR web เท่
 
 Service worker เก็บเฉพาะหน้าแอปและ static assets เพื่อให้ PWA เปิดหน้าจอได้เร็ว แต่การอ่าน OCR
 ยังต้องมี local server ทำงานอยู่ เพราะโมเดล PaddleOCR ประมวลผลใน Python บนเครื่อง
+
+### ดูสตรีมใน PWA
+
+เบราว์เซอร์เปิด RTSP ไม่ได้ ดังนั้นในโหมดสตรีม **หน้าที่จะสลับกัน**: server เป็นคนถอดภาพ
+และรัน OCR ส่วนหน้าเว็บกลายเป็นผู้ชมผลลัพธ์ที่ตัวเองไม่ได้ผลิต
+
+1. เปิด <http://127.0.0.1:8765>
+2. ใส่ URL ในช่องบนซ้าย แล้วกด **เปิดสตรีม**
+3. ภาพจะขึ้นทันที พร้อม telemetry ทางขวาแบบเดียวกับตอนเล่นไฟล์
+
+ภาพถูกส่งเป็น **MJPEG** เข้า `<img>` โดยตรง ทำให้หน้าเว็บไม่ต้อง poll ภาพเลย — หนึ่ง
+request ต่อหนึ่งสตรีม ไม่ใช่หนึ่ง request ต่อหนึ่งเฟรม ส่วน telemetry ใช้ long poll
+ที่รอบน event จริง วัดจากเบราว์เซอร์ได้ 1 request ต่อ 1 revision พอดี
+
+**Object detection ใช้เส้นทางเดิมทุกอย่าง** หน้าเว็บจับภาพจาก `<img>` แล้วส่งเข้า endpoint
+เดิมที่โหมดไฟล์ใช้อยู่ YOLO จึงทำงานกับสตรีมผ่านโค้ดที่มีเทสต์อยู่แล้ว
+
+ข้อจำกัดที่ตั้งใจ: **สตรีมที่กำลังรันเป็นเจ้าของ OCR** ถ้าเปิดอีกแท็บแล้วส่งเฟรมจากไฟล์
+จะได้ 409 เพราะทั้งเครื่องมี PaddleOCR ตัวเดียว และสตรีมเรียกมันจาก thread ของตัวเอง
+
+telemetry ยังถูกเขียนลง `output/stream-telemetry.jsonl` และ `.csv` เสมอ — หน้าเว็บเป็น
+ผู้ชม ไม่ใช่ตัวบันทึก
+
+### ให้เปิดสตรีมเองตอน login
+
+ใส่ URL ลงใน [configs/stream-url.txt](configs/stream-url.txt) บรรทัดเดียว (บรรทัดที่ขึ้นต้น
+ด้วย `#` ถูกข้าม) จากนั้น scheduled task จะเปิดกล้องให้เองตอน login — ไม่ต้องเปิดเบราว์เซอร์
+ไม่ต้องพิมพ์คำสั่ง
+
+```
+rtsp://user:password@192.168.1.50:554/stream1
+```
+
+ระบบจะ**ลองใหม่ทุก 30 วินาที**ตราบใดที่ยังต่อไม่ได้ เพราะกล้องมักยังไม่พร้อมตอน Windows
+login พอดี และสตรีมอาจหลุดนานกว่า backoff ของ decoder เอง หากกด **หยุดสตรีม** ใน UI
+ตัว supervisor จะถูกยกเลิกด้วย — หยุดแล้วคือหยุด ไม่ใช่กลับมาเองใน 30 วินาที
+
+ถ้าไม่ได้ตั้งค่าไฟล์นี้ server จะทำงานเหมือนเดิมทุกประการ
+
+ดู log ได้ที่ `output/logs/ocr-web-autostart.log` ซึ่งบันทึกว่าเปิดสตรีมไหนไว้
 
 ### เปิด server เองโดยไม่ใช้ auto-start
 
