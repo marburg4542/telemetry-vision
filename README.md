@@ -481,20 +481,35 @@ SENS  EO 1.0xFOV66.4°   IR 1.0x?
 
 #### ตั้งค่า
 
-ต้องมี **LINE Official Account + Messaging API channel** (LINE Notify ปิดบริการไปแล้ว
-เมื่อ มี.ค. 2025 จึงเหลือทางนี้ทางเดียว)
+ต้องมี **LINE Official Account** ที่เปิด Messaging API แล้ว (LINE Notify ปิดบริการไปเมื่อ
+มี.ค. 2025 จึงเหลือทางนี้ทางเดียว)
+
+**ลำดับการสร้างเปลี่ยนไปเมื่อ 4 ก.ย. 2024** — สร้าง Messaging API channel จาก LINE
+Developers Console ตรงๆ **ไม่ได้อีกแล้ว** ต้องเริ่มจาก Official Account:
+
+1. สร้าง LINE Official Account ที่ <https://manager.line.biz>
+2. ใน **LINE Official Account Manager** → Settings → **Messaging API** → เปิดใช้งาน
+   (ขั้นนี้เองที่ทำให้ channel ถูกสร้างขึ้น)
+3. channel จะไปโผล่ใน <https://developers.line.biz/console> — เข้าไปที่
+   **Messaging API** tab → **Channel access token (long-lived)** → Issue
+4. **Basic settings** tab → **Your user ID** (ขึ้นต้นด้วย `U`) คือค่า `to` สำหรับส่งหาตัวเอง
+5. **เพิ่ม OA เป็นเพื่อน** ด้วย QR ใน Messaging API tab — push ไปยัง user ที่ยังไม่ได้เพิ่ม
+   เป็นเพื่อนจะไม่ผ่าน
 
 ```powershell
 $env:TELEMETRY_OCR_LINE_TOKEN = "<channel access token>"
-$env:TELEMETRY_OCR_LINE_TO    = "<user/group id ที่ขึ้นต้นด้วย U หรือ C>"
+$env:TELEMETRY_OCR_LINE_TO    = "<user id ที่ขึ้นต้นด้วย U>"
 ```
 
 หรือคัดลอก [configs/line.example.json](configs/line.example.json) เป็น `configs/line.json`
 แล้วกรอกค่า — **ไฟล์นี้อยู่ใน .gitignore** เพราะ channel access token เป็น bearer token
 ใครถือก็ส่งข้อความในนาม OA นี้ได้จนกว่าจะ revoke ค่าจาก environment มาก่อนไฟล์เสมอ
-เพราะไม่ต้องแตะดิสก์
+เพราะไม่ต้องแตะดิสก์ แต่ไฟล์สะดวกกว่าตรงที่ **ไม่ต้อง restart server** — ถูกอ่านใหม่ทุกครั้ง
+ที่กดส่ง ขณะที่ environment variable ต้อง restart scheduled task ก่อนถึงจะเห็น
 
-`to` **ไม่ใช่** ชื่อที่แสดงหรือ @handle ของ OA แต่เป็น user/group id ที่ได้จาก webhook
+`to` **ไม่ใช่** ชื่อที่แสดงหรือ @handle ของ OA ถ้าจะส่งเข้ากลุ่มต้องใช้ group id (`C...`)
+ซึ่งได้จาก webhook เท่านั้น และ webhook ต้องมี public HTTPS ซึ่งเครื่องนี้ยังไม่มี —
+ส่งหาตัวเองใช้ user id จาก Basic settings ได้เลย
 
 #### ที่ควรรู้
 
