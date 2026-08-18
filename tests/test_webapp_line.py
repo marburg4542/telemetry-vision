@@ -118,6 +118,17 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
 
+        # Point the loader's file fallback somewhere that does not exist. Without
+        # this the suite reads whatever configs/line.json the developer happens to
+        # have, so the "not configured" cases passed on a machine with no LINE
+        # set up and failed on one with it -- and worse, a real token would have
+        # been loaded into a test run.
+        path_patch = mock.patch(
+            "telemetry_ocr.line_client.DEFAULT_CONFIG_PATH", self.root / "absent-line.json"
+        )
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
+
         class FakeRecognizer:
             def recognize(self, images: Any) -> Any:
                 return [OCRResult("128", 0.99) for _ in images]

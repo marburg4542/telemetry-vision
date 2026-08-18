@@ -1055,6 +1055,12 @@ def create_app(
         if not name:
             raise ValueError("session is required")
         session = capture_sessions.get(name)
+        if session is None and (stream_output_dir / "sessions" / name).is_dir():
+            # Reopened from disk. Sessions are only held in memory for the life
+            # of the process, so a restart -- or simply capturing yesterday --
+            # would otherwise make an existing recording unsendable, which is
+            # not something the operator can see any reason for.
+            session = capture_session_for(name, "reopened")
         if session is None:
             raise web.HTTPNotFound(
                 text='{"error":"No such capture session"}', content_type="application/json"
@@ -1062,7 +1068,11 @@ def create_app(
 
         raw_index = request.query.get("frame_index")
         if raw_index is None or raw_index == "":
-            shot = session.last_shot
+            # A reopened session has taken no shots this run, so fall back to the
+            # last frame the manifest knows about.
+            shot = session.last_shot or await asyncio.to_thread(
+                session.shot_at, session.frame_count - 1
+            )
         else:
             shot = await asyncio.to_thread(
                 session.shot_at, _non_negative_int(raw_index, "frame_index")
