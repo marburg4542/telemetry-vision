@@ -57,6 +57,7 @@ def create_app(
     *,
     static_dir: str | Path | None = None,
     max_sessions: int = 4,
+    stream_output_dir: str | Path = "output",
     allowed_origins: Iterable[str] = (),
     allowed_hosts: Iterable[str] = (),
     detection_worker_factory: Callable[[], DetectionWorker] | None = None,
@@ -169,6 +170,7 @@ def create_app(
                 {"error": f"OCR request failed: {type(exc).__name__}"}, status=500
             )
 
+    stream_output_dir = Path(stream_output_dir)
     model_upload_limit = 256 * 1024**2
     detection_frame_limit = 8 * 1024**2
     sessions_key = web.AppKey("sessions", dict)
@@ -195,6 +197,15 @@ def create_app(
         # it in app state warns on every assignment and is slated to become
         # an error.
         "task": None,
+    }
+    # The server-side stream, when one is running. `ready` follows the same
+    # replace-on-notify idiom as the pump above, for the same reason: it is set
+    # from the service's own threads by way of the loop, and replacing it wakes
+    # every waiter exactly once with no window between a set and a clear.
+    stream_state: dict[str, Any] = {
+        "service": None,
+        "ready": asyncio.Event(),
+        "loop": None,
     }
     app = web.Application(
         client_max_size=model_upload_limit,
@@ -303,6 +314,21 @@ def create_app(
         return web.json_response({"reset": True})
 
     async def recognize_frame(request: Any) -> Any:
+        # One recognizer, one process. The stream service calls it from its own
+        # thread, outside this loop's lock, so letting a second tab post frames
+        # at the same time would mean two threads inside PaddleOCR at once.
+        service = stream_state["service"]
+        if service is not None and service.running:
+            return web.json_response(
+                {
+                    "error": (
+                        "A live stream is using OCR. Stop the stream to run OCR "
+                        "on a file in this tab."
+                    ),
+                    "stream": service.status(),
+                },
+                status=409,
+            )
         session = get_session(request)
         source_time_ms = float(request.query.get("source_time_ms", "nan"))
         frame_index = int(request.query.get("frame_index", "-1"))
@@ -589,8 +615,17 @@ def create_app(
 
     async def start_pump(_: Any) -> None:
         pump_state["task"] = asyncio.create_task(pump_detection_results(None))
+        # Captured here so the stream service, which lives on its own threads,
+        # has a loop to hand its notifications back to.
+        stream_state["loop"] = asyncio.get_running_loop()
 
     async def cleanup(_: Any) -> None:
+        service = stream_state["service"]
+        if service is not None:
+            # First, so the camera is released and the OCR thread is idle before
+            # anything it shares is torn down underneath it.
+            await asyncio.to_thread(service.stop)
+            stream_state["ready"].set()
         pump = pump_state["task"]
         if pump is not None:
             pump.cancel()
@@ -605,6 +640,154 @@ def create_app(
             # Without the finally a failing stop() stranded the uploaded
             # checkpoint — up to 256 MB — and its directory for good.
             state.temp_dir.cleanup()
+
+    def wake_stream_waiters() -> None:
+        stream_state["ready"].set()
+        stream_state["ready"] = asyncio.Event()
+
+    def notify_stream() -> None:
+        """Called from the service's threads, so it may not touch the loop."""
+        loop = stream_state["loop"]
+        if loop is None:
+            return
+        with suppress(RuntimeError):
+            loop.call_soon_threadsafe(wake_stream_waiters)
+
+    def current_stream() -> Any:
+        service = stream_state["service"]
+        if service is None:
+            raise web.HTTPNotFound(text="No stream has been started")
+        return service
+
+    async def stream_start(request: Any) -> Any:
+        from .stream_service import StreamService
+
+        body = await request.json()
+        url = str(body.get("url", "")).strip()
+        if not url:
+            raise ValueError("A stream URL is required")
+        existing = stream_state["service"]
+        if existing is not None and existing.running:
+            raise ValueError(
+                "A stream is already running. Stop it before starting another: "
+                "one camera at a time, since they share this process's OCR."
+            )
+        if existing is not None:
+            # A finished service is not restartable, and leaving it in place
+            # would report the previous run's error against the new URL.
+            await asyncio.to_thread(existing.stop)
+        service = StreamService(
+            web_config,
+            recognizer,
+            url,
+            jsonl_path=stream_output_dir / "stream-telemetry.jsonl",
+            csv_path=stream_output_dir / "stream-telemetry.csv",
+            on_update=notify_stream,
+        )
+        stream_state["service"] = service
+        service.start()
+        return web.json_response({"started": True, "status": service.status()})
+
+    async def stream_stop(_: Any) -> Any:
+        service = stream_state["service"]
+        if service is None:
+            return web.json_response({"stopped": False, "reason": "no stream"})
+        # stop() waits on a decoder that may be blocked on a silent camera until
+        # its read timeout expires, so it cannot run on the loop.
+        await asyncio.to_thread(service.stop)
+        wake_stream_waiters()
+        return web.json_response({"stopped": True, "status": service.status()})
+
+    async def stream_status(_: Any) -> Any:
+        service = stream_state["service"]
+        if service is None:
+            return web.json_response({"running": False, "url": None, "error": None})
+        return web.json_response(service.status())
+
+    async def stream_telemetry(request: Any) -> Any:
+        service = current_stream()
+        after_revision = _non_negative_int(
+            request.query.get("after_revision", "0"), "after_revision"
+        )
+        # Longer than the detection cap because this waits on an event rather
+        # than spinning: an idle stream should cost one held connection, not a
+        # poll every second.
+        wait_ms = min(_non_negative_int(request.query.get("wait_ms", "0"), "wait_ms"), 5000)
+        if wait_ms:
+            deadline = time.monotonic() + wait_ms / 1000.0
+            while service.snapshot().revision <= after_revision and service.running:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready = stream_state["ready"]
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(ready.wait(), remaining)
+        snapshot = service.snapshot()
+        return web.json_response(
+            {
+                "running": service.running,
+                "revision": snapshot.revision,
+                "source_time_ms": snapshot.source_time_ms,
+                "frame_index": snapshot.frame_index,
+                "latency_ms": snapshot.latency_ms,
+                "fields": snapshot.fields,
+                "error": service.status()["error"],
+            }
+        )
+
+    async def stream_frame(_: Any) -> Any:
+        service = current_stream()
+        payload, revision = service.preview()
+        if payload is None:
+            # 202: the stream exists but has not produced a picture yet, which
+            # is different from there being no stream at all.
+            return web.json_response({"error": "No frame yet"}, status=202)
+        return web.Response(
+            body=payload,
+            content_type="image/jpeg",
+            headers={"Cache-Control": "no-store", "X-Stream-Revision": str(revision)},
+        )
+
+    async def stream_mjpeg(request: Any) -> Any:
+        """The preview as one long-lived response the browser renders natively.
+
+        An <img> pointed at this needs no polling loop, no canvas and no
+        JavaScript to stay current, which is what keeps the request rate at one
+        per stream instead of one per frame -- the failure this codebase has
+        already been bitten by once.
+        """
+        service = current_stream()
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+                "Cache-Control": "no-store",
+            }
+        )
+        await response.prepare(request)
+        sent_revision = 0
+        try:
+            while True:
+                service = stream_state["service"]
+                if service is None or not service.running:
+                    break
+                payload, revision = service.preview()
+                if payload is None or revision <= sent_revision:
+                    ready = stream_state["ready"]
+                    with suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(ready.wait(), 1.0)
+                    continue
+                sent_revision = revision
+                await response.write(
+                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(payload)).encode("ascii")
+                    + b"\r\n\r\n"
+                    + payload
+                    + b"\r\n"
+                )
+        except (ConnectionResetError, ConnectionAbortedError):
+            # The viewer closed the tab. Normal, and not worth a stack trace.
+            pass
+        return response
 
     app.router.add_get("/", index)
     app.router.add_get("/manifest.webmanifest", manifest)
@@ -621,6 +804,12 @@ def create_app(
     app.router.add_post("/api/detection/reset", reset_detection)
     app.router.add_post("/api/detection/frame", detect_frame)
     app.router.add_get("/api/detection/result", latest_detection_result)
+    app.router.add_post("/api/stream/start", stream_start)
+    app.router.add_post("/api/stream/stop", stream_stop)
+    app.router.add_get("/api/stream/status", stream_status)
+    app.router.add_get("/api/stream/telemetry", stream_telemetry)
+    app.router.add_get("/api/stream/frame.jpg", stream_frame)
+    app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     app.router.add_static("/assets/", assets, show_index=False)
     app.on_startup.append(start_pump)
