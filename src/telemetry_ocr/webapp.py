@@ -50,6 +50,11 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 SESSION_TTL_SECONDS = 3600.0
 
+# How often the supervisor re-checks a configured stream. Long enough that an
+# unreachable camera costs one connection attempt every half minute rather than
+# a tight loop, short enough that a camera coming up is picked up promptly.
+_STREAM_SUPERVISOR_INTERVAL_S = 30.0
+
 
 def create_app(
     config: AppConfig,
@@ -57,6 +62,7 @@ def create_app(
     *,
     static_dir: str | Path | None = None,
     max_sessions: int = 4,
+    stream_url: str | None = None,
     stream_output_dir: str | Path = "output",
     allowed_origins: Iterable[str] = (),
     allowed_hosts: Iterable[str] = (),
@@ -206,6 +212,7 @@ def create_app(
         "service": None,
         "ready": asyncio.Event(),
         "loop": None,
+        "supervisor": None,
     }
     app = web.Application(
         client_max_size=model_upload_limit,
@@ -613,13 +620,63 @@ def create_app(
         finally:
             pump_state["task"] = asyncio.create_task(pump_detection_results(None))
 
+    async def supervise_stream(_: Any) -> None:
+        """Keep the configured stream running, without needing anyone present.
+
+        The point of an auto-started server is that nobody has to be. A camera is
+        rarely up at the moment Windows logs in, and a stream can drop for longer
+        than the decoder's own backoff covers, so one attempt at startup would
+        leave a server that looks healthy and is reading nothing.
+
+        Deliberately not infinitely eager: the retry interval is long enough that
+        an unreachable camera costs one connection attempt every half minute
+        rather than a tight loop against a host that is not answering.
+        """
+        from .stream_service import StreamService
+
+        assert stream_url is not None  # only scheduled when one is configured
+        while True:
+            service = stream_state["service"]
+            if service is None or not service.running:
+                if service is not None and service.status()["error"]:
+                    _LOG.warning(
+                        "Configured stream is down (%s); retrying",
+                        service.status()["error"],
+                    )
+                try:
+                    started = StreamService(
+                        web_config,
+                        recognizer,
+                        stream_url,
+                        jsonl_path=stream_output_dir / "stream-telemetry.jsonl",
+                        csv_path=stream_output_dir / "stream-telemetry.csv",
+                        on_update=notify_stream,
+                    )
+                    stream_state["service"] = started
+                    started.start()
+                    _LOG.info("Started the configured stream: %s", stream_url)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _LOG.exception("Could not start the configured stream")
+            await asyncio.sleep(_STREAM_SUPERVISOR_INTERVAL_S)
+
     async def start_pump(_: Any) -> None:
         pump_state["task"] = asyncio.create_task(pump_detection_results(None))
         # Captured here so the stream service, which lives on its own threads,
         # has a loop to hand its notifications back to.
         stream_state["loop"] = asyncio.get_running_loop()
+        if stream_url:
+            stream_state["supervisor"] = asyncio.create_task(supervise_stream(None))
 
     async def cleanup(_: Any) -> None:
+        supervisor = stream_state["supervisor"]
+        if supervisor is not None:
+            # Before the stop below, or it would helpfully start a replacement
+            # for the stream that is being shut down.
+            supervisor.cancel()
+            with suppress(asyncio.CancelledError):
+                await supervisor
         service = stream_state["service"]
         if service is not None:
             # First, so the camera is released and the OCR thread is idle before
@@ -689,6 +746,15 @@ def create_app(
         return web.json_response({"started": True, "status": service.status()})
 
     async def stream_stop(_: Any) -> Any:
+        supervisor = stream_state["supervisor"]
+        if supervisor is not None:
+            # Stopping means stopping. Leaving the supervisor running would have
+            # it restart the stream within the interval, which reads as the
+            # button not working.
+            supervisor.cancel()
+            with suppress(asyncio.CancelledError):
+                await supervisor
+            stream_state["supervisor"] = None
         service = stream_state["service"]
         if service is None:
             return web.json_response({"stopped": False, "reason": "no stream"})
@@ -824,6 +890,7 @@ def run_web_app(
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = False,
+    stream_url: str | None = None,
     allowed_origins: Iterable[str] = (),
 ) -> None:
     try:
@@ -839,7 +906,11 @@ def run_web_app(
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     app = create_app(
-        config, recognizer, allowed_origins=allowed_origins, allowed_hosts=(host,)
+        config,
+        recognizer,
+        stream_url=stream_url,
+        allowed_origins=allowed_origins,
+        allowed_hosts=(host,),
     )
     url = f"http://{host}:{port}"
     if open_browser:

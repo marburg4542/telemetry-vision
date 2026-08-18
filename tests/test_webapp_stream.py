@@ -257,5 +257,89 @@ class StreamEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 403)
 
 
+@unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
+class ConfiguredStreamTests(unittest.IsolatedAsyncioTestCase):
+    """A server told about a camera opens it without anyone asking.
+
+    This is what makes an auto-started server useful: it comes up at login, with
+    no browser open and no command typed, already reading the feed.
+    """
+
+    async def asyncSetUp(self) -> None:
+        import tempfile
+
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from telemetry_ocr.config import AppConfig, FieldConfig, RuntimeConfig
+        from telemetry_ocr.ocr import OCRResult
+        from telemetry_ocr.webapp import GUARD_HEADER, create_app
+
+        self.cv2 = _StreamCv2()
+        patch = mock.patch.dict(sys.modules, {"cv2": self.cv2})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+
+        class FakeRecognizer:
+            def recognize(self, images: Any) -> Any:
+                return [OCRResult("7", 0.99) for _ in images]
+
+        config = AppConfig(
+            runtime=RuntimeConfig(
+                enable_fallback=False, confidence_threshold=0.5, warmup_iterations=0
+            ),
+            fields=[
+                FieldConfig(
+                    field_id="speed",
+                    box=(0.1, 0.1, 0.4, 0.4),
+                    allowed_chars="0123456789",
+                    regex=r"^\d+$",
+                    data_type="integer",
+                    profile="fast",
+                )
+            ],
+        )
+        server = TestServer(
+            create_app(
+                config,
+                FakeRecognizer(),
+                stream_url=URL,
+                stream_output_dir=self.temp.name,
+            )
+        )
+        self.client = TestClient(server, headers={GUARD_HEADER: "1"})
+        await self.client.start_server()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+
+    async def _status(self) -> Any:
+        return await (await self.client.get("/api/stream/status")).json()
+
+    async def test_the_configured_stream_opens_without_being_asked(self) -> None:
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            status = await self._status()
+            if status["running"]:
+                self.assertEqual(status["url"], URL)
+                return
+            await asyncio.sleep(0.05)
+        self.fail("The configured stream never started")
+
+    async def test_stopping_by_hand_stays_stopped(self) -> None:
+        # The supervisor exists to restart a camera that dropped. Restarting one
+        # a person just stopped would read as the button not working.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not (await self._status())["running"]:
+            await asyncio.sleep(0.05)
+        self.assertTrue((await self._status())["running"])
+
+        self.assertEqual((await self.client.post("/api/stream/stop")).status, 200)
+        for _ in range(10):
+            await asyncio.sleep(0.1)
+            self.assertFalse((await self._status())["running"])
+
+
 if __name__ == "__main__":
     unittest.main()

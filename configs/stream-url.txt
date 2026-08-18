@@ -1,0 +1,10 @@
+# The camera this machine reads at login.
+#
+# Put one stream URL on a line of its own and the auto-started server opens it
+# by itself -- no browser open, no command typed. Leave it commented out and the
+# server starts with the file UI only, exactly as it did before.
+#
+# It is retried every 30 seconds while it is down, so a camera that is not up
+# yet when Windows logs in is picked up when it appears.
+#
+# rtsp://user:password@192.168.1.50:554/stream1
