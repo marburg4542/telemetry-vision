@@ -490,6 +490,7 @@ async function initialize() {
     chooseNearestRate(state.config.target_hz);
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
     initializeDetectionModel();
+    adoptRunningStream();
   } catch (error) {
     setEngineStatus("error", "เชื่อมต่อ OCR ไม่สำเร็จ");
     // The page is a shell the service worker can serve on its own, so reaching
@@ -1400,7 +1401,31 @@ async function startStream(url) {
   } finally {
     ui.streamButton.disabled = false;
   }
+  enterStreamMode(url);
+}
 
+// Adopt a stream this page did not start.
+//
+// The server keeps reading its camera with no browser attached -- that is the
+// point of the auto-start -- so a page opened or reloaded afterwards finds a
+// stream already running. Without this it showed the file UI instead, the
+// picture never appeared, and pressing the stream button only produced "already
+// running". The capture button was unreachable for exactly the setup that
+// feature was built for.
+async function adoptRunningStream() {
+  try {
+    const status = await jsonFetch("/api/stream/status");
+    if (!status.running || !status.url) return;
+    ui.streamUrl.value = status.url;
+    enterStreamMode(status.url);
+    showToast(`กำลังแสดงสตรีมที่ server เปิดค้างไว้: ${status.url}`);
+  } catch {
+    // A server too old or too busy to answer is not a reason to hold up the
+    // rest of the page; the file UI still works.
+  }
+}
+
+function enterStreamMode(url) {
   state.streamMode = true;
   state.streamRunning = true;
   state.streamRevision = 0;

@@ -160,6 +160,23 @@ def create_app(
         return response
 
     @web.middleware
+    async def static_cache_middleware(request: Any, handler: Any) -> Any:
+        """Make the browser revalidate the app's own assets.
+
+        add_static sends ETag and Last-Modified but no Cache-Control, and a
+        response with neither a max-age nor a no-cache is left to the browser's
+        heuristic freshness -- commonly a tenth of the age of the file. A page
+        that had been open a while therefore kept running a previous build of
+        app.js after a redeploy, silently, which is precisely what the service
+        worker was made network-first to prevent. The ETag is already there, so
+        revalidating costs a 304.
+        """
+        response = await handler(request)
+        if request.path.startswith("/assets/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+    @web.middleware
     async def error_middleware(request: Any, handler: Any) -> Any:
         try:
             return await handler(request)
@@ -220,7 +237,12 @@ def create_app(
     }
     app = web.Application(
         client_max_size=model_upload_limit,
-        middlewares=[guard_middleware, cors_middleware, error_middleware],
+        middlewares=[
+            guard_middleware,
+            cors_middleware,
+            static_cache_middleware,
+            error_middleware,
+        ],
     )
     app[sessions_key] = {}
     app[ocr_lock_key] = asyncio.Lock()
