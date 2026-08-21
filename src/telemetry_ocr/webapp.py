@@ -19,7 +19,7 @@ from .detection_worker import DetectionFrame, DetectionWorker, ProcessDetectionW
 from .errors import DependencyError
 from .ocr import Recognizer
 from .pipeline import FramePacket, TelemetryPipeline
-from .public_share import PUBLIC_PREFIX, ShareStore
+from .public_share import DEFAULT_SHARE_PORT, ShareServer, ShareStore
 
 
 @dataclass(slots=True)
@@ -70,6 +70,8 @@ def create_app(
     max_sessions: int = 4,
     stream_url: str | None = None,
     stream_output_dir: str | Path = "output",
+    share_port: int = DEFAULT_SHARE_PORT,
+    quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
     allowed_hosts: Iterable[str] = (),
     detection_worker_factory: Callable[[], DetectionWorker] | None = None,
@@ -124,17 +126,11 @@ def create_app(
         endpoint here has side effects that happen before that, so the request
         itself has to be refused rather than merely hidden.
         """
-        # The single exception to the Host rule, and the only one there will be.
+        # No exceptions. Images are served by a separate process listening on
+        # its own port, which is what the tunnel is pointed at, so nothing
+        # reaching this application ever needs to arrive without a guard header
+        # or with a public Host.
         #
-        # LINE fetches an image message's URL from its own servers, so that one
-        # request arrives through the tunnel carrying a public hostname and no
-        # guard header, and cannot be made to carry either. It is allowed past on
-        # four conditions together: this exact path prefix, GET only, a token
-        # that has not expired, and a file inside the recordings directory. Every
-        # other path still refuses a non-loopback Host, which is what keeps the
-        # tunnel from being a way in to the rest of the API.
-        if request.method == "GET" and request.path.startswith(f"{PUBLIC_PREFIX}/"):
-            return await handler(request)
         # A request whose Host is not this loopback server was routed here by a
         # rebound DNS name, not by the user typing the address.
         if not is_allowed_host(request):
@@ -252,6 +248,30 @@ def create_app(
     # Tokens for images LINE is allowed to fetch. Created only when a send needs
     # one, and expiring on their own.
     share_store = ShareStore(Path(stream_output_dir) / "sessions")
+    # Started only when something needs it: an application that never sends a
+    # picture should not have a second listener open for no reason.
+    share_state: dict[str, Any] = {"server": None, "tunnel": None}
+
+    async def ensure_share_server() -> Any:
+        if share_state["server"] is None:
+            server = ShareServer(share_store, share_port)
+            await server.start()
+            share_state["server"] = server
+        return share_state["server"]
+
+    async def ensure_quick_tunnel() -> str | None:
+        """The address LINE should fetch from, starting the tunnel if needed."""
+        from .quick_tunnel import QuickTunnel
+
+        tunnel = share_state["tunnel"]
+        if tunnel is None:
+            tunnel = QuickTunnel(share_port)
+            share_state["tunnel"] = tunnel
+        if tunnel.url:
+            return str(tunnel.url)
+        # Starting it blocks for as long as cloudflared takes to be given an
+        # address, so it happens off the loop.
+        return await asyncio.to_thread(tunnel.start)
     stream_state: dict[str, Any] = {
         "service": None,
         "ready": asyncio.Event(),
@@ -719,6 +739,14 @@ def create_app(
             stream_state["supervisor"] = asyncio.create_task(supervise_stream(None))
 
     async def cleanup(_: Any) -> None:
+        # First: it holds a child process, and leaving cloudflared running after
+        # the server it fronts has gone would leave an address answering 502.
+        tunnel = share_state["tunnel"]
+        if tunnel is not None:
+            await asyncio.to_thread(tunnel.stop)
+        server = share_state["server"]
+        if server is not None:
+            await server.stop()
         supervisor = stream_state["supervisor"]
         if supervisor is not None:
             # Before the stop below, or it would helpfully start a replacement
@@ -1095,30 +1123,6 @@ def create_app(
         session.record_verification(shot)
         return web.json_response(asdict(shot))
 
-    async def public_image(request: Any) -> Any:
-        """Serve one shared image. Reached from the tunnel, so no guard header.
-
-        The token is the whole of the authorisation, which is why it is minted
-        from the system random source, expires, and can only ever name a file
-        the store already checked is inside the recordings directory.
-        """
-        token = request.match_info.get("token", "")
-        path = share_store.resolve(token)
-        if path is None:
-            # One answer for unknown and expired alike: telling them apart would
-            # let someone probing learn which tokens had once been real.
-            _LOG.info("Refused a public image request for an unknown or expired token")
-            return web.Response(status=404, text="Not found")
-        return web.FileResponse(
-            path,
-            headers={
-                "Cache-Control": "no-store",
-                # Nothing here is meant to be embedded or framed anywhere.
-                "X-Content-Type-Options": "nosniff",
-                "Content-Disposition": "inline",
-            },
-        )
-
     async def line_status(_: Any) -> Any:
         from .line_client import load_line_config
 
@@ -1140,8 +1144,11 @@ def create_app(
                 "to": config.masked_to,
                 # Whether images can go too, which is a separate setting and a
                 # separate decision about exposing the pictures at all.
-                "images": bool(config.public_base_url),
+                "images": bool(config.public_base_url) or quick_tunnel,
                 "shared_now": share_store.live_count(),
+                "quick_tunnel": (
+                    share_state["tunnel"].status() if share_state["tunnel"] else None
+                ),
             }
         )
 
@@ -1212,10 +1219,18 @@ def create_app(
         # nowhere LINE could fetch from, and the message goes as text.
         images: list[str] = []
         share_error = ""
-        if config.public_base_url:
+        base_url = config.public_base_url
+        if not base_url and quick_tunnel:
+            # A quick tunnel is given a fresh address every time it starts, so it
+            # is asked at send time rather than read from a setting written once.
+            base_url = await ensure_quick_tunnel() or ""
+            if not base_url:
+                share_error = "quick tunnel is not available"
+        if base_url:
             try:
+                await ensure_share_server()
                 images = await asyncio.to_thread(
-                    _share_images, share_store, session, shot, config.public_base_url
+                    _share_images, share_store, session, shot, base_url
                 )
             except Exception as exc:
                 # A picture that cannot be published is not a reason to withhold
@@ -1269,7 +1284,6 @@ def create_app(
     app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
-    app.router.add_get(f"{PUBLIC_PREFIX}/{{token}}", public_image)
     app.router.add_get("/api/line/status", line_status)
     app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
@@ -1287,6 +1301,8 @@ def run_web_app(
     port: int = 8765,
     open_browser: bool = False,
     stream_url: str | None = None,
+    share_port: int = DEFAULT_SHARE_PORT,
+    quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
 ) -> None:
     try:
@@ -1305,6 +1321,8 @@ def run_web_app(
         config,
         recognizer,
         stream_url=stream_url,
+        share_port=share_port,
+        quick_tunnel=quick_tunnel,
         allowed_origins=allowed_origins,
         allowed_hosts=(host,),
     )

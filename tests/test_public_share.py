@@ -162,18 +162,18 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
         await self.outside.close()
         await self.client.close()
 
-    async def test_the_image_route_is_reached_rather_than_refused(self) -> None:
-        """LINE can send neither the guard header nor a loopback Host.
+    async def test_even_the_image_path_is_refused_by_the_application(self) -> None:
+        """Images moved to their own process, and this is the point of that.
 
-        So this one route has to answer without either -- which is exactly why
-        every other route must not. A 404 here rather than a 403 is the proof
-        that the request got past the guard and was turned away by the token
-        store instead, which is where an unknown token should be decided.
+        The application used to carry an exception for this path so LINE could
+        reach it. It does not any more: a tunnel is aimed at the share server
+        instead, so the surface reachable here is nothing at all, with no
+        middleware exception standing between the API and the internet.
         """
         from telemetry_ocr.public_share import PUBLIC_PREFIX
 
-        response = await self.outside.get(f"{PUBLIC_PREFIX}/definitely-not-minted")
-        self.assertEqual(response.status, 404)
+        response = await self.outside.get(f"{PUBLIC_PREFIX}/anything")
+        self.assertEqual(response.status, 403)
 
     async def test_everything_else_is_refused_from_outside(self) -> None:
         # The whole security case for the tunnel rests on this.
@@ -217,6 +217,73 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_loopback_still_works_normally(self) -> None:
         # The exemption must not have loosened anything for the local page.
         self.assertEqual((await self.client.get("/api/health")).status, 200)
+
+
+@unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
+class ShareServerTests(unittest.IsolatedAsyncioTestCase):
+    """The process a tunnel is actually pointed at.
+
+    Its whole vocabulary is one route, which is the argument for it existing:
+    a flaw in the application's guard cannot be reached from here because the
+    endpoints it would expose are not in this app.
+    """
+
+    async def asyncSetUp(self) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from telemetry_ocr.public_share import ShareServer, ShareStore
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "sessions"
+        (self.root / "s1" / "frames").mkdir(parents=True)
+        self.image = self.root / "s1" / "frames" / "00000000.jpg"
+        self.image.write_bytes(b"\xff\xd8pretend-jpeg-body")
+
+        self.store = ShareStore(self.root)
+        server = ShareServer(self.store)
+        self.client = TestClient(TestServer(server.build_app()))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+
+    async def test_a_minted_token_serves_the_file(self) -> None:
+        from telemetry_ocr.public_share import PUBLIC_PREFIX
+
+        token = self.store.mint(self.image)
+        response = await self.client.get(f"{PUBLIC_PREFIX}/{token}")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.read(), self.image.read_bytes())
+        # Nothing about a capture should sit in a cache anywhere.
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+
+    async def test_an_unknown_token_is_a_plain_404(self) -> None:
+        from telemetry_ocr.public_share import PUBLIC_PREFIX
+
+        self.assertEqual((await self.client.get(f"{PUBLIC_PREFIX}/nope")).status, 404)
+
+    async def test_an_expired_token_stops_serving(self) -> None:
+        from telemetry_ocr.public_share import PUBLIC_PREFIX, ShareStore
+
+        self.store.ttl_s = 0.05
+        token = self.store.mint(self.image)
+        time.sleep(0.1)
+        self.assertEqual((await self.client.get(f"{PUBLIC_PREFIX}/{token}")).status, 404)
+        del ShareStore
+
+    async def test_there_is_nothing_else_to_reach(self) -> None:
+        # The reason this process exists rather than an exception in the main
+        # one: there are no other endpoints here to find.
+        for path in ("/", "/api/health", "/api/session", "/assets/app.js", "/public/img"):
+            with self.subTest(path=path):
+                self.assertEqual((await self.client.get(path)).status, 404)
+
+    async def test_it_does_not_accept_writes(self) -> None:
+        from telemetry_ocr.public_share import PUBLIC_PREFIX
+
+        token = self.store.mint(self.image)
+        response = await self.client.post(f"{PUBLIC_PREFIX}/{token}")
+        self.assertEqual(response.status, 405)
 
 
 if __name__ == "__main__":

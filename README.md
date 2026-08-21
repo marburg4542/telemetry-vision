@@ -539,42 +539,51 @@ $env:TELEMETRY_OCR_LINE_TO    = "<user id ที่ขึ้นต้นด้�
 
 #### ส่งรูปด้วย (Cloudflare Tunnel)
 
-Messaging API **รับ upload ไฟล์ตรงๆ ไม่ได้** — ต้องให้ URL แบบ HTTPS ที่ server ของ LINE
+Messaging API **รับ upload ไฟล์ตรงๆ ไม่ได้** ต้องให้ URL แบบ HTTPS ที่ server ของ LINE
 ดึงเองได้ เครื่องนี้อยู่ที่ `127.0.0.1` จึงต้องมีทางให้ LINE เข้าถึงชั่วคราว
 
+**tunnel ไม่ได้ชี้มาที่แอปหลัก** แต่ชี้ไปที่ **server แยกอีกตัวบนพอร์ต 8766 ที่มี route
+เดียวคือรูป** เหตุผลคือ quick tunnel ตั้ง ingress ไม่ได้ — มัน forward ทั้งพอร์ต ถ้าชี้มาที่
+8765 จะเท่ากับเอา API ทั้งชุดขึ้นเน็ตโดยมี middleware กั้นชั้นเดียว ชี้ไปที่ 8766 แม้ middleware
+มีบั๊กก็ไปเจอ process ที่ทำอะไรไม่ได้นอกจากคืนไฟล์ตาม token
+
+##### ทางที่ 1: quick tunnel (ไม่ต้องมีบัญชีหรือโดเมน)
+
 ```powershell
-# 1. login เข้า Cloudflare (เปิดเบราว์เซอร์ ต้องมีโดเมนในบัญชีอยู่แล้ว)
+New-Item -ItemType File configs\quick-tunnel.enabled -Force
+```
+
+แล้ว restart scheduled task — จบ ไม่ต้องตั้ง `public_base_url`
+
+URL เปลี่ยนทุกครั้งที่ tunnel เริ่มใหม่ ระบบจึง**อ่าน URL จาก cloudflared เองตอนจะส่ง**
+ไม่ได้จดไว้ล่วงหน้า ทดสอบเองได้ด้วย `telemetry-ocr web --quick-tunnel`
+
+##### ทางที่ 2: named tunnel (URL คงที่ ต้องมีโดเมนใน Cloudflare)
+
+```powershell
 & "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel login
-
-# 2. สร้าง tunnel + DNS + config
 .\scripts\setup_cloudflare_tunnel.ps1 -Hostname drone.example.com
-
-# 3. ให้ tunnel รันตลอด
 & "C:\Program Files (x86)\cloudflared\cloudflared.exe" service install
 ```
 
-แล้วใส่ใน `configs/line.json`:
+แล้วใส่ใน `configs/line.json`: `"public_base_url": "https://drone.example.com"`
 
-```json
-"public_base_url": "https://drone.example.com"
-```
+##### วัดจริงผ่าน tunnel
 
-**เปิดออกแค่ path เดียว** `/public/img/<token>` เท่านั้น ทุก path อื่นถูกปฏิเสธสองชั้น:
-ingress ของ tunnel ตอบ 404 ก่อนถึงแอป และตัว server เองปฏิเสธ Host ที่ไม่ใช่ loopback
-
-| ทดสอบจาก host ภายนอก | ผล |
+| ผ่าน public URL | ผล |
 |---|---|
-| `/`, `/api/*`, `/assets/*` | **403** |
-| `POST /public/img/...` | **403** (GET เท่านั้น) |
+| `GET /public/img/<token จริง>` | **200** — 503,899 bytes ตรงกับไฟล์บนดิสก์ทุกไบต์ |
 | `GET /public/img/<token ผิด>` | 404 |
-| `GET /public/img/<token จริง>` | รูป |
+| `/` , `/api/health` , `/api/config` , `/api/session` , `/assets/app.js` | **404 ทุกตัว** |
 
-token สุ่ม 43 ตัวอักษร **หมดอายุใน 10 นาที** ชี้ได้เฉพาะไฟล์ใน `output/sessions/` เท่านั้น
-(ตรวจด้วยการ resolve path จริงแล้วเทียบ ไม่ใช่เช็คสตริง) และหนึ่ง token ชี้ได้ไฟล์เดียว
+404 ไม่ใช่เพราะถูกปฏิเสธ แต่เพราะ **route พวกนั้นไม่มีอยู่ใน server ตัวนั้นเลย**
 
-⚠️ **ข้อจำกัดที่แก้ไม่ได้:** LINE ดึงรูปแล้ว **เก็บสำเนาไว้ที่ฝั่งเขา** การหมดอายุของ token
-ไม่ไปถึง cache ของ LINE พอส่งรูปไปแล้วก็คือส่งไปแล้ว — ถ้าภาพจากกล้องตัวนี้เปิดเผยไม่ได้
-อย่าตั้ง `public_base_url` ส่งข้อความอย่างเดียวปลอดภัยกว่า
+token สุ่ม 43 ตัวอักษร · **หมดอายุ 10 นาที** · ชี้ได้เฉพาะไฟล์ใน `output/sessions/`
+(resolve path จริงแล้วเทียบ ไม่ใช่เช็คสตริง) · GET เท่านั้น
+
+⚠️ **ข้อจำกัดที่แก้ไม่ได้:** LINE ดึงรูปแล้ว **เก็บสำเนาไว้ที่ฝั่งเขา** token หมดอายุไม่ไปถึง
+cache ของ LINE — ส่งรูปไปแล้วคือส่งไปแล้ว ถ้าภาพจากกล้องตัวนี้เปิดเผยไม่ได้ อย่าเปิดฟีเจอร์นี้
+ส่งข้อความอย่างเดียวไม่เปิดอะไรออกเลย
 
 ### เปิด server เองโดยไม่ใช้ auto-start
 

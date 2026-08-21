@@ -141,6 +141,22 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument(
+        "--quick-tunnel",
+        action="store_true",
+        help=(
+            "Publish capture images through a Cloudflare quick tunnel so LINE can "
+            "fetch them. Needs no account or domain, but the address changes each "
+            "time it starts, so it is read back from cloudflared rather than "
+            "configured. Only the image port is exposed, never the API"
+        ),
+    )
+    web.add_argument(
+        "--share-port",
+        type=int,
+        default=8766,
+        help="Port for the image-only server the tunnel points at",
+    )
+    web.add_argument(
         "--stream",
         help=(
             "Open this stream on startup and keep it open, so an auto-started "
@@ -359,6 +375,8 @@ def main(argv: list[str] | None = None) -> int:
                 port=args.port,
                 open_browser=args.open_browser,
                 stream_url=args.stream,
+                share_port=args.share_port,
+                quick_tunnel=args.quick_tunnel,
                 allowed_origins=args.allow_origin,
             )
             return 0

@@ -74,6 +74,15 @@ if (Test-Path -LiteralPath $streamFile) {
 }
 
 $arguments = @("web", "--config", $ocrConfig, "--host", "127.0.0.1", "--port", "8765")
+
+# A marker file rather than a flag baked into the scheduled task, so turning
+# image sending on or off does not mean editing and reinstalling the task. Its
+# presence is the whole switch; the contents are ignored.
+$quickTunnelFlag = Join-Path $projectDir "configs\quick-tunnel.enabled"
+if (Test-Path -LiteralPath $quickTunnelFlag) {
+    $arguments += "--quick-tunnel"
+    Write-StartupLog "Quick tunnel enabled: capture images will be fetchable by LINE."
+}
 if ($streamUrl) {
     $arguments += @("--stream", $streamUrl)
     Write-StartupLog "Opening the configured stream: $streamUrl"

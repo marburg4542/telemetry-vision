@@ -29,6 +29,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 _LOG = logging.getLogger(__name__)
 
@@ -132,3 +133,75 @@ def public_url(base_url: str, token: str) -> str:
 # The one path the tunnel is meant to route. Kept here so the server, the config
 # it writes and the tests all agree on it.
 PUBLIC_PREFIX = "/public/img"
+
+# The share server listens here, and the tunnel points at this rather than at the
+# application. See ShareServer for why that is not the same thing as trusting the
+# application's own guard.
+DEFAULT_SHARE_PORT = 8766
+
+
+class ShareServer:
+    """A second HTTP server whose entire vocabulary is one image route.
+
+    The tunnel points here instead of at the application, and the reason is
+    quick tunnels: `cloudflared tunnel --url` takes no ingress rules, so whatever
+    port it is given is forwarded in full. Aimed at the application that would
+    put the whole API on the internet with one middleware standing in front of
+    it -- and a middleware is a thing that can have a bug.
+
+    Aimed here, a flaw in that middleware reaches a process that can do nothing
+    except return a file for a valid token. There is no session endpoint to
+    reach, no model upload, no stream control, because none of them exist in
+    this app at all.
+    """
+
+    def __init__(self, store: ShareStore, port: int = DEFAULT_SHARE_PORT) -> None:
+        self.store = store
+        self.port = port
+        self._runner: Any = None
+
+    def build_app(self) -> Any:
+        """The one-route application, separately so tests can drive it.
+
+        Exposed rather than inlined into start() because binding a fixed port in
+        a test suite is a way to fail on a machine where something else already
+        has it.
+        """
+        from aiohttp import web
+
+        async def serve(request: Any) -> Any:
+            token = request.match_info.get("token", "")
+            path = self.store.resolve(token)
+            if path is None:
+                # One answer for unknown and expired alike: telling them apart
+                # would let someone probing learn which tokens had been real.
+                _LOG.info("Share request for an unknown or expired token")
+                return web.Response(status=404, text="Not found")
+            return web.FileResponse(
+                path,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Disposition": "inline",
+                },
+            )
+
+        app = web.Application()
+        app.router.add_get(f"{PUBLIC_PREFIX}/{{token}}", serve)
+        return app
+
+    async def start(self) -> None:
+        from aiohttp import web
+
+        self._runner = web.AppRunner(self.build_app(), access_log=None)
+        await self._runner.setup()
+        # Loopback only. The tunnel reaches it from this machine; nothing else
+        # on the network can, even before the tunnel is considered.
+        site = web.TCPSite(self._runner, "127.0.0.1", self.port)
+        await site.start()
+        _LOG.info("Share server listening on 127.0.0.1:%d%s", self.port, PUBLIC_PREFIX)
+
+    async def stop(self) -> None:
+        if self._runner is not None:
+            await self._runner.cleanup()
+            self._runner = None

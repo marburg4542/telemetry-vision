@@ -25,7 +25,10 @@ param(
     [string]$Hostname,
 
     [string]$TunnelName = "telemetry-ocr",
-    [int]$Port = 8765
+    # The image-only server, not the application. A tunnel aimed at 8765 would
+    # put the whole API behind one middleware; aimed here it reaches a process
+    # that can only return a file for a valid token.
+    [int]$Port = 8766
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,8 +74,9 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "DNS route failed. If the record already exists that is fine." -ForegroundColor Yellow
 }
 
-# Ingress is evaluated top to bottom. The catch-all 404 at the end is what makes
-# every other path unreachable through the tunnel, including the page itself.
+# Ingress is evaluated top to bottom. The catch-all 404 at the end is the second
+# of two independent locks: the first is that this points at the image-only
+# server, which has no other route to reach even if this rule were wrong.
 $configPath = Join-Path $cfDir "config.yml"
 $credentials = Join-Path $cfDir "$tunnelId.json"
 $config = @"
@@ -101,5 +105,6 @@ Write-Host "         `"public_base_url`": `"https://$Hostname`""
 Write-Host "  3. Check it from outside this machine:"
 Write-Host "         https://$Hostname/public/img/anything   -> should be 404, not a page"
 Write-Host ""
-Write-Host "Only /public/img/<token> is routed. Every other path returns 404 at the"
-Write-Host "tunnel, and the server refuses non-loopback requests to them regardless."
+Write-Host "Only /public/img/<token> is routed, and it points at the image-only server"
+Write-Host "on port $Port. The application on 8765 is not reachable through this tunnel"
+Write-Host "at all -- it is a different process on a different port."

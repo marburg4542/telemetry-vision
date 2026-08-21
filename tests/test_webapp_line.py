@@ -362,36 +362,32 @@ class ImageSendTests(LineEndpointTests):
         await self._send()
         self.assertEqual(len(self.pushes), 1)
 
-    async def test_the_url_line_is_given_actually_serves_the_picture(self) -> None:
-        """End to end through the real minting path.
+    async def test_the_url_is_on_the_public_base_and_carries_a_real_token(self) -> None:
+        """What the push carries. Serving it is the share server's job.
 
-        The token comes out of the message LINE was sent, and is then fetched
-        the way LINE would fetch it -- public Host, no guard header.
+        Those two live in different processes on purpose, so they are checked
+        separately -- see ShareServerTests for the fetch.
         """
         await self._shot()
         await self._send()
         image = next(
             item for item in self.pushes[0]["body"]["messages"] if item["type"] == "image"
         )
-        path = image["originalContentUrl"].split("drone.example.com", 1)[1]
+        url = image["originalContentUrl"]
+        self.assertTrue(url.startswith("https://drone.example.com/public/img/"))
+        token = url.rsplit("/", 1)[1]
+        # The token is the entire authorisation on a public URL.
+        self.assertGreaterEqual(len(token), 40)
 
-        fetched = await self.outside.get(path)
-        self.assertEqual(fetched.status, 200)
-        body = await fetched.read()
-        self.assertEqual(body[:2], b"\xff\xd8")
-        self.assertEqual(fetched.headers["Cache-Control"], "no-store")
-
-    async def test_a_token_names_only_the_file_it_was_minted_for(self) -> None:
-        # Changing the token must not reach another picture, and nothing in the
-        # URL should be a path the caller controls.
+    async def test_the_application_itself_still_serves_nothing(self) -> None:
+        # Even the path in the URL it just handed to LINE is refused here.
         await self._shot()
         await self._send()
         image = next(
             item for item in self.pushes[0]["body"]["messages"] if item["type"] == "image"
         )
         path = image["originalContentUrl"].split("drone.example.com", 1)[1]
-        tampered = path[:-4] + "aaaa"
-        self.assertEqual((await self.outside.get(tampered)).status, 404)
+        self.assertEqual((await self.outside.get(path)).status, 403)
 
     async def test_text_still_goes_when_no_public_url_is_set(self) -> None:
         # Images are a separate decision; turning them off must not stop the
