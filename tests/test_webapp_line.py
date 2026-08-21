@@ -312,3 +312,93 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
+class ImageSendTests(LineEndpointTests):
+    """Sending the picture, not only the numbers.
+
+    Inherits the fake LINE server and the capture helpers; what is added here is
+    a public base URL, which is the setting that turns images on at all.
+    """
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        from aiohttp.test_utils import TestClient
+
+        env = mock.patch.dict(
+            "os.environ", {"TELEMETRY_OCR_PUBLIC_URL": "https://drone.example.com"}
+        )
+        env.start()
+        self.addCleanup(env.stop)
+        # A second client standing in for LINE coming through the tunnel: a
+        # public Host and no guard header.
+        self.outside = TestClient(
+            self.client._server, headers={"Host": "drone.example.com"}
+        )
+        await self.outside.start_server()
+        self.addAsyncCleanup(self.outside.close)
+
+    async def test_status_says_images_are_on(self) -> None:
+        body = await (await self.client.get("/api/line/status")).json()
+        self.assertTrue(body["images"])
+
+    async def test_the_push_carries_an_image_message(self) -> None:
+        await self._shot()
+        response = await self._send()
+        self.assertEqual(response.status, 200)
+        messages = self.pushes[0]["body"]["messages"]
+        kinds = [item["type"] for item in messages]
+        self.assertEqual(kinds[0], "text")
+        self.assertIn("image", kinds)
+        image = next(item for item in messages if item["type"] == "image")
+        self.assertTrue(image["originalContentUrl"].startswith("https://drone.example.com/"))
+        self.assertEqual(image["originalContentUrl"], image["previewImageUrl"])
+
+    async def test_one_request_carries_everything(self) -> None:
+        # LINE counts a push per request, so batching keeps a capture at one
+        # message from the monthly allowance rather than several.
+        await self._shot()
+        await self._send()
+        self.assertEqual(len(self.pushes), 1)
+
+    async def test_the_url_line_is_given_actually_serves_the_picture(self) -> None:
+        """End to end through the real minting path.
+
+        The token comes out of the message LINE was sent, and is then fetched
+        the way LINE would fetch it -- public Host, no guard header.
+        """
+        await self._shot()
+        await self._send()
+        image = next(
+            item for item in self.pushes[0]["body"]["messages"] if item["type"] == "image"
+        )
+        path = image["originalContentUrl"].split("drone.example.com", 1)[1]
+
+        fetched = await self.outside.get(path)
+        self.assertEqual(fetched.status, 200)
+        body = await fetched.read()
+        self.assertEqual(body[:2], b"\xff\xd8")
+        self.assertEqual(fetched.headers["Cache-Control"], "no-store")
+
+    async def test_a_token_names_only_the_file_it_was_minted_for(self) -> None:
+        # Changing the token must not reach another picture, and nothing in the
+        # URL should be a path the caller controls.
+        await self._shot()
+        await self._send()
+        image = next(
+            item for item in self.pushes[0]["body"]["messages"] if item["type"] == "image"
+        )
+        path = image["originalContentUrl"].split("drone.example.com", 1)[1]
+        tampered = path[:-4] + "aaaa"
+        self.assertEqual((await self.outside.get(tampered)).status, 404)
+
+    async def test_text_still_goes_when_no_public_url_is_set(self) -> None:
+        # Images are a separate decision; turning them off must not stop the
+        # telemetry, which is the part someone is waiting for.
+        with mock.patch.dict("os.environ", {"TELEMETRY_OCR_PUBLIC_URL": ""}):
+            await self._shot()
+            response = await self._send()
+        self.assertEqual(response.status, 200)
+        kinds = [item["type"] for item in self.pushes[0]["body"]["messages"]]
+        self.assertEqual(kinds, ["text"])

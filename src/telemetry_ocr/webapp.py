@@ -19,6 +19,7 @@ from .detection_worker import DetectionFrame, DetectionWorker, ProcessDetectionW
 from .errors import DependencyError
 from .ocr import Recognizer
 from .pipeline import FramePacket, TelemetryPipeline
+from .public_share import PUBLIC_PREFIX, ShareStore
 
 
 @dataclass(slots=True)
@@ -123,6 +124,17 @@ def create_app(
         endpoint here has side effects that happen before that, so the request
         itself has to be refused rather than merely hidden.
         """
+        # The single exception to the Host rule, and the only one there will be.
+        #
+        # LINE fetches an image message's URL from its own servers, so that one
+        # request arrives through the tunnel carrying a public hostname and no
+        # guard header, and cannot be made to carry either. It is allowed past on
+        # four conditions together: this exact path prefix, GET only, a token
+        # that has not expired, and a file inside the recordings directory. Every
+        # other path still refuses a non-loopback Host, which is what keeps the
+        # tunnel from being a way in to the rest of the API.
+        if request.method == "GET" and request.path.startswith(f"{PUBLIC_PREFIX}/"):
+            return await handler(request)
         # A request whose Host is not this loopback server was routed here by a
         # rebound DNS name, not by the user typing the address.
         if not is_allowed_host(request):
@@ -237,6 +249,9 @@ def create_app(
     # When the last LINE push went out, so the rate limit survives across
     # requests without being stored on the frozen Application.
     line_state: dict[str, float] = {"last_sent": 0.0}
+    # Tokens for images LINE is allowed to fetch. Created only when a send needs
+    # one, and expiring on their own.
+    share_store = ShareStore(Path(stream_output_dir) / "sessions")
     stream_state: dict[str, Any] = {
         "service": None,
         "ready": asyncio.Event(),
@@ -1080,6 +1095,30 @@ def create_app(
         session.record_verification(shot)
         return web.json_response(asdict(shot))
 
+    async def public_image(request: Any) -> Any:
+        """Serve one shared image. Reached from the tunnel, so no guard header.
+
+        The token is the whole of the authorisation, which is why it is minted
+        from the system random source, expires, and can only ever name a file
+        the store already checked is inside the recordings directory.
+        """
+        token = request.match_info.get("token", "")
+        path = share_store.resolve(token)
+        if path is None:
+            # One answer for unknown and expired alike: telling them apart would
+            # let someone probing learn which tokens had once been real.
+            _LOG.info("Refused a public image request for an unknown or expired token")
+            return web.Response(status=404, text="Not found")
+        return web.FileResponse(
+            path,
+            headers={
+                "Cache-Control": "no-store",
+                # Nothing here is meant to be embedded or framed anywhere.
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": "inline",
+            },
+        )
+
     async def line_status(_: Any) -> Any:
         from .line_client import load_line_config
 
@@ -1095,7 +1134,16 @@ def create_app(
                 }
             )
         # The destination is masked and the token is never included at all.
-        return web.json_response({"configured": True, "to": config.masked_to})
+        return web.json_response(
+            {
+                "configured": True,
+                "to": config.masked_to,
+                # Whether images can go too, which is a separate setting and a
+                # separate decision about exposing the pictures at all.
+                "images": bool(config.public_base_url),
+                "shared_now": share_store.live_count(),
+            }
+        )
 
     async def line_send(request: Any) -> Any:
         """Push one captured shot to LINE as text.
@@ -1104,7 +1152,7 @@ def create_app(
         endpoint can be called directly, and every call spends a message from the
         account's monthly quota, so a stuck caller must not be able to drain it.
         """
-        from .line_client import format_capture_message, load_line_config, push_text
+        from .line_client import format_capture_message, load_line_config, push_capture
 
         config = load_line_config()
         if config is None:
@@ -1159,8 +1207,31 @@ def create_app(
         line_state["last_sent"] = now
 
         text = format_capture_message(shot, directory=session.directory)
-        result = await push_text(config, text)
-        payload = {**result, "session": name, "frame_index": shot.frame_index, "text": text}
+
+        # Images only when a public base URL is configured. Without one there is
+        # nowhere LINE could fetch from, and the message goes as text.
+        images: list[str] = []
+        share_error = ""
+        if config.public_base_url:
+            try:
+                images = await asyncio.to_thread(
+                    _share_images, share_store, session, shot, config.public_base_url
+                )
+            except Exception as exc:
+                # A picture that cannot be published is not a reason to withhold
+                # the telemetry, which is the part someone is waiting for.
+                _LOG.exception("Could not publish a capture image")
+                share_error = str(exc)
+
+        result = await push_capture(config, text, images)
+        payload = {
+            **result,
+            "session": name,
+            "frame_index": shot.frame_index,
+            "text": text,
+            "images": len(images),
+            "share_error": share_error,
+        }
         if not result["ok"]:
             # Released so a failed send is not also a lockout; the operator will
             # want to retry immediately once they have fixed the cause.
@@ -1198,6 +1269,7 @@ def create_app(
     app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
+    app.router.add_get(f"{PUBLIC_PREFIX}/{{token}}", public_image)
     app.router.add_get("/api/line/status", line_status)
     app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
@@ -1245,6 +1317,23 @@ def run_web_app(
         app.on_startup.append(launch_browser)
     print(f"Telemetry OCR web UI: {url}")
     web.run_app(app, host=host, port=port, print=None)
+
+
+def _share_images(store: Any, session: Any, shot: Any, base_url: str) -> list[str]:
+    """Publish the pictures for one shot and return their URLs.
+
+    The annotated copy first when there is one, because that is the picture
+    worth looking at; the original follows so the unmarked frame is available
+    too. LINE takes one image per message, so the caller sends one message each.
+    """
+    from .public_share import public_url
+
+    names = [name for name in (shot.annotated, shot.image) if name]
+    urls = []
+    for name in names:
+        token = store.mint(session.directory / name)
+        urls.append(public_url(base_url, token))
+    return urls
 
 
 def _as_record(record: Any) -> dict[str, Any]:

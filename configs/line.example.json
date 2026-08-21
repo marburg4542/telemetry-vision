@@ -3,6 +3,8 @@
   "_setup": "Since 4 Sep 2024 a Messaging API channel cannot be created in the LINE Developers Console. Create a LINE Official Account at manager.line.biz, then Settings -> Messaging API -> enable. The channel appears in developers.line.biz/console afterwards.",
   "_token": "LINE Developers Console -> your channel -> Messaging API tab -> Channel access token (long-lived)",
   "_to": "The user, group or room id to push to. A user id starts with U, a group id with C. It is NOT the LINE display name or the @handle of the Official Account.",
+  "_public_base_url": "OPTIONAL. Leave empty to send telemetry as text only, which exposes nothing. Set it to a Cloudflare Tunnel hostname (see scripts/setup_cloudflare_tunnel.ps1) to also send the captured picture. Doing so puts that frame within reach of anyone holding the URL while it lives, and LINE keeps its own copy afterwards.",
   "channel_access_token": "",
-  "to": ""
+  "to": "",
+  "public_base_url": ""
 }

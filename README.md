@@ -523,10 +523,8 @@ $env:TELEMETRY_OCR_LINE_TO    = "<user id ที่ขึ้นต้นด้�
 
 #### ที่ควรรู้
 
-**ยังไม่ส่งรูป** — Messaging API รับ upload ไฟล์ตรงๆ ไม่ได้ ต้องให้ URL แบบ HTTPS ที่
-server ของ LINE ดึงเองได้ ซึ่งเครื่องนี้อยู่ที่ `127.0.0.1` การส่งรูปจึงต้องเปิดภาพจากกล้อง
-ให้ใครก็ตามที่มี URL ดึงได้ (และ LINE จะ cache ไว้) — เป็นการตัดสินใจเรื่องความอ่อนไหวของ
-ภาพ ไม่ใช่รายละเอียดการจัดข้อความ จึงยังไม่ทำจนกว่าจะตัดสินใจ ข้อความบอก path บนเครื่องแทน
+**ส่งรูปได้ ถ้าตั้ง `public_base_url`** — ดูหัวข้อถัดไป ถ้าไม่ตั้งจะส่งเป็นข้อความอย่างเดียว
+ซึ่งไม่เปิดอะไรออกสู่ภายนอกเลย
 
 **แยกจากปุ่ม Capture โดยตั้งใจ** — Capture กดค้างได้ (เก็บทุก 400 ms) ถ้าผูกการส่งไว้ด้วยจะ
 เผา quota รายเดือนของ OA ทีละหลายข้อความ ฝั่ง server มี rate limit 3 วินาทีต่อครั้งอีกชั้น
@@ -538,6 +536,45 @@ server ของ LINE ดึงเองได้ ซึ่งเครื่อ
 
 เมื่อ LINE ปฏิเสธ ข้อความของ LINE จะถูกส่งต่อให้เห็น — 401 คือ token ผิด, 400 มักเป็น `to` ผิด,
 429 คือเกิน quota
+
+#### ส่งรูปด้วย (Cloudflare Tunnel)
+
+Messaging API **รับ upload ไฟล์ตรงๆ ไม่ได้** — ต้องให้ URL แบบ HTTPS ที่ server ของ LINE
+ดึงเองได้ เครื่องนี้อยู่ที่ `127.0.0.1` จึงต้องมีทางให้ LINE เข้าถึงชั่วคราว
+
+```powershell
+# 1. login เข้า Cloudflare (เปิดเบราว์เซอร์ ต้องมีโดเมนในบัญชีอยู่แล้ว)
+& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel login
+
+# 2. สร้าง tunnel + DNS + config
+.\scripts\setup_cloudflare_tunnel.ps1 -Hostname drone.example.com
+
+# 3. ให้ tunnel รันตลอด
+& "C:\Program Files (x86)\cloudflared\cloudflared.exe" service install
+```
+
+แล้วใส่ใน `configs/line.json`:
+
+```json
+"public_base_url": "https://drone.example.com"
+```
+
+**เปิดออกแค่ path เดียว** `/public/img/<token>` เท่านั้น ทุก path อื่นถูกปฏิเสธสองชั้น:
+ingress ของ tunnel ตอบ 404 ก่อนถึงแอป และตัว server เองปฏิเสธ Host ที่ไม่ใช่ loopback
+
+| ทดสอบจาก host ภายนอก | ผล |
+|---|---|
+| `/`, `/api/*`, `/assets/*` | **403** |
+| `POST /public/img/...` | **403** (GET เท่านั้น) |
+| `GET /public/img/<token ผิด>` | 404 |
+| `GET /public/img/<token จริง>` | รูป |
+
+token สุ่ม 43 ตัวอักษร **หมดอายุใน 10 นาที** ชี้ได้เฉพาะไฟล์ใน `output/sessions/` เท่านั้น
+(ตรวจด้วยการ resolve path จริงแล้วเทียบ ไม่ใช่เช็คสตริง) และหนึ่ง token ชี้ได้ไฟล์เดียว
+
+⚠️ **ข้อจำกัดที่แก้ไม่ได้:** LINE ดึงรูปแล้ว **เก็บสำเนาไว้ที่ฝั่งเขา** การหมดอายุของ token
+ไม่ไปถึง cache ของ LINE พอส่งรูปไปแล้วก็คือส่งไปแล้ว — ถ้าภาพจากกล้องตัวนี้เปิดเผยไม่ได้
+อย่าตั้ง `public_base_url` ส่งข้อความอย่างเดียวปลอดภัยกว่า
 
 ### เปิด server เองโดยไม่ใช้ auto-start
 

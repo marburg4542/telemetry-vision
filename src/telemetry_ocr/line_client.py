@@ -5,13 +5,16 @@ easy way to do this, was shut down in March 2025. What remains is the Messaging
 API, which is a bot pushing to a user or group and therefore needs a channel
 access token and a destination id.
 
-Only text is sent. The Messaging API cannot accept an uploaded image at all -- an
-image message carries a URL that LINE's own servers fetch, over HTTPS, from
-somewhere publicly reachable. This server listens on 127.0.0.1, so sending the
-picture would mean exposing captured drone frames to anyone holding the URL, and
-to LINE's cache. That is a decision about how sensitive the footage is, not a
-detail of message formatting, so it is left out until someone makes it. The
-message names the file on disk instead.
+Text always; images only when a public base URL is configured. The Messaging API
+cannot accept an uploaded image at all -- an image message carries a URL that
+LINE's own servers fetch, over HTTPS, from somewhere publicly reachable. This
+server listens on 127.0.0.1, so sending a picture means putting it briefly within
+reach of the internet, which is what public_share exists to bound.
+
+Configuring that is deliberately a separate step from configuring LINE at all.
+Sending telemetry as text exposes nothing; sending the frame exposes the frame,
+to anyone holding the URL while it lives and to LINE's cache permanently
+afterwards. Someone should choose the second on purpose.
 
 The token never appears in a log line, an error message or a response body.
 """
@@ -39,6 +42,13 @@ DEFAULT_CONFIG_PATH = Path("configs/line.json")
 
 _ENV_TOKEN = "TELEMETRY_OCR_LINE_TOKEN"
 _ENV_TO = "TELEMETRY_OCR_LINE_TO"
+_ENV_PUBLIC_URL = "TELEMETRY_OCR_PUBLIC_URL"
+
+# LINE's own ceilings on an image message. The originals here are around half a
+# megabyte, so neither is close, but a push rejected in full for one oversized
+# picture is a poor way to find that out.
+MAX_IMAGE_BYTES = 10 * 1024**2
+MAX_PREVIEW_BYTES = 1024**2
 
 # Field order in the message. Fixed rather than taken from the config so the
 # message reads the same every time and the eye can find a line by position.
@@ -95,6 +105,9 @@ _PREFIXES = {
 class LineConfig:
     channel_access_token: str
     to: str
+    # Where LINE should fetch capture images from, e.g. a Cloudflare Tunnel
+    # hostname. Empty means text only, which is the default and the safe one.
+    public_base_url: str = ""
 
     @property
     def masked_to(self) -> str:
@@ -117,8 +130,9 @@ def load_line_config(path: str | Path | None = None) -> LineConfig | None:
     """
     token = os.environ.get(_ENV_TOKEN, "").strip()
     to = os.environ.get(_ENV_TO, "").strip()
+    base = os.environ.get(_ENV_PUBLIC_URL, "").strip()
     if token and to:
-        return LineConfig(token, to)
+        return LineConfig(token, to, base)
 
     config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
     if not config_path.is_file():
@@ -132,9 +146,10 @@ def load_line_config(path: str | Path | None = None) -> LineConfig | None:
 
     token = token or str(data.get("channel_access_token", "")).strip()
     to = to or str(data.get("to", "")).strip()
+    base = base or str(data.get("public_base_url", "")).strip()
     if not token or not to:
         return None
-    return LineConfig(token, to)
+    return LineConfig(token, to, base)
 
 
 def describe_detections(summary: Any) -> str:
@@ -302,6 +317,31 @@ def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
     return f"{prefix}{rendered}{unit}{marker}"
 
 
+async def push_capture(
+    config: LineConfig,
+    text: str,
+    image_urls: list[str] | None = None,
+    *,
+    timeout_s: float = 15.0,
+) -> dict[str, Any]:
+    """Push the telemetry, and the pictures when there are any.
+
+    One request carrying every message. LINE counts a push by the request rather
+    than by the messages inside it, so batching keeps a capture at one message
+    from the monthly allowance instead of three, and it arrives in the chat in
+    one piece rather than as a text that might be followed by images.
+    """
+    messages: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for url in (image_urls or [])[:4]:
+        # Preview and original are the same file. Producing a smaller preview
+        # would mean a second encode and a second token for a picture that is
+        # already well inside LINE's preview limit.
+        messages.append(
+            {"type": "image", "originalContentUrl": url, "previewImageUrl": url}
+        )
+    return await _push(config, messages, timeout_s=timeout_s)
+
+
 async def push_text(config: LineConfig, text: str, *, timeout_s: float = 10.0) -> dict[str, Any]:
     """Push one text message. Returns what happened, never the token.
 
@@ -309,6 +349,12 @@ async def push_text(config: LineConfig, text: str, *, timeout_s: float = 10.0) -
     is usually the destination id, 429 is the monthly quota -- so the status and
     LINE's own message are both passed back rather than flattened into "failed".
     """
+    return await _push(config, [{"type": "text", "text": text}], timeout_s=timeout_s)
+
+
+async def _push(
+    config: LineConfig, messages: list[dict[str, Any]], *, timeout_s: float
+) -> dict[str, Any]:
     try:
         import aiohttp
     except ImportError as exc:  # pragma: no cover - aiohttp ships with the web extra
@@ -317,7 +363,10 @@ async def push_text(config: LineConfig, text: str, *, timeout_s: float = 10.0) -
             "`pip install -e .[web]`."
         ) from exc
 
-    payload = {"to": config.to, "messages": [{"type": "text", "text": text}]}
+    text = next(
+        (item.get("text", "") for item in messages if item.get("type") == "text"), ""
+    )
+    payload = {"to": config.to, "messages": messages}
     headers = {
         "Authorization": f"Bearer {config.channel_access_token}",
         "Content-Type": "application/json",
