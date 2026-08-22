@@ -69,7 +69,8 @@ class MessageFormattingTests(unittest.TestCase):
         text = format_capture_message(shot)
         self.assertIn("session-20260818-131353", text)
         self.assertIn("frames/00000000.jpg", text)
-        self.assertIn("14.871608", text)
+        # DMS, matching the overlay, rather than the decimal the pipeline stores.
+        self.assertIn("14°52'17.8\"N", text)
         self.assertIn("721.7 m", text)
         self.assertIn("1.05°", text)
         self.assertIn("car 3", text)
@@ -272,3 +273,116 @@ class PushTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoordinateFormattingTests(unittest.TestCase):
+    """DMS, because that is what the overlay shows.
+
+    A message quoting the same reading in decimal makes the reader convert
+    before they can compare it with the screen they are looking at.
+    """
+
+    def test_degrees_minutes_seconds(self) -> None:
+        from telemetry_ocr.line_client import format_dms
+
+        self.assertEqual(format_dms(14.848431, is_latitude=True), '14°50\'54.4"N')
+        self.assertEqual(format_dms(101.999197, is_latitude=False), '101°59\'57.1"E')
+
+    def test_the_hemisphere_follows_the_sign(self) -> None:
+        # A fixed "N " prefix would label a southern position wrongly, and the
+        # reader would have no way to tell from the message.
+        from telemetry_ocr.line_client import format_dms
+
+        self.assertTrue(format_dms(-14.848431, is_latitude=True).endswith("S"))
+        self.assertTrue(format_dms(-101.999197, is_latitude=False).endswith("W"))
+
+    def test_seconds_rounding_to_sixty_carries(self) -> None:
+        # 14.999999 is a minute short of the next degree; printing 59'60.0" is
+        # arithmetically true and reads as a mistake.
+        from telemetry_ocr.line_client import format_dms
+
+        rendered = format_dms(14.99999999, is_latitude=True)
+        self.assertNotIn("60.0", rendered)
+        self.assertEqual(rendered, '15°00\'00.0"N')
+
+    def test_the_map_link_carries_decimal_degrees(self) -> None:
+        # Google Maps takes decimal, not DMS; the message shows one and links
+        # the other.
+        from telemetry_ocr.line_client import maps_link
+
+        self.assertEqual(
+            maps_link(14.845161, 102.006658),
+            "https://www.google.com/maps?q=14.845161,102.006658",
+        )
+
+    def test_the_message_links_the_target(self) -> None:
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = _Shot(
+            records=[
+                _record("tag_lat_dms", 14.845161),
+                _record("tag_lon_dms", 102.006658),
+            ]
+        )
+        text = format_capture_message(shot)
+        self.assertIn('14°50\'42.6"N', text)
+        self.assertIn("google.com/maps?q=14.845161,102.006658", text)
+
+    def test_a_half_read_position_gets_no_link(self) -> None:
+        """A link built from one coordinate would point somewhere real and wrong.
+
+        Which is worse than no link: the reader would check a location that was
+        never claimed.
+        """
+        from telemetry_ocr.line_client import format_capture_message
+
+        text = format_capture_message(_Shot(records=[_record("tag_lat_dms", 14.845161)]))
+        self.assertNotIn("google.com/maps", text)
+
+
+class ValuePolicyTests(unittest.TestCase):
+    """Which of the two readings reaches the message.
+
+    Measured over every capture on disk: the image alone confirmed 94.5% of
+    fields but printed 5.5% as raw OCR text; live alone confirmed 88.2%; image
+    with a live fallback confirmed 95.5% and printed 1.8% raw. The fallback is
+    the part that had been missing.
+    """
+
+    def _verified(self, value, raw, live_value):
+        from telemetry_ocr.capture_service import Verification, VerifiedField
+
+        return Verification(
+            status="ok",
+            fields=[
+                VerifiedField("lrf_m", value, raw, 0.9, value is not None,
+                              agrees=False, live_value=live_value)
+            ],
+            agreed=0,
+            disagreed=1,
+        )
+
+    def test_the_image_value_is_used_when_it_reads(self) -> None:
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = _Shot(records=[_record("lrf_m", 817.7)])
+        shot.verification = self._verified(839.4, "839.4", 817.7)
+        self.assertIn("839.4 m", format_capture_message(shot))
+
+    def test_the_live_value_rescues_a_field_the_image_failed(self) -> None:
+        # The exact case that reached a real message as "10z°00'23.7".
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = _Shot(records=[_record("lrf_m", 478.6)])
+        shot.verification = self._verified(None, "4786n", 478.6)
+        text = format_capture_message(shot)
+        self.assertIn("478.6 m", text)
+        self.assertNotIn("4786n", text)
+        self.assertIn("ใช้ค่าจาก voting แทน", text)
+
+    def test_raw_text_only_when_neither_could_read_it(self) -> None:
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = _Shot(records=[_record("lrf_m", None, confirmed=False, raw="4786n")])
+        shot.verification = self._verified(None, "4786n", None)
+        self.assertIn("4786n?", format_capture_message(shot))

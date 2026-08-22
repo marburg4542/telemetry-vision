@@ -160,8 +160,10 @@ class VerifyShotTests(unittest.TestCase):
     def test_the_message_reports_the_image_value_not_the_live_one(self) -> None:
         """The message names a file someone may open.
 
-        So the numbers beside it have to be the ones that file contains, with
-        the trailing live value mentioned rather than published as the answer.
+        So the numbers beside it are the ones that file contains, wherever the
+        picture could be read at all. Temporal voting is deliberately behind the
+        current frame, so a differing live value is expected rather than
+        alarming, and is not repeated in the message.
         """
         from telemetry_ocr.capture_service import ShotResult, Verification, VerifiedField
         from telemetry_ocr.line_client import format_capture_message
@@ -186,9 +188,8 @@ class VerifyShotTests(unittest.TestCase):
         )
         text = format_capture_message(shot)
         self.assertIn("LRF   721 m", text)
-        self.assertIn("ตามไม่ทัน 1", text)
-        # The trailing live value is counted, not listed: the reader wants the
-        # numbers, and a per-field diff of normal voting behaviour is noise.
+        # The live value it disagreed with is not repeated anywhere: the reader
+        # wants the reading, not a diff of normal voting behaviour.
         self.assertNotIn("999", text)
 
     def test_full_agreement_says_where_the_numbers_came_from(self) -> None:

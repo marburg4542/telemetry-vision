@@ -1340,18 +1340,17 @@ def run_web_app(
 def _share_images(store: Any, session: Any, shot: Any, base_url: str) -> list[str]:
     """Publish the pictures for one shot and return their URLs.
 
-    The annotated copy first when there is one, because that is the picture
-    worth looking at; the original follows so the unmarked frame is available
-    too. LINE takes one image per message, so the caller sends one message each.
+    Only the annotated copy. Sending the original too put two pictures in the
+    chat that are identical apart from the boxes, and the reader could not tell
+    which was which without opening both. The unmarked frame stays on disk, and
+    the message names its path.
     """
     from .public_share import public_url
 
-    names = [name for name in (shot.annotated, shot.image) if name]
-    urls = []
-    for name in names:
-        token = store.mint(session.directory / name)
-        urls.append(public_url(base_url, token))
-    return urls
+    name = shot.annotated or shot.image
+    if not name:
+        return []
+    return [public_url(base_url, store.mint(session.directory / name))]
 
 
 def _as_record(record: Any) -> dict[str, Any]:

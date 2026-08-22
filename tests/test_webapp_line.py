@@ -148,7 +148,14 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        server = TestServer(create_app(config, FakeRecognizer(), stream_output_dir=self.root))
+        server = TestServer(
+            # Port 0: the share server binds an ephemeral port so two tests in
+            # this class cannot collide on the real one, and so the suite never
+            # fights whatever is already listening on this machine.
+            create_app(
+                config, FakeRecognizer(), stream_output_dir=self.root, share_port=0
+            )
+        )
         self.client = TestClient(server, headers={GUARD_HEADER: "1"})
         await self.client.start_server()
         self.raw_client = TestClient(server)
@@ -398,3 +405,23 @@ class ImageSendTests(LineEndpointTests):
         self.assertEqual(response.status, 200)
         kinds = [item["type"] for item in self.pushes[0]["body"]["messages"]]
         self.assertEqual(kinds, ["text"])
+
+    async def test_only_the_annotated_picture_is_sent(self) -> None:
+        """One image, not two nearly identical ones.
+
+        Sending the original alongside the annotated copy put two pictures in
+        the chat that differ only by the boxes, and the reader could not tell
+        which was which without opening both. The original stays on disk.
+        """
+        await self._shot()
+        await self._send()
+        images = [
+            item for item in self.pushes[0]["body"]["messages"] if item["type"] == "image"
+        ]
+        self.assertEqual(len(images), 1)
+
+    async def test_the_message_names_one_path(self) -> None:
+        await self._shot()
+        await self._send()
+        text = self.pushes[0]["body"]["messages"][0]["text"]
+        self.assertEqual(text.count("รูป"), 1)

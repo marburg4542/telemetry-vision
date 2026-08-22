@@ -199,6 +199,14 @@ def describe_detections(summary: Any) -> str:
     return line
 
 
+def _coordinate_link(values: dict[str, Any], lat_field: str, lon_field: str) -> str:
+    latitude = (values.get(lat_field) or {}).get("value")
+    longitude = (values.get(lon_field) or {}).get("value")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return ""
+    return maps_link(latitude, longitude)
+
+
 def _same(left: Any, right: Any) -> bool:
     if left is None or right is None:
         return False
@@ -207,33 +215,35 @@ def _same(left: Any, right: Any) -> bool:
     return str(left).strip() == str(right).strip()
 
 
-def describe_verification(verification: Any, lagging: dict[str, Any]) -> str:
-    """Say where the numbers came from, and where the live feed had trailed.
+def describe_verification(
+    verification: Any, rescued: int = 0
+) -> str:
+    """How far the saved image agreed with what the live feed had published.
 
-    The values above are read from the saved image. This says how much of that
-    reading matched what the live feed had published at the same instant --
-    which is a statement about temporal voting catching up, not about OCR being
-    wrong.
+    The values above come from the image wherever it could be read, so this is
+    a statement about the two readings agreeing rather than about which was
+    used. Where the OCR text matched, the reading is about as solid as this
+    system gets.
     """
     status = getattr(verification, "status", "skipped")
     if status == "unreadable":
-        return "ค่าจาก: สตรีมสด (อ่านไฟล์ภาพซ้ำไม่ได้)"
+        return "ตรวจซ้ำจากไฟล์ภาพ: อ่านไฟล์ไม่ได้"
     if status == "failed":
-        return "ค่าจาก: สตรีมสด (ตรวจซ้ำไม่สำเร็จ)"
+        return "ตรวจซ้ำจากไฟล์ภาพ: ไม่สำเร็จ"
     if status != "ok":
-        return "ค่าจาก: สตรีมสด"
+        return ""
 
     agreed = getattr(verification, "agreed", 0)
     disagreed = getattr(verification, "disagreed", 0)
-    head = f"ค่าอ่านจากไฟล์ภาพนี้โดยตรง (ข้อความตรงกับสตรีม {agreed}/{agreed + disagreed})"
-    if not lagging:
-        return head
-
-    # Only the count. The values above are already the ones this image gives, so
-    # listing every field the live feed trailed on turned a report into a diff:
-    # eight lines of detail nobody reading a phone notification needs, about
-    # behaviour that is working as designed.
-    return f"{head}\n  (สตรีมสดยังตามไม่ทัน {len(lagging)} ฟิลด์ ซึ่งปกติของ temporal voting)"
+    total = agreed + disagreed
+    parts = [f"ตรวจซ้ำจากไฟล์ภาพ: ข้อความตรงกัน {agreed}/{total}"]
+    if rescued:
+        # Worth saying: the picture could not be read for these, so the number
+        # shown is what voting held rather than what this frame gave.
+        parts.append(f"  ({rescued} ฟิลด์อ่านจากภาพไม่ได้ ใช้ค่าจาก voting แทน)")
+    elif disagreed:
+        parts.append(f"  ({disagreed} ฟิลด์อ่านได้ต่างกัน ควรเปิดรูปดู)")
+    return "\n".join(parts)
 
 
 def format_capture_message(shot: Any, directory: str | Path | None = None) -> str:
@@ -248,24 +258,40 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
         # dropping the fields that were hardest to read would misrepresent it.
         values[field_id] = record
 
-    # Where the saved image was re-read, its values replace the live ones.
+    # The saved image is read first, and the live reading is the fallback.
     #
-    # The live value is whatever temporal voting had last confirmed, which on a
-    # moving field trails the frame on purpose; the re-read is what this exact
-    # picture says. Since the message names that picture and someone may open it,
-    # the numbers beside it have to be the ones it contains.
+    # Settled by counting, over every capture on disk, rather than by argument:
+    #
+    #   policy                     confirmed     shown as raw text
+    #   image only, no fallback    94.5%         5.5%
+    #   live only                  88.2%         1.8%
+    #   image, else live           95.5%         1.8%
+    #
+    # The image wins the usual case because it is the picture being described,
+    # and because temporal voting is deliberately behind it -- 68 of 110 fields
+    # had both readings confirmed and disagreeing, which is voting still holding
+    # an earlier frame. But the image is one sample, and when it fails
+    # validation there is nothing to fall back on within itself. That was the
+    # bug: no fallback, so a field the image misread was printed as raw OCR text
+    # -- "10z°00'23.7" where voting had 102.006658 all along. Four fields across
+    # these captures were being shown that way for no reason.
     verification = getattr(shot, "verification", None)
-    lagging: dict[str, Any] = {}
+    rescued = 0
     for item in getattr(verification, "fields", []) or []:
-        values[item.field_id] = {
-            "field_id": item.field_id,
-            "value": item.value,
-            "raw_text": item.raw_text,
-            "confidence": item.confidence,
-            "confirmed": item.confirmed,
-        }
-        if item.live_value is not None and not _same(item.value, item.live_value):
-            lagging[item.field_id] = item
+        live_record = values.get(item.field_id) or {}
+        live_value = live_record.get("value")
+        if item.value is not None:
+            values[item.field_id] = {
+                "field_id": item.field_id,
+                "value": item.value,
+                "raw_text": item.raw_text,
+                "confidence": item.confidence,
+                "confirmed": item.confirmed,
+            }
+        elif live_value is not None:
+            # The image could not be validated; voting had an answer. Keeping the
+            # live record is what stops raw OCR text reaching the message.
+            rescued += 1
 
     lines = [f"[Capture] {getattr(shot, 'captured_at', '')}"]
     session = getattr(shot, "session", "")
@@ -279,25 +305,59 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
         if rendered:
             lines.append(f"{label}  " + "   ".join(rendered))
 
+    # The target's position, one tap from a map. Only when both halves read --
+    # a link built from a missing coordinate would point somewhere real and
+    # wrong, which is worse than no link.
+    tag_link = _coordinate_link(values, "tag_lat_dms", "tag_lon_dms")
+    if tag_link:
+        lines.append(f"      TAG on map: {tag_link}")
+
     lines.append("")
     lines.append(describe_detections(getattr(shot, "detections", None)))
-    lines.append(describe_verification(verification, lagging))
+    verification_line = describe_verification(verification, rescued)
+    if verification_line:
+        lines.append(verification_line)
 
     if directory is not None:
-        # The annotated copy when there is one, since that is the picture with
-        # the boxes someone opening this would expect. The clean original is
-        # named too: it is the record, and the one OCR was re-read from.
+        # The annotated copy when there is one. Naming the original as well put
+        # two nearly identical paths in a phone notification and left the reader
+        # to work out which was which; it is still on disk beside this one.
         annotated = getattr(shot, "annotated", None)
-        if annotated:
-            lines.append(f"รูป (มีกรอบ): {Path(directory) / annotated}")
-            lines.append(f"รูปต้นฉบับ: {Path(directory) / image}")
-        else:
-            lines.append(f"รูป: {Path(directory) / image}")
+        lines.append(f"รูป: {Path(directory) / (annotated or image)}")
 
     text = "\n".join(lines)
     if len(text) > MAX_TEXT:
         text = text[: MAX_TEXT - 1] + "…"
     return text
+
+
+def format_dms(degrees: float, is_latitude: bool) -> str:
+    """Decimal degrees as the overlay writes them: 14°50\'42.6"N.
+
+    The OSD shows DMS, so a message quoting the same reading in decimal makes
+    the reader convert before they can compare the two. The hemisphere comes
+    from the sign rather than from a fixed prefix, which a southern or western
+    position would otherwise label wrongly.
+    """
+    hemisphere = ("N" if degrees >= 0 else "S") if is_latitude else ("E" if degrees >= 0 else "W")
+    value = abs(float(degrees))
+    whole = int(value)
+    minutes_all = (value - whole) * 60.0
+    minutes = int(minutes_all)
+    seconds = (minutes_all - minutes) * 60.0
+    # Seconds can round to 60 and produce 50'60.0"; carry it rather than print it.
+    if round(seconds, 1) >= 60.0:
+        seconds = 0.0
+        minutes += 1
+    if minutes >= 60:
+        minutes = 0
+        whole += 1
+    return f"{whole}°{minutes:02d}\'{seconds:04.1f}\"{hemisphere}"
+
+
+def maps_link(latitude: float, longitude: float) -> str:
+    """A link that opens the position, in the app on a phone and the web elsewhere."""
+    return f"https://www.google.com/maps?q={float(latitude):.6f},{float(longitude):.6f}"
 
 
 def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
@@ -309,11 +369,11 @@ def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
         return f"{_PREFIXES.get(field_id, '')}{raw or '—'}?" if raw else ""
     unit = _UNITS.get(field_id, "")
     prefix = _PREFIXES.get(field_id, "")
-    if isinstance(value, float):
-        rendered = f"{value:.6f}" if "dms" in field_id else f"{value:g}"
-    else:
-        rendered = str(value)
     marker = "" if record.get("confirmed") else "?"
+    if "lat_dms" in field_id or "lon_dms" in field_id:
+        # DMS, and no prefix: the hemisphere letter is part of the rendering.
+        return f"{format_dms(float(value), 'lat_dms' in field_id)}{marker}"
+    rendered = f"{value:g}" if isinstance(value, float) else str(value)
     return f"{prefix}{rendered}{unit}{marker}"
 
 
