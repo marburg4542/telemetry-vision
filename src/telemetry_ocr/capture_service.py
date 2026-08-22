@@ -48,6 +48,97 @@ _JPEG_QUALITY = 95
 # See verify_shot for why repeating one image is not double counting.
 _VERIFY_PASSES = 5
 
+# Channels the verifier reads a blank field through, on top of the field's own
+# pair of recipes.
+#
+# Chosen by counting, on 42 captures whose camera-yaw ROI was read by eye. The
+# overlay is saturated green and it is drawn over whatever the camera is looking
+# at, which here is usually vegetation: green text on green has almost no
+# luminance contrast, so the colour and grey recipes lose glyphs on exactly the
+# frames that matter. Saturation separates them -- the OSD is fully saturated
+# and foliage is not -- and the green channel separates them differently again.
+#
+#     primary alone                     35/42 correct, 4 wrong, 3 blank
+#     primary + these two, for blanks   38/42 correct, 4 wrong, 0 blank
+#
+# Only blanks. Overriding a reading the primary recipe *did* produce was tried
+# and rejected: preferring a longer answer, on the theory that OCR drops digits
+# more readily than it invents them, recovered "33.40" from "3.40" and at the
+# same time turned "30.85" into "130.85". One fixed, one broken, so the value a
+# recipe actually produced is left alone.
+_BLANK_FIELD_CHANNELS = ("hsv_s", "g")
+
+
+def _second_opinion(frame: Any, pipeline: Any, produced: list[Any]) -> list[Any]:
+    """Fill in fields the ordinary recipes could not read.
+
+    A capture is one deliberate frame, so it can afford several passes that the
+    live path cannot. This runs only for fields that came back with no value at
+    all -- there is nothing to lose by trying, and nothing to override.
+    """
+    from dataclasses import replace
+
+    from .pipeline import _RECOGNIZER_LOCK
+    from .preprocess import apply_recipe, extract_roi
+    from .validation import validate_text
+
+    blanks = [
+        (index, record)
+        for index, record in enumerate(produced)
+        if record.value is None
+    ]
+    if not blanks:
+        return produced
+
+    fields = {field.field_id: field for field in pipeline.config.fields}
+    runtime_padding = pipeline.config.runtime.padding
+    jobs: list[tuple[int, Any, str]] = []
+    images: list[Any] = []
+    for index, record in blanks:
+        field = fields.get(record.field_id)
+        if field is None:
+            continue
+        padding = runtime_padding if field.padding is None else field.padding
+        crop = extract_roi(frame, field.box, padding)
+        for channel in _BLANK_FIELD_CHANNELS:
+            recipe = replace(
+                field.primary,
+                name=f"{channel}_second_opinion",
+                channel=channel,
+                clahe=True,
+                unsharp=True,
+            )
+            jobs.append((index, field, recipe.name))
+            images.append(apply_recipe(crop, recipe))
+    if not images:
+        return produced
+
+    with _RECOGNIZER_LOCK:
+        answers = pipeline.recognizer.recognize(images)
+
+    # Best confidence among the reads that validate, per field.
+    best: dict[int, tuple[float, Any, str, str]] = {}
+    for (index, field, variant), answer in zip(jobs, answers, strict=True):
+        checked = validate_text(answer.text, field)
+        if not checked.valid:
+            continue
+        if index not in best or answer.confidence > best[index][0]:
+            best[index] = (answer.confidence, checked.value, answer.text, variant)
+
+    for index, (confidence, value, raw_text, variant) in best.items():
+        record = produced[index]
+        produced[index] = replace(
+            record,
+            value=value,
+            raw_text=raw_text,
+            confidence=confidence,
+            # Not confirmed: this is one read of one picture, and calling it
+            # confirmed would claim a quorum that never happened.
+            confirmed=False,
+            preprocess_variant=variant,
+        )
+    return produced
+
 
 @dataclass(slots=True)
 class DetectionSummary:
@@ -629,6 +720,7 @@ def verify_shot(
         produced, _ = pipeline.process_frame(
             FramePacket(frame, index, index * 100.0, _time.perf_counter())
         )
+    produced = _second_opinion(frame, pipeline, list(produced))
     live = {item.get("field_id"): item for item in live_records}
 
     # Two different questions, and conflating them made the first run of this

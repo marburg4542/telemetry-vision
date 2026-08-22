@@ -310,6 +310,10 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
     # wrong, which is worse than no link.
     tag_link = _coordinate_link(values, "tag_lat_dms", "tag_lon_dms")
     if tag_link:
+        # Set off from the readings above it. The link is the one line meant to
+        # be tapped rather than read, and running it straight on from SENS made
+        # the block look like a sixth telemetry row.
+        lines.append("")
         lines.append(f"      TAG on map: {tag_link}")
 
     lines.append("")

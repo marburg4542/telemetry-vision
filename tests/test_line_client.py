@@ -283,6 +283,30 @@ class PushTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+class MapLinkLayoutTests(unittest.TestCase):
+    def test_the_map_link_is_set_off_from_the_readings(self) -> None:
+        """It is the one line meant to be tapped rather than read.
+
+        Run straight on from SENS it looked like a sixth telemetry row.
+        """
+        from telemetry_ocr.capture_service import ShotResult
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = ShotResult(
+            session="flight01", frame_index=0, image="frames/00000000.jpg",
+            source_time_ms=0.0, captured_at="2026-08-22T10:00:00+00:00", bytes=1,
+            records=[
+                {"field_id": "tag_lat_dms", "value": 14.853056, "raw_text": "x",
+                 "confidence": 0.9, "confirmed": True},
+                {"field_id": "tag_lon_dms", "value": 101.994681, "raw_text": "x",
+                 "confidence": 0.9, "confirmed": True},
+            ],
+        )
+        lines = format_capture_message(shot).splitlines()
+        index = next(i for i, line in enumerate(lines) if "TAG on map" in line)
+        self.assertEqual(lines[index - 1], "")
+
+
 class DigestTests(unittest.TestCase):
     """The text several shots share when they go in one push."""
 

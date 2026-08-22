@@ -202,6 +202,117 @@ class VerifyShotTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_IMAGE_DEPS, "NumPy/OpenCV not installed")
+@unittest.skipUnless(HAS_IMAGE_DEPS, "NumPy/OpenCV not installed")
+class SecondOpinionTests(unittest.TestCase):
+    """Reading a blank field again through channels the field's recipes miss.
+
+    The overlay is saturated green drawn over whatever the camera is looking at,
+    which is usually vegetation. Green on green has almost no luminance
+    contrast, so the colour and grey recipes lose glyphs on exactly the frames
+    that matter, while saturation separates them cleanly. Counted over 42
+    captures whose camera-yaw ROI was read by eye, the primary recipe alone gave
+    35 correct, 4 wrong and 3 blank; adding these channels for the blanks gave
+    38 correct, 4 wrong and none blank.
+    """
+
+    def _setup(self, answers: dict[str, str]):
+        import numpy as np
+
+        from telemetry_ocr.config import AppConfig, FieldConfig, RecipeConfig, RuntimeConfig
+
+        field_config = FieldConfig(
+            field_id="speed",
+            box=(0.1, 0.1, 0.4, 0.4),
+            allowed_chars="0123456789",
+            regex=r"^\d+$",
+            data_type="integer",
+            profile="fast",
+            primary=RecipeConfig(name="color_baseline", channel="color"),
+        )
+        config = AppConfig(runtime=RuntimeConfig(), fields=[field_config])
+
+        class Recognizer:
+            def __init__(self) -> None:
+                self.batches: list[int] = []
+
+            def recognize(self, images):
+                from telemetry_ocr.ocr import OCRResult
+
+                self.batches.append(len(images))
+                # One answer per channel, in the order _second_opinion asks.
+                order = list(answers.values())
+                return [
+                    OCRResult(order[i % len(order)][0], order[i % len(order)][1])
+                    for i in range(len(images))
+                ]
+
+        class Pipeline:
+            def __init__(self, recognizer) -> None:
+                self.config = config
+                self.recognizer = recognizer
+
+        recognizer = Recognizer()
+        return Pipeline(recognizer), recognizer, np.zeros((60, 80, 3), dtype="uint8")
+
+    def _record(self, value):
+        from telemetry_ocr.output import TelemetryRecord
+
+        return TelemetryRecord(
+            source_time_ms=0.0, frame_index=0, field_id="speed", value=value,
+            raw_text="" if value is None else str(value), confidence=0.4,
+            confirmed=False, preprocess_variant="color_baseline", latency_ms=1.0,
+        )
+
+    def test_a_blank_field_is_read_again_and_filled(self) -> None:
+        from telemetry_ocr.capture_service import _second_opinion
+
+        pipeline, _recognizer, frame = self._setup({"hsv_s": ("128", 0.91), "g": ("128", 0.7)})
+        out = _second_opinion(frame, pipeline, [self._record(None)])
+        self.assertEqual(out[0].value, 128)
+        self.assertEqual(out[0].raw_text, "128")
+        # The best-confidence read wins, and it says which channel found it.
+        self.assertAlmostEqual(out[0].confidence, 0.91)
+        self.assertIn("hsv_s", out[0].preprocess_variant)
+
+    def test_the_filled_value_is_not_called_confirmed(self) -> None:
+        # One read of one picture. Marking it confirmed would claim a quorum
+        # that never happened.
+        from telemetry_ocr.capture_service import _second_opinion
+
+        pipeline, _rec, frame = self._setup({"hsv_s": ("128", 0.99)})
+        out = _second_opinion(frame, pipeline, [self._record(None)])
+        self.assertFalse(out[0].confirmed)
+
+    def test_a_reading_that_was_produced_is_never_overridden(self) -> None:
+        """Tried, measured, rejected.
+
+        Preferring a longer answer -- on the theory that OCR drops digits more
+        readily than it invents them -- recovered "33.40" from "3.40" and in the
+        same run turned "30.85" into "130.85". One fixed, one broken, so a value
+        a recipe actually produced is left alone.
+        """
+        from telemetry_ocr.capture_service import _second_opinion
+
+        pipeline, recognizer, frame = self._setup({"hsv_s": ("999", 0.99)})
+        out = _second_opinion(frame, pipeline, [self._record(128)])
+        self.assertEqual(out[0].value, 128)
+        self.assertEqual(recognizer.batches, [])
+
+    def test_nothing_blank_means_no_extra_work(self) -> None:
+        from telemetry_ocr.capture_service import _second_opinion
+
+        pipeline, recognizer, frame = self._setup({"hsv_s": ("128", 0.9)})
+        _second_opinion(frame, pipeline, [self._record(1), self._record(2)])
+        self.assertEqual(recognizer.batches, [])
+
+    def test_a_blank_nothing_can_read_stays_blank(self) -> None:
+        from telemetry_ocr.capture_service import _second_opinion
+
+        pipeline, _rec, frame = self._setup({"hsv_s": ("not a number", 0.9)})
+        out = _second_opinion(frame, pipeline, [self._record(None)])
+        self.assertIsNone(out[0].value)
+
+
 class RecognizerLockTests(unittest.TestCase):
     def test_the_recognizer_is_entered_by_one_thread_at_a_time(self) -> None:
         """A stream reads frames on its own thread while a capture re-reads a file.
