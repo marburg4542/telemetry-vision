@@ -796,6 +796,11 @@ def create_app(
                 await pump
         # Released after the pump stops so a long poll cannot outlive it.
         pump_state["ready"].set()
+        # The extra recognizers a capture votes with. Built lazily on the first
+        # capture, so a server that never captured has none to release.
+        from .capture_service import close_ensemble
+
+        await asyncio.to_thread(close_ensemble)
         state = app[detection_state_key]
         try:
             await asyncio.to_thread(state.worker.stop)

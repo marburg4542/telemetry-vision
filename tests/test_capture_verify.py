@@ -15,6 +15,7 @@ import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 HAS_IMAGE_DEPS = bool(importlib.util.find_spec("numpy") and importlib.util.find_spec("cv2"))
 
@@ -203,114 +204,215 @@ class VerifyShotTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_IMAGE_DEPS, "NumPy/OpenCV not installed")
 @unittest.skipUnless(HAS_IMAGE_DEPS, "NumPy/OpenCV not installed")
-class SecondOpinionTests(unittest.TestCase):
-    """Reading a blank field again through channels the field's recipes miss.
+class EnsembleTests(unittest.TestCase):
+    """A capture is read by several models through several channels, and voted.
 
-    The overlay is saturated green drawn over whatever the camera is looking at,
-    which is usually vegetation. Green on green has almost no luminance
-    contrast, so the colour and grey recipes lose glyphs on exactly the frames
-    that matter, while saturation separates them cleanly. Counted over 42
-    captures whose camera-yaw ROI was read by eye, the primary recipe alone gave
-    35 correct, 4 wrong and 3 blank; adding these channels for the blanks gave
-    38 correct, 4 wrong and none blank.
+    Measured against an answer key -- the camera-yaw ROI of 42 saved captures
+    read by eye, so it counts correct answers rather than answers that pass the
+    regex. One model on one channel gets 35 right, 4 wrong and 3 blank; three
+    models on three channels get 40 right, 2 wrong and none blank. Neither half
+    does it alone: the two extra models score 26 and 21 on their own, which is
+    why they are voters rather than replacements.
     """
 
-    def _setup(self, answers: dict[str, str]):
-        import numpy as np
+    override = True
 
+    def _config(self):
         from telemetry_ocr.config import AppConfig, FieldConfig, RecipeConfig, RuntimeConfig
 
-        field_config = FieldConfig(
-            field_id="speed",
-            box=(0.1, 0.1, 0.4, 0.4),
-            allowed_chars="0123456789",
-            regex=r"^\d+$",
-            data_type="integer",
-            profile="fast",
-            primary=RecipeConfig(name="color_baseline", channel="color"),
+        return AppConfig(
+            runtime=RuntimeConfig(model_name="model-a"),
+            fields=[
+                FieldConfig(
+                    field_id="speed",
+                    box=(0.1, 0.1, 0.4, 0.4),
+                    allowed_chars="0123456789",
+                    regex=r"^\d+$",
+                    data_type="integer",
+                    profile="fast",
+                    ensemble_override=self.override,
+                    primary=RecipeConfig(name="color_baseline", channel="color"),
+                )
+            ],
         )
-        config = AppConfig(runtime=RuntimeConfig(), fields=[field_config])
 
-        class Recognizer:
-            def __init__(self) -> None:
-                self.batches: list[int] = []
+    def _pipeline(self, answers_by_model):
+        """answers_by_model: {model: [(text, confidence) per channel]}."""
+        import telemetry_ocr.capture_service as service
+        from telemetry_ocr.ocr import OCRResult
+
+        config = self._config()
+
+        class Reader:
+            def __init__(self, answers):
+                self.answers = answers
+                self.calls = 0
 
             def recognize(self, images):
-                from telemetry_ocr.ocr import OCRResult
+                self.calls += 1
+                return [OCRResult(*self.answers[i % len(self.answers)]) for i in range(len(images))]
 
-                self.batches.append(len(images))
-                # One answer per channel, in the order _second_opinion asks.
-                order = list(answers.values())
-                return [
-                    OCRResult(order[i % len(order)][0], order[i % len(order)][1])
-                    for i in range(len(images))
-                ]
+        readers = {name: Reader(rows) for name, rows in answers_by_model.items()}
+        service._ensemble_readers.clear()
+        service._ensemble_failed.clear()
+        service._ensemble_readers.update(readers)
 
         class Pipeline:
-            def __init__(self, recognizer) -> None:
+            def __init__(self):
                 self.config = config
-                self.recognizer = recognizer
+                self.recognizer = readers.get("model-a")
 
-        recognizer = Recognizer()
-        return Pipeline(recognizer), recognizer, np.zeros((60, 80, 3), dtype="uint8")
+        self.addCleanup(service._ensemble_readers.clear)
+        return Pipeline(), readers
 
     def _record(self, value):
         from telemetry_ocr.output import TelemetryRecord
 
         return TelemetryRecord(
             source_time_ms=0.0, frame_index=0, field_id="speed", value=value,
-            raw_text="" if value is None else str(value), confidence=0.4,
+            raw_text="" if value is None else str(value), confidence=0.5,
             confirmed=False, preprocess_variant="color_baseline", latency_ms=1.0,
         )
 
-    def test_a_blank_field_is_read_again_and_filled(self) -> None:
-        from telemetry_ocr.capture_service import _second_opinion
+    def _frame(self):
+        import numpy as np
 
-        pipeline, _recognizer, frame = self._setup({"hsv_s": ("128", 0.91), "g": ("128", 0.7)})
-        out = _second_opinion(frame, pipeline, [self._record(None)])
+        return np.zeros((60, 80, 3), dtype="uint8")
+
+    def test_the_majority_wins_over_one_confident_reader(self) -> None:
+        """The failure this exists for.
+
+        The colour recipe read "3.40" off a ROI plainly showing "33.40" -- at
+        0.91 confidence, so nothing downstream had any reason to doubt it. Only
+        readers that are wrong in different places can outvote that.
+        """
+        from telemetry_ocr.capture_service import _ensemble_read
+
+        pipeline, _readers = self._pipeline({
+            "model-a": [("340", 0.99), ("340", 0.99), ("340", 0.99)],
+            "model-b": [("3340", 0.60), ("3340", 0.62), ("3340", 0.61)],
+            "model-c": [("3340", 0.55), ("3340", 0.58), ("3340", 0.57)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(340)])
+        self.assertEqual(out[0].value, 3340)
+
+    def test_a_lone_dissenter_does_not_win(self) -> None:
+        from telemetry_ocr.capture_service import _ensemble_read
+
+        pipeline, _readers = self._pipeline({
+            "model-a": [("128", 0.7), ("128", 0.7), ("128", 0.7)],
+            "model-b": [("128", 0.7), ("128", 0.7), ("128", 0.7)],
+            "model-c": [("999", 0.99), ("999", 0.99), ("999", 0.99)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(128)])
         self.assertEqual(out[0].value, 128)
-        self.assertEqual(out[0].raw_text, "128")
-        # The best-confidence read wins, and it says which channel found it.
-        self.assertAlmostEqual(out[0].confidence, 0.91)
-        self.assertIn("hsv_s", out[0].preprocess_variant)
 
-    def test_the_filled_value_is_not_called_confirmed(self) -> None:
-        # One read of one picture. Marking it confirmed would claim a quorum
-        # that never happened.
-        from telemetry_ocr.capture_service import _second_opinion
+    def test_a_tie_goes_to_the_more_confident_side(self) -> None:
+        from telemetry_ocr.capture_service import _ensemble_read
 
-        pipeline, _rec, frame = self._setup({"hsv_s": ("128", 0.99)})
-        out = _second_opinion(frame, pipeline, [self._record(None)])
+        pipeline, _readers = self._pipeline({
+            "model-a": [("111", 0.20), ("111", 0.20), ("111", 0.20)],
+            "model-b": [("222", 0.90), ("222", 0.90), ("222", 0.90)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(111)])
+        self.assertEqual(out[0].value, 222)
+
+    def test_every_reader_sees_every_channel(self) -> None:
+        # Three channels in one batch per model: the crops are built once and
+        # recognised together, not once per channel per model.
+        from telemetry_ocr.capture_service import _ENSEMBLE_CHANNELS, _ensemble_read
+
+        pipeline, readers = self._pipeline({
+            "model-a": [("1", 0.5)], "model-b": [("1", 0.5)],
+        })
+        _ensemble_read(self._frame(), pipeline, [self._record(1)])
+        for name, reader in readers.items():
+            self.assertEqual(reader.calls, 1, name)
+        self.assertEqual(len(_ENSEMBLE_CHANNELS), 3)
+
+    def test_a_field_nothing_can_read_keeps_what_it_had(self) -> None:
+        from telemetry_ocr.capture_service import _ensemble_read
+
+        pipeline, _readers = self._pipeline({
+            "model-a": [("not a number", 0.9)], "model-b": [("also not", 0.9)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(128)])
+        self.assertEqual(out[0].value, 128)
+
+    def test_a_blank_field_the_ensemble_can_read_gets_filled(self) -> None:
+        from telemetry_ocr.capture_service import _ensemble_read
+
+        pipeline, _readers = self._pipeline({
+            "model-a": [("128", 0.8)], "model-b": [("128", 0.9)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(None)])
+        self.assertEqual(out[0].value, 128)
+        # Agreement between readers is not the temporal quorum `confirmed`
+        # means, and borrowing the word would misreport it.
         self.assertFalse(out[0].confirmed)
 
-    def test_a_reading_that_was_produced_is_never_overridden(self) -> None:
-        """Tried, measured, rejected.
+    def test_the_winning_read_says_where_it_came_from(self) -> None:
+        from telemetry_ocr.capture_service import _ensemble_read
 
-        Preferring a longer answer -- on the theory that OCR drops digits more
-        readily than it invents them -- recovered "33.40" from "3.40" and in the
-        same run turned "30.85" into "130.85". One fixed, one broken, so a value
-        a recipe actually produced is left alone.
+        pipeline, _readers = self._pipeline({
+            "model-a": [("128", 0.4)], "model-b": [("128", 0.95)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(None)])
+        self.assertIn("model-b", out[0].preprocess_variant)
+        self.assertIn("6/6", out[0].preprocess_variant)
+
+    def test_a_field_that_has_not_been_measured_keeps_what_it_read(self) -> None:
+        """Blanks only, unless someone has built an answer key for the field.
+
+        Letting the vote override everywhere was tried: it took the camera yaw
+        from 35 of 42 correct to 40 and in the same run cost the camera pitch
+        several readings, mostly by losing the minus sign -- "-8.75" became
+        "8.75". Trading one field's accuracy for another's is not an
+        improvement, it is a different set of wrong numbers.
         """
-        from telemetry_ocr.capture_service import _second_opinion
+        from telemetry_ocr.capture_service import _ensemble_read
 
-        pipeline, recognizer, frame = self._setup({"hsv_s": ("999", 0.99)})
-        out = _second_opinion(frame, pipeline, [self._record(128)])
+        self.override = False
+        pipeline, _readers = self._pipeline({
+            "model-a": [("999", 0.99)], "model-b": [("999", 0.99)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(128)])
         self.assertEqual(out[0].value, 128)
-        self.assertEqual(recognizer.batches, [])
 
-    def test_nothing_blank_means_no_extra_work(self) -> None:
-        from telemetry_ocr.capture_service import _second_opinion
+    def test_a_blank_is_filled_even_where_overriding_is_off(self) -> None:
+        # Nothing to make worse: there was no reading.
+        from telemetry_ocr.capture_service import _ensemble_read
 
-        pipeline, recognizer, frame = self._setup({"hsv_s": ("128", 0.9)})
-        _second_opinion(frame, pipeline, [self._record(1), self._record(2)])
-        self.assertEqual(recognizer.batches, [])
+        self.override = False
+        pipeline, _readers = self._pipeline({
+            "model-a": [("128", 0.8)], "model-b": [("128", 0.9)],
+        })
+        out = _ensemble_read(self._frame(), pipeline, [self._record(None)])
+        self.assertEqual(out[0].value, 128)
 
-    def test_a_blank_nothing_can_read_stays_blank(self) -> None:
-        from telemetry_ocr.capture_service import _second_opinion
+    def test_a_model_that_will_not_load_is_not_retried_every_capture(self) -> None:
+        """The usual reason is that it was never downloaded, and the next
+        capture will not change that. The ensemble votes with what did load."""
+        import telemetry_ocr.capture_service as service
 
-        pipeline, _rec, frame = self._setup({"hsv_s": ("not a number", 0.9)})
-        out = _second_opinion(frame, pipeline, [self._record(None)])
-        self.assertIsNone(out[0].value)
+        service._ensemble_readers.clear()
+        service._ensemble_failed.clear()
+        self.addCleanup(service._ensemble_readers.clear)
+        self.addCleanup(service._ensemble_failed.clear)
+        attempts = []
+
+        def refuse(runtime):
+            attempts.append(runtime.model_name)
+            raise RuntimeError("not downloaded")
+
+        with mock.patch("telemetry_ocr.ocr.create_recognizer", refuse):
+            config = self._config()
+            first = service._ensemble_recognizers(config.runtime, "primary")
+            second = service._ensemble_recognizers(config.runtime, "primary")
+        self.assertEqual(first, {"model-a": "primary"})
+        self.assertEqual(second, {"model-a": "primary"})
+        # Each missing model tried once, not once per capture.
+        self.assertEqual(len(attempts), len(set(attempts)))
 
 
 class RecognizerLockTests(unittest.TestCase):

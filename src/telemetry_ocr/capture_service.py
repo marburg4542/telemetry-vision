@@ -48,96 +48,189 @@ _JPEG_QUALITY = 95
 # See verify_shot for why repeating one image is not double counting.
 _VERIFY_PASSES = 5
 
-# Channels the verifier reads a blank field through, on top of the field's own
-# pair of recipes.
+# The readers a capture is checked by, and why there are nine of them.
 #
-# Chosen by counting, on 42 captures whose camera-yaw ROI was read by eye. The
-# overlay is saturated green and it is drawn over whatever the camera is looking
-# at, which here is usually vegetation: green text on green has almost no
-# luminance contrast, so the colour and grey recipes lose glyphs on exactly the
-# frames that matter. Saturation separates them -- the OSD is fully saturated
-# and foliage is not -- and the green channel separates them differently again.
+# Measured against an answer key: the camera-yaw ROI of 42 saved captures, read
+# by eye, so this counts *correct* answers rather than answers that merely pass
+# the regex -- "3.40" for a ROI showing "33.40" passes and is wrong, and that is
+# the failure being chased.
 #
-#     primary alone                     35/42 correct, 4 wrong, 3 blank
-#     primary + these two, for blanks   38/42 correct, 4 wrong, 0 blank
+#     tiny + colour only (what this used to do)      35/42   4 wrong   3 blank
+#     tiny, other channels for blanks only           38/42   4 wrong   0 blank
+#     three models x colour                          35/42   6 wrong   1 blank
+#     three models x two channels (6 reads)          37/42   5 wrong   0 blank
+#     three models x three channels (9 reads)        40/42   2 wrong   0 blank
 #
-# Only blanks. Overriding a reading the primary recipe *did* produce was tried
-# and rejected: preferring a longer answer, on the theory that OCR drops digits
-# more readily than it invents them, recovered "33.40" from "3.40" and at the
-# same time turned "30.85" into "130.85". One fixed, one broken, so the value a
-# recipe actually produced is left alone.
-_BLANK_FIELD_CHANNELS = ("hsv_s", "g")
+# Two things make the last row work, and neither does it alone. The channels
+# differ because the overlay is saturated green drawn over vegetation: green on
+# green has almost no luminance contrast, so a colour or grey recipe loses
+# glyphs on exactly the frames worth capturing, while saturation separates them
+# cleanly. The models differ because they are wrong in different places -- on
+# their own the two mobile models score 26 and 21 against tiny's 35, which is
+# what makes them useful as voters rather than as replacements.
+#
+# Nine reads cost about 30 ms per ROI against 3 ms for one, so roughly a third
+# of a second on a twelve-field capture. A capture is one deliberate frame and
+# can afford that; the live path never runs this.
+_ENSEMBLE_MODELS = (
+    "PP-OCRv6_tiny_rec",
+    "en_PP-OCRv5_mobile_rec",
+    "en_PP-OCRv4_mobile_rec",
+)
+_ENSEMBLE_CHANNELS = ("color", "hsv_s", "g")
+
+_ensemble_lock = threading.Lock()
+_ensemble_readers: dict[str, Any] = {}
+_ensemble_failed: set[str] = set()
 
 
-def _second_opinion(frame: Any, pipeline: Any, produced: list[Any]) -> list[Any]:
-    """Fill in fields the ordinary recipes could not read.
+def _ensemble_recognizers(runtime: Any, primary: Any) -> dict[str, Any]:
+    """The extra recognizers, built once and kept for the life of the process.
 
-    A capture is one deliberate frame, so it can afford several passes that the
-    live path cannot. This runs only for fields that came back with no value at
-    all -- there is nothing to lose by trying, and nothing to override.
+    A model that will not load is remembered as failed rather than retried on
+    every capture: the usual reason is that it was never downloaded, which the
+    next capture will not change. The ensemble then votes with whatever did
+    load, down to the configured recognizer alone.
     """
-    from dataclasses import replace
+    from dataclasses import replace as _replace
+
+    from .ocr import create_recognizer
+
+    with _ensemble_lock:
+        # The configured recognizer votes whatever it is called. Registering it
+        # only when its name appears in the list below would silence it entirely
+        # on a deployment that had been pointed at some other model.
+        _ensemble_readers[runtime.model_name] = primary
+        for name in _ENSEMBLE_MODELS:
+            if name == runtime.model_name:
+                continue
+            if name in _ensemble_readers or name in _ensemble_failed:
+                continue
+            try:
+                _ensemble_readers[name] = create_recognizer(
+                    _replace(runtime, model_name=name, warmup_iterations=1)
+                )
+            except Exception:
+                _LOG.warning(
+                    "Capture ensemble: %s could not be loaded; voting without it",
+                    name,
+                    exc_info=True,
+                )
+                _ensemble_failed.add(name)
+        return dict(_ensemble_readers)
+
+
+def close_ensemble() -> None:
+    """Release the extra recognizers. Only the process shutdown needs this."""
+    from .ocr import close_recognizer
+
+    with _ensemble_lock:
+        for name, recognizer in list(_ensemble_readers.items()):
+            _ensemble_readers.pop(name, None)
+            with suppress(Exception):
+                close_recognizer(recognizer)
+
+
+def _ensemble_read(frame: Any, pipeline: Any, produced: list[Any]) -> list[Any]:
+    """Re-read every field with the ensemble and keep what the readers agree on.
+
+    Majority wins; a tie goes to the higher summed confidence. The value the
+    ordinary pipeline produced is kept only when the vote has nothing to say,
+    which happens when no reader returns anything that validates.
+    """
+    from dataclasses import replace as _replace
 
     from .pipeline import _RECOGNIZER_LOCK
     from .preprocess import apply_recipe, extract_roi
     from .validation import validate_text
 
-    blanks = [
-        (index, record)
-        for index, record in enumerate(produced)
-        if record.value is None
-    ]
-    if not blanks:
+    if not produced:
+        return produced
+    config = pipeline.config
+    readers = _ensemble_recognizers(config.runtime, pipeline.recognizer)
+    if len(readers) <= 1 and len(_ENSEMBLE_CHANNELS) <= 1:
         return produced
 
-    fields = {field.field_id: field for field in pipeline.config.fields}
-    runtime_padding = pipeline.config.runtime.padding
+    fields = {field.field_id: field for field in config.fields}
+    # The crops, once per field per channel. Cropping and recipe work is cheap
+    # next to recognition, but doing it once per model as well would triple it.
     jobs: list[tuple[int, Any, str]] = []
     images: list[Any] = []
-    for index, record in blanks:
+    for index, record in enumerate(produced):
         field = fields.get(record.field_id)
         if field is None:
             continue
-        padding = runtime_padding if field.padding is None else field.padding
+        padding = config.runtime.padding if field.padding is None else field.padding
         crop = extract_roi(frame, field.box, padding)
-        for channel in _BLANK_FIELD_CHANNELS:
-            recipe = replace(
-                field.primary,
-                name=f"{channel}_second_opinion",
-                channel=channel,
-                clahe=True,
-                unsharp=True,
+        for channel in _ENSEMBLE_CHANNELS:
+            recipe = (
+                field.primary
+                if channel == field.primary.channel
+                else _replace(
+                    field.primary, name=channel, channel=channel, clahe=True, unsharp=True
+                )
             )
-            jobs.append((index, field, recipe.name))
+            jobs.append((index, field, channel))
             images.append(apply_recipe(crop, recipe))
     if not images:
         return produced
 
+    # value -> [votes, summed confidence, best (confidence, text, variant)]
+    tally: list[dict[Any, list[Any]]] = [{} for _ in produced]
     with _RECOGNIZER_LOCK:
-        answers = pipeline.recognizer.recognize(images)
+        for name, recognizer in readers.items():
+            try:
+                answers = recognizer.recognize(images)
+            except Exception:
+                _LOG.warning("Capture ensemble: %s failed to read", name, exc_info=True)
+                continue
+            for (index, field, channel), answer in zip(jobs, answers, strict=True):
+                checked = validate_text(answer.text, field)
+                if not checked.valid:
+                    continue
+                key = _vote_key(checked.value)
+                slot = tally[index].setdefault(
+                    key, [0, 0.0, (0.0, "", ""), checked.value]
+                )
+                slot[0] += 1
+                slot[1] += answer.confidence
+                if answer.confidence > slot[2][0]:
+                    slot[2] = (answer.confidence, answer.text, f"{name}:{channel}")
 
-    # Best confidence among the reads that validate, per field.
-    best: dict[int, tuple[float, Any, str, str]] = {}
-    for (index, field, variant), answer in zip(jobs, answers, strict=True):
-        checked = validate_text(answer.text, field)
-        if not checked.valid:
+    for index, votes in enumerate(tally):
+        if not votes:
             continue
-        if index not in best or answer.confidence > best[index][0]:
-            best[index] = (answer.confidence, checked.value, answer.text, variant)
-
-    for index, (confidence, value, raw_text, variant) in best.items():
+        field_config = fields.get(produced[index].field_id)
+        may_override = bool(field_config and field_config.ensemble_override)
+        if produced[index].value is not None and not may_override:
+            # Blanks only, for a field nobody has measured this on. See
+            # FieldConfig.ensemble_override.
+            continue
+        _key, (count, _total, best, value) = max(
+            votes.items(), key=lambda item: (item[1][0], item[1][1])
+        )
+        confidence, raw_text, variant = best
         record = produced[index]
-        produced[index] = replace(
+        if _same_value(record.value, value) and record.value is not None:
+            continue
+        produced[index] = _replace(
             record,
             value=value,
             raw_text=raw_text,
             confidence=confidence,
-            # Not confirmed: this is one read of one picture, and calling it
-            # confirmed would claim a quorum that never happened.
-            confirmed=False,
-            preprocess_variant=variant,
+            # Agreement between independent readers is not the temporal quorum
+            # `confirmed` means, and borrowing the word would misreport it.
+            confirmed=record.confirmed and record.value is not None,
+            preprocess_variant=f"{variant} ({count}/{len(readers) * len(_ENSEMBLE_CHANNELS)})",
         )
     return produced
+
+
+def _vote_key(value: Any) -> Any:
+    """Group readings that mean the same number despite two separate parses."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return round(float(value), 6)
+    return str(value).strip()
 
 
 @dataclass(slots=True)
@@ -720,7 +813,7 @@ def verify_shot(
         produced, _ = pipeline.process_frame(
             FramePacket(frame, index, index * 100.0, _time.perf_counter())
         )
-    produced = _second_opinion(frame, pipeline, list(produced))
+    produced = _ensemble_read(frame, pipeline, list(produced))
     live = {item.get("field_id"): item for item in live_records}
 
     # Two different questions, and conflating them made the first run of this

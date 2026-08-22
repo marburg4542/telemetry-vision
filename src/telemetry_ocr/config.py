@@ -56,6 +56,15 @@ class FieldConfig:
     ocr_interval: int = 1
     ocr_phase: int = 0
     padding: float | None = None
+    # May a capture's ensemble replace a value this field already read?
+    #
+    # Off unless someone has built an answer key for the field and measured
+    # that it helps. Turning it on everywhere was tried: it took the camera yaw
+    # from 35 of 42 correct to 40, and in the same run cost the camera pitch
+    # several readings, mostly by losing the minus sign -- "-8.75" became
+    # "8.75". A field the ensemble has not been measured on only has its blanks
+    # filled, which cannot make a reading worse because there was none.
+    ensemble_override: bool = False
     primary: RecipeConfig = field(default_factory=RecipeConfig)
     fallback: RecipeConfig = field(
         default_factory=lambda: RecipeConfig(
