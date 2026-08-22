@@ -191,6 +191,14 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         params = urlencode({"session": "flight01", **query})
         return await self.client.post(f"/api/line/send?{params}")
 
+    async def _send_frames(self, *indexes: int) -> Any:
+        from urllib.parse import urlencode
+
+        params = urlencode(
+            [("session", "flight01")] + [("frame_index", str(i)) for i in indexes]
+        )
+        return await self.client.post(f"/api/line/send?{params}")
+
     async def test_status_says_configured_without_revealing_the_token(self) -> None:
         response = await self.client.get("/api/line/status")
         body = await response.json()
@@ -315,6 +323,71 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(records), 1)
         assert records[0].detections is not None
         self.assertEqual(records[0].detections["status"], "no_model")
+
+
+
+class MultiFrameSendTests(LineEndpointTests):
+    """Several chosen frames, sent together.
+
+    Together rather than one after another because LINE counts a push by the
+    request: four separate sends spend four messages from the monthly allowance
+    to say what one request can carry.
+    """
+
+    async def test_every_chosen_frame_goes_in_one_request(self) -> None:
+        for _ in range(3):
+            await self._shot()
+        response = await self._send_frames(0, 2)
+        self.assertEqual(response.status, 200)
+        body = await response.json()
+        self.assertEqual(body["frame_indexes"], [0, 2])
+        self.assertEqual(len(self.pushes), 1)
+        sent = self.pushes[0]["body"]["messages"][0]["text"]
+        self.assertIn("[Capture x2]", sent)
+        self.assertIn("frames/00000000.jpg", sent)
+        self.assertIn("frames/00000002.jpg", sent)
+        # The one in the middle was not chosen and must not have come along.
+        self.assertNotIn("frames/00000001.jpg", sent)
+
+    async def test_the_same_frame_twice_is_sent_once(self) -> None:
+        await self._shot()
+        body = await (await self._send_frames(0, 0)).json()
+        self.assertEqual(body["frame_indexes"], [0])
+
+    async def test_frames_arrive_in_order_however_they_were_ticked(self) -> None:
+        # The pictures follow the text in the same order, so a reader can match
+        # the blocks to the images without opening them.
+        for _ in range(3):
+            await self._shot()
+        body = await (await self._send_frames(2, 0, 1)).json()
+        self.assertEqual(body["frame_indexes"], [0, 1, 2])
+
+    async def test_more_than_four_is_refused_with_the_reason(self) -> None:
+        """Four is LINE's limit showing through, not a preference.
+
+        Five messages per request, and the first is the telemetry -- so a fifth
+        picture is a second request and a second message off the allowance. It
+        is refused rather than trimmed because the operator picked those frames.
+        """
+        for _ in range(5):
+            await self._shot()
+        response = await self._send_frames(0, 1, 2, 3, 4)
+        self.assertEqual(response.status, 400)
+        self.assertIn("4", (await response.text()))
+        self.assertEqual(self.pushes, [])
+
+    async def test_a_missing_frame_does_not_lose_the_rest(self) -> None:
+        await self._shot()
+        body = await (await self._send_frames(0, 99)).json()
+        self.assertEqual(body["frame_indexes"], [0])
+
+    async def test_choosing_nothing_still_sends_the_last_one(self) -> None:
+        # The old behaviour, kept: a caller that names no frame means "the one
+        # I just took".
+        await self._shot()
+        await self._shot()
+        body = await (await self._send()).json()
+        self.assertEqual(body["frame_indexes"], [1])
 
 
 if __name__ == "__main__":

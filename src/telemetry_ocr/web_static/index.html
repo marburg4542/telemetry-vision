@@ -195,9 +195,29 @@
             </div>
           </div>
 
+          <!-- What the captures are doing, in the panel rather than in a
+               console. Without it a capture is a button press with no visible
+               consequence for as long as the model takes, and the operator
+               cannot tell a slow model from a dead one. -->
+          <div class="shot-progress" id="shotProgress" role="status" aria-live="polite">
+            <span class="shot-progress-item" id="shotTotal">0 ภาพ</span>
+            <span class="shot-progress-item is-working" id="shotWorking" hidden>
+              <span class="shot-spinner" aria-hidden="true"></span>
+              <span id="shotWorkingText">กำลังผ่านโมเดล</span>
+            </span>
+            <span class="shot-progress-item is-ready" id="shotReady" hidden></span>
+            <span class="shot-progress-item is-warning" id="shotUnprocessed" hidden></span>
+            <span class="shot-progress-item is-error" id="shotFailed" hidden></span>
+          </div>
+
           <!-- The thumbnails. Every shot in this session, newest first, so the
                one just taken is where the eye already is. -->
           <div class="shot-strip" id="shotStrip" role="listbox" aria-label="ภาพที่เก็บไว้"></div>
+
+          <div class="shot-select-bar" id="shotSelectBar" hidden>
+            <span id="shotSelectedCount">เลือกส่ง 0 รูป</span>
+            <button class="link-button" id="shotClearSelection" type="button">ล้างที่เลือก</button>
+          </div>
 
           <div class="shot-preview" id="shotPreview" hidden>
             <img id="shotImage" alt="ภาพที่เลือก" />
@@ -214,7 +234,8 @@
           <div class="telemetry-list" id="telemetryList" aria-live="polite"></div>
 
           <p class="capture-status" id="captureStatus">
-            กด <strong>Capture</strong> เพื่อเก็บภาพ แล้วเลือกภาพที่ต้องการส่ง
+            กด <strong>Capture</strong> เพื่อเก็บภาพ (กดค้างเพื่อเก็บต่อเนื่อง)
+            แล้วติ๊กเลือกภาพที่ต้องการส่ง
           </p>
 
           <div class="panel-actions">

@@ -386,6 +386,45 @@ def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
     return f"{prefix}{rendered}{unit}{marker}"
 
 
+# One push carries at most five messages, and one of them is the text, so four
+# pictures is the most that can go in a single request. It is a real cap rather
+# than a chosen one: a fifth picture means a second request, which spends a
+# second message from the account's monthly allowance.
+MAX_IMAGES_PER_PUSH = 4
+
+_DIGEST_RULE = "\n\n" + "\u2014" * 8 + "\n\n"
+
+
+def format_capture_digest(shots: list[Any], directory: str | Path | None = None) -> str:
+    """The text for several shots sent together.
+
+    Each block is the message that shot would have sent on its own, so a digest
+    and a single send say the same thing about the same frame. They are joined
+    rather than summarised because the reason to send four frames at once is to
+    compare them, and a summary would drop the numbers being compared.
+    """
+    if not shots:
+        return ""
+    if len(shots) == 1:
+        return format_capture_message(shots[0], directory=directory)
+    header = f"[Capture x{len(shots)}]\n\n"
+    blocks = [format_capture_message(shot, directory=directory) for shot in shots]
+    text = header + _DIGEST_RULE.join(blocks)
+    if len(text) <= MAX_TEXT:
+        return text
+    # Trimmed from the end, and said out loud. Silently dropping the last frames
+    # would leave pictures in the chat with no numbers under them.
+    kept: list[str] = []
+    total = len(header)
+    for block in blocks:
+        if total + len(block) + len(_DIGEST_RULE) > MAX_TEXT - 60:
+            break
+        kept.append(block)
+        total += len(block) + len(_DIGEST_RULE)
+    note = f"\n\n(ข้อความยาวเกิน ตัดเหลือ {len(kept)} จาก {len(shots)} เฟรม)"
+    return header + _DIGEST_RULE.join(kept) + note
+
+
 async def push_capture(
     config: LineConfig,
     text: str,
@@ -401,7 +440,7 @@ async def push_capture(
     one piece rather than as a text that might be followed by images.
     """
     messages: list[dict[str, Any]] = [{"type": "text", "text": text}]
-    for url in (image_urls or [])[:4]:
+    for url in (image_urls or [])[:MAX_IMAGES_PER_PUSH]:
         # Preview and original are the same file. Producing a smaller preview
         # would mean a second encode and a second token for a picture that is
         # already well inside LINE's preview limit.

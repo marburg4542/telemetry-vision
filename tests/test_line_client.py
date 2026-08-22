@@ -282,6 +282,70 @@ class PushTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["line_message"])
 
 
+
+class DigestTests(unittest.TestCase):
+    """The text several shots share when they go in one push."""
+
+    def _shot(self, index: int, value: int) -> Any:
+        from telemetry_ocr.capture_service import DetectionSummary, ShotResult
+
+        return ShotResult(
+            session="flight01",
+            frame_index=index,
+            image=f"frames/{index:08d}.jpg",
+            source_time_ms=float(index * 1000),
+            captured_at="2026-08-22T10:00:00+00:00",
+            bytes=1234,
+            records=[
+                {
+                    "field_id": "lrf_m",
+                    "value": value,
+                    "raw_text": str(value),
+                    "confidence": 0.9,
+                    "confirmed": True,
+                }
+            ],
+            detections=DetectionSummary(status="ok", counts={"car": 1}, total=1),
+        )
+
+    def test_one_shot_reads_exactly_as_it_would_alone(self) -> None:
+        # A digest and a single send describe the same frame, so they must not
+        # describe it differently.
+        from telemetry_ocr.line_client import format_capture_digest, format_capture_message
+
+        shot = self._shot(0, 500)
+        self.assertEqual(format_capture_digest([shot]), format_capture_message(shot))
+
+    def test_every_chosen_frame_appears(self) -> None:
+        from telemetry_ocr.line_client import format_capture_digest
+
+        text = format_capture_digest([self._shot(0, 500), self._shot(2, 700)])
+        self.assertIn("[Capture x2]", text)
+        self.assertIn("frames/00000000.jpg", text)
+        self.assertIn("frames/00000002.jpg", text)
+        self.assertIn("500", text)
+        self.assertIn("700", text)
+
+    def test_nothing_chosen_is_not_a_message(self) -> None:
+        from telemetry_ocr.line_client import format_capture_digest
+
+        self.assertEqual(format_capture_digest([]), "")
+
+    def test_an_overlong_digest_is_trimmed_and_says_so(self) -> None:
+        # Silently dropping the last frames would leave pictures in the chat
+        # with no numbers under them.
+        from telemetry_ocr.line_client import MAX_TEXT, format_capture_digest
+
+        shots = [self._shot(i, 100 + i) for i in range(4)]
+        for shot in shots:
+            # A single block is already clipped at MAX_TEXT, so an over-long
+            # digest can only be made of blocks that each fit.
+            shot.image = f"frames/{'x' * 1600}{shot.frame_index}.jpg"
+        text = format_capture_digest(shots)
+        self.assertLessEqual(len(text), MAX_TEXT)
+        self.assertIn("ตัดเหลือ", text)
+
+
 if __name__ == "__main__":
     unittest.main()
 

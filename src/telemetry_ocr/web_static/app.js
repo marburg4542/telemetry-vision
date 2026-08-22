@@ -48,6 +48,16 @@ const ui = {
   telemetryList: $("telemetryList"),
   recordCount: $("recordCount"),
   shotStrip: $("shotStrip"),
+  shotProgress: $("shotProgress"),
+  shotTotal: $("shotTotal"),
+  shotWorking: $("shotWorking"),
+  shotWorkingText: $("shotWorkingText"),
+  shotReady: $("shotReady"),
+  shotUnprocessed: $("shotUnprocessed"),
+  shotFailed: $("shotFailed"),
+  shotSelectBar: $("shotSelectBar"),
+  shotSelectedCount: $("shotSelectedCount"),
+  shotClearSelection: $("shotClearSelection"),
   shotPreview: $("shotPreview"),
   shotImage: $("shotImage"),
   shotAnnotated: $("shotAnnotated"),
@@ -148,6 +158,17 @@ const state = {
   // The captured shots this session holds, and which one the panel is showing.
   shots: [],
   selectedShot: null,
+  // Ticked for sending. A set of frame indexes rather than an array so that
+  // ticking the same thumbnail twice cannot put it in the message twice.
+  chosen: new Set(),
+  // Captures the server has been asked for and has not answered yet. They get a
+  // placeholder in the strip so a press is never a press with nothing visible
+  // behind it -- the frame is saved, run through best.pt and re-read before the
+  // response comes back, which takes about six tenths of a second and can take
+  // far longer on a cold model.
+  pendingCaptures: 0,
+  captureQueued: 0,
+  captureFailures: 0,
   detectionWorkerCycleMs: null,
 };
 
@@ -1625,13 +1646,54 @@ function flashCapture() {
   ui.captureFlash.classList.add("is-firing");
 }
 
-async function takeCaptureShot() {
-  if (state.captureInFlight) return;
+// Deepest the queue is allowed to get while the button is held.
+//
+// Holding asks for a frame every 400 ms and one capture takes about 600 ms of
+// saving, detection and re-reading, so the requests arrive faster than they can
+// be served. Without a cap, five seconds of holding would leave a backlog that
+// keeps capturing long after the button is released. With it, holding settles
+// at whatever rate the model can actually sustain.
+const MAX_CAPTURE_QUEUE = 3;
+
+function requestCapture() {
   if (!sourceReady()) {
     setCaptureStatus("ยังไม่มีภาพให้เก็บ เลือกวิดีโอหรือเปิดสตรีมก่อน", true);
-    return;
+    return false;
   }
-  state.captureInFlight = true;
+  if (state.captureQueued >= MAX_CAPTURE_QUEUE) return false;
+  state.captureQueued += 1;
+  renderShotStrip();
+  updateShotProgress();
+  pumpCaptures();
+  return true;
+}
+
+// One capture at a time, and every request answered.
+//
+// It used to drop any press that arrived while another was in flight, which on
+// a 400 ms hold and a 600 ms capture silently threw away roughly every other
+// frame: the operator held the button, watched nothing happen, and had no way
+// to tell how many frames they had actually got.
+async function pumpCaptures() {
+  if (state.captureInFlight) return;
+  while (state.captureQueued > 0) {
+    state.captureQueued -= 1;
+    state.pendingCaptures += 1;
+    state.captureInFlight = true;
+    renderShotStrip();
+    updateShotProgress();
+    try {
+      await takeCaptureShot();
+    } finally {
+      state.pendingCaptures -= 1;
+      state.captureInFlight = false;
+    }
+  }
+  renderShotStrip();
+  updateShotProgress();
+}
+
+async function takeCaptureShot() {
   try {
     const params = new URLSearchParams({
       session: captureSessionName(),
@@ -1651,20 +1713,20 @@ async function takeCaptureShot() {
         body: blob,
       };
     }
+    // The server does not answer until the frame has been saved, put through
+    // best.pt and re-read from the file, so by the time this returns the shot
+    // is finished rather than merely stored.
     const shot = await jsonFetch(`/api/capture/shot?${params}`, options);
     state.captureCount += 1;
     flashCapture();
     await refreshShots(shot.frame_index);
-    const confirmed = (shot.records || []).filter((item) => item.confirmed).length;
+    const stage = describeShotDetections(shot.detections);
     setCaptureStatus(
-      `เก็บแล้ว ${state.captureCount} เฟรม · ล่าสุด ${shot.image}`
-      + ` · ${confirmed}/${(shot.records || []).length} ฟิลด์ยืนยัน`
-      + ` · session ${shot.session}`,
+      `เก็บแล้ว ${state.shots.length} ภาพ · ล่าสุด #${shot.frame_index} · ${stage}`,
     );
   } catch (error) {
+    state.captureFailures += 1;
     setCaptureStatus(`Capture ไม่สำเร็จ: ${error.message}`, true);
-  } finally {
-    state.captureInFlight = false;
   }
 }
 
@@ -1692,10 +1754,10 @@ function startCaptureHold() {
   state.captureHolding = true;
   ui.captureButton.classList.add("is-recording");
   ui.captureButtonText.textContent = "Capturing";
-  takeCaptureShot();
+  requestCapture();
   state.captureTimer = window.setInterval(() => {
     if (!state.captureHolding) return;
-    takeCaptureShot();
+    requestCapture();
   }, CAPTURE_HOLD_INTERVAL_MS);
 }
 
@@ -1722,10 +1784,18 @@ function updateCaptureAvailability() {
 // telling someone about.
 // ---------------------------------------------------------------------------
 
+// At most four pictures fit in one push: LINE takes five messages per request
+// and the first is the telemetry. A fifth picture is not a bigger message, it
+// is a second request and a second message off the monthly allowance.
+const MAX_SEND_SELECTION = 4;
+
 function updateLineAvailability() {
-  // Needs somewhere to send to and a chosen picture to send.
-  ui.lineSendButton.disabled =
-    state.lineSending || !state.lineConfigured || state.selectedShot === null;
+  // Needs somewhere to send to and at least one ticked picture.
+  const count = state.chosen.size || (state.selectedShot === null ? 0 : 1);
+  ui.lineSendButton.disabled = state.lineSending || !state.lineConfigured || count === 0;
+  ui.lineSendButtonText.textContent = state.lineSending
+    ? "กำลังส่ง..."
+    : count > 1 ? `ส่ง ${count} รูปเข้า LINE` : "ส่งเข้า LINE";
 }
 
 // ---------------------------------------------------------------------------
@@ -1747,42 +1817,161 @@ async function refreshShots(selectIndex = null) {
     setCaptureStatus(`อ่านรายการภาพไม่สำเร็จ: ${error.message}`, true);
     return;
   }
+  // A shot that is gone cannot be sent, so it cannot stay ticked either.
+  const present = new Set(state.shots.map((shot) => shot.frame_index));
+  for (const index of [...state.chosen]) {
+    if (!present.has(index)) state.chosen.delete(index);
+  }
   renderShotStrip();
   // Newest first, so index 0 is the shot just taken.
   const wanted = selectIndex === null ? state.shots[0]?.frame_index : selectIndex;
   if (wanted !== undefined) selectShot(wanted);
-  ui.recordCount.textContent = `${state.shots.length} ภาพ`;
   const hasShots = state.shots.length > 0;
   ui.downloadJsonButton.disabled = !hasShots;
   ui.downloadCsvButton.disabled = !hasShots;
   ui.clearLogButton.disabled = !hasShots;
+  updateShotProgress();
+}
+
+// What the captures are doing, said in the panel.
+//
+// The endpoint does not answer until the frame has been saved, put through
+// best.pt and re-read, so a shot that is listed is a shot that finished. What
+// is missing from the list is what is still inside the model, and that is the
+// part the operator could not see at all before.
+function updateShotProgress() {
+  const total = state.shots.length;
+  const working = state.pendingCaptures + state.captureQueued;
+  const unprocessed = state.shots.filter(
+    (shot) => shot.stage && shot.stage !== "ready",
+  ).length;
+  ui.recordCount.textContent = `${total} ภาพ`;
+  ui.shotTotal.textContent = `${total} ภาพ`;
+  ui.shotWorking.hidden = working === 0;
+  ui.shotWorkingText.textContent = state.captureQueued
+    ? `กำลังผ่านโมเดล ${state.pendingCaptures} · รออีก ${state.captureQueued}`
+    : `กำลังผ่านโมเดล ${state.pendingCaptures}`;
+  const ready = total - unprocessed;
+  ui.shotReady.hidden = ready === 0;
+  ui.shotReady.textContent = `พร้อมส่ง ${ready}`;
+  ui.shotUnprocessed.hidden = unprocessed === 0;
+  ui.shotUnprocessed.textContent = `ไม่ได้ผ่านโมเดล ${unprocessed}`;
+  // Counted rather than only flashed in the status line: a failure during a
+  // long hold scrolls past, and the operator is left believing they have more
+  // frames than they got.
+  ui.shotFailed.hidden = state.captureFailures === 0;
+  ui.shotFailed.textContent = `เก็บไม่สำเร็จ ${state.captureFailures}`;
+  ui.shotSelectBar.hidden = total === 0;
+  ui.shotSelectedCount.textContent =
+    `เลือกส่ง ${state.chosen.size} รูป (สูงสุด ${MAX_SEND_SELECTION})`;
+  ui.shotClearSelection.disabled = state.chosen.size === 0;
+  updateLineAvailability();
 }
 
 function renderShotStrip() {
   ui.shotStrip.replaceChildren();
-  for (const shot of state.shots) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "shot-thumb";
-    button.dataset.frameIndex = String(shot.frame_index);
-    button.setAttribute("role", "option");
-    // The thumbnail is the annotated copy when there is one, so the strip shows
-    // what was found without having to open each frame.
-    button.style.backgroundImage = `url("${shotImageUrl(shot, Boolean(shot.annotated))}")`;
+  // The ones still in the model go first, where the newest shot would be, so a
+  // press moves something on screen immediately.
+  for (let i = 0; i < state.pendingCaptures + state.captureQueued; i += 1) {
+    const card = document.createElement("div");
+    card.className = "shot-thumb is-pending";
+    const spinner = document.createElement("span");
+    spinner.className = "shot-spinner";
+    card.append(spinner);
     const label = document.createElement("span");
-    label.textContent = `#${shot.frame_index}`;
-    button.append(label);
-    button.addEventListener("click", () => selectShot(shot.frame_index));
-    ui.shotStrip.append(button);
+    label.className = "shot-thumb-label";
+    label.textContent = i < state.pendingCaptures ? "กำลังผ่านโมเดล" : "รอคิว";
+    card.append(label);
+    ui.shotStrip.append(card);
   }
+  for (const shot of state.shots) ui.shotStrip.append(buildShotThumb(shot));
 }
 
-function shotImageUrl(shot, annotated) {
+function buildShotThumb(shot) {
+  const card = document.createElement("div");
+  card.className = "shot-thumb";
+  card.dataset.frameIndex = String(shot.frame_index);
+  card.setAttribute("role", "option");
+  card.classList.toggle("is-selected", shot.frame_index === state.selectedShot);
+  card.classList.toggle("is-chosen", state.chosen.has(shot.frame_index));
+
+  // The picture is a button: pressing it shows that frame enlarged.
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "shot-thumb-open";
+  // The thumbnail is the annotated copy when there is one, so the strip shows
+  // what was found without having to open each frame, and it is the small copy
+  // rather than the full frame -- a session of a hundred would otherwise have
+  // the browser decoding a 1920x1080 bitmap per postage stamp.
+  open.style.backgroundImage =
+    `url("${shotImageUrl(shot, Boolean(shot.annotated), true)}")`;
+  open.setAttribute("aria-label", `ดูเฟรม ${shot.frame_index}`);
+  open.addEventListener("click", () => selectShot(shot.frame_index));
+  card.append(open);
+
+  const tick = document.createElement("label");
+  tick.className = "shot-thumb-tick";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = state.chosen.has(shot.frame_index);
+  box.setAttribute("aria-label", `เลือกเฟรม ${shot.frame_index} เพื่อส่ง`);
+  box.addEventListener("change", () => toggleChosen(shot.frame_index, box));
+  tick.append(box);
+  card.append(tick);
+
+  const label = document.createElement("span");
+  label.className = "shot-thumb-label";
+  label.textContent = `#${shot.frame_index}`;
+  card.append(label);
+
+  // Said on the thumbnail rather than only in the enlarged view, because a
+  // frame the model never saw looks exactly like a frame it saw and cleared.
+  if (shot.stage && shot.stage !== "ready") {
+    const badge = document.createElement("span");
+    badge.className = "shot-thumb-badge";
+    badge.textContent = shot.stage === "no_model" ? "ไม่มีโมเดล" : "โมเดลไม่ตอบ";
+    card.append(badge);
+  }
+  return card;
+}
+
+function toggleChosen(frameIndex, box) {
+  if (box.checked) {
+    if (state.chosen.size >= MAX_SEND_SELECTION) {
+      box.checked = false;
+      setCaptureStatus(
+        `เลือกได้สูงสุด ${MAX_SEND_SELECTION} รูปต่อการส่ง 1 ครั้ง`
+        + " (LINE รับ 5 ข้อความต่อ request และข้อความแรกคือ telemetry)",
+        true,
+      );
+      return;
+    }
+    state.chosen.add(frameIndex);
+  } else {
+    state.chosen.delete(frameIndex);
+  }
+  const card = box.closest(".shot-thumb");
+  if (card) card.classList.toggle("is-chosen", box.checked);
+  updateShotProgress();
+}
+
+function clearChosen() {
+  state.chosen.clear();
+  for (const card of ui.shotStrip.children) {
+    card.classList.remove("is-chosen");
+    const box = card.querySelector("input[type=checkbox]");
+    if (box) box.checked = false;
+  }
+  updateShotProgress();
+}
+
+function shotImageUrl(shot, annotated, thumb = false) {
   const params = new URLSearchParams({
     session: state.captureSession,
     frame_index: String(shot.frame_index),
   });
   if (annotated) params.set("annotated", "1");
+  if (thumb) params.set("thumb", "1");
   // Cache-busted on captured_at rather than on now(): the same frame keeps one
   // URL, so switching back to it does not refetch.
   params.set("v", shot.captured_at || "");
@@ -1793,9 +1982,9 @@ function selectShot(frameIndex) {
   const shot = state.shots.find((item) => item.frame_index === frameIndex);
   if (!shot) return;
   state.selectedShot = frameIndex;
-  for (const button of ui.shotStrip.children) {
-    button.classList.toggle(
-      "is-selected", Number(button.dataset.frameIndex) === frameIndex,
+  for (const card of ui.shotStrip.children) {
+    card.classList.toggle(
+      "is-selected", Number(card.dataset.frameIndex) === frameIndex,
     );
   }
   ui.shotPreview.hidden = false;
@@ -1810,10 +1999,12 @@ function selectShot(frameIndex) {
 
 function describeShotDetections(detections) {
   if (!detections) return "";
-  if (detections.status === "no_model") return "ยังไม่ได้โหลดโมเดล";
+  if (detections.status === "no_model") {
+    return "ยังไม่ได้โหลดโมเดล — ภาพนี้ไม่ได้ผ่าน best.pt";
+  }
   if (detections.status === "no_result") return "โมเดลไม่ตอบสำหรับภาพนี้";
   const counts = Object.entries(detections.counts || {});
-  if (!counts.length) return "ไม่พบวัตถุ";
+  if (!counts.length) return "ผ่านโมเดลแล้ว · ไม่พบวัตถุ";
   return counts
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([name, count]) => {
@@ -1826,10 +2017,6 @@ function describeShotDetections(detections) {
 function renderShotValues(shot) {
   resetCurrentValues();
   for (const record of shot.records || []) updateTelemetryRow(record);
-}
-
-function selectedShotIndex() {
-  return state.selectedShot;
 }
 
 async function checkLineConfigured() {
@@ -1854,14 +2041,20 @@ async function sendSelectedToLine() {
   updateLineAvailability();
   try {
     const params = new URLSearchParams({ session: state.captureSession });
-    // The chosen one, not simply the latest: choosing is the point of the panel.
-    if (state.selectedShot !== null) params.set("frame_index", String(state.selectedShot));
+    // What is ticked, or -- when nothing is -- the one being looked at. Both are
+    // a deliberate choice of frame; neither is "whatever was captured last".
+    const frames = state.chosen.size
+      ? [...state.chosen].sort((a, b) => a - b)
+      : state.selectedShot === null ? [] : [state.selectedShot];
+    for (const index of frames) params.append("frame_index", String(index));
     const result = await jsonFetch(`/api/line/send?${params}`, { method: "POST" });
-    const withImage = result.images ? " พร้อมรูป" : "";
+    const sent = result.frame_indexes || [result.frame_index];
+    const withImage = result.images ? ` พร้อมรูป ${result.images} รูป` : " (ข้อความอย่างเดียว)";
     setCaptureStatus(
-      `ส่งเข้า LINE แล้ว${withImage} · เฟรม ${result.frame_index}`
+      `ส่งเข้า LINE แล้ว${withImage} · เฟรม ${sent.map((i) => `#${i}`).join(", ")}`
       + ` · ${result.characters} ตัวอักษร`,
     );
+    if (result.share_error) setCaptureStatus(`ส่งแล้ว แต่: ${result.share_error}`, true);
   } catch (error) {
     // The server passes LINE's own wording through, because a wrong token, a
     // wrong destination and an exhausted quota are fixed in three different
@@ -2060,6 +2253,7 @@ ui.chooseVideoButton.addEventListener("click", () => ui.videoInput.click());
 document.addEventListener("fullscreenchange", () => drawDetections());
 ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
 ui.streamButton.addEventListener("click", () => toggleStream());
+ui.shotClearSelection.addEventListener("click", () => clearChosen());
 ui.captureButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   startCaptureHold();
@@ -2077,7 +2271,7 @@ ui.shotAnnotated.addEventListener("change", () => {
 ui.captureButton.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    takeCaptureShot();
+    requestCapture();
   }
 });
 ui.streamUrl.addEventListener("keydown", (event) => {

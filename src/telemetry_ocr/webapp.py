@@ -1188,10 +1188,7 @@ def create_app(
 
         def collect() -> list[dict[str, Any]]:
             shots = []
-            for index in range(session.frame_count):
-                shot = session.shot_at(index)
-                if shot is None:
-                    continue
+            for shot in session.all_shots():
                 data = asdict(shot)
                 # The records are the reading the image itself gave, which is
                 # what the page shows; the raw manifest carries more than that.
@@ -1205,6 +1202,11 @@ def create_app(
                     }
                     for item in shot.verification.fields
                 ] or shot.records
+                # Where this shot got to, in one word the page can act on. The
+                # frame is written before the model is asked, so a shot that
+                # exists is not yet a shot that has been through best.pt, and
+                # "detected nothing" must not look the same as "never ran".
+                data["stage"] = _shot_stage(shot)
                 shots.append(data)
             shots.reverse()
             return shots
@@ -1235,6 +1237,16 @@ def create_app(
         path = session.directory / relative
         if not path.is_file():
             raise web.HTTPNotFound(text="Frame is missing from disk")
+        if request.query.get("thumb") == "1":
+            # The strip shows every capture in the session at once. At full size
+            # that is 460 KB and a 1920x1080 bitmap per thumbnail, so a session
+            # of a hundred would have the browser decoding around 800 MB of
+            # pixels to draw a row of postage stamps.
+            small = await asyncio.to_thread(
+                _thumbnail_of, path, session.directory / "thumbs"
+            )
+            if small is not None:
+                path = small
         return web.FileResponse(path, headers={"Cache-Control": "no-store"})
 
     async def line_status(_: Any) -> Any:
@@ -1273,7 +1285,12 @@ def create_app(
         endpoint can be called directly, and every call spends a message from the
         account's monthly quota, so a stuck caller must not be able to drain it.
         """
-        from .line_client import format_capture_message, load_line_config, push_capture
+        from .line_client import (
+            MAX_IMAGES_PER_PUSH,
+            format_capture_digest,
+            load_line_config,
+            push_capture,
+        )
 
         config = load_line_config()
         if config is None:
@@ -1294,21 +1311,41 @@ def create_app(
                 text='{"error":"No such capture session"}', content_type="application/json"
             )
 
-        raw_index = request.query.get("frame_index")
-        if raw_index is None or raw_index == "":
+        # One frame or several. Several because the reason to look through a
+        # session is usually to compare frames, and sending them one at a time
+        # would spend one message from the monthly allowance per picture.
+        wanted = [
+            _non_negative_int(value, "frame_index")
+            for raw in request.query.getall("frame_index", [])
+            for value in [raw]
+            if raw != ""
+        ]
+        for raw in (request.query.get("frames") or "").split(","):
+            if raw.strip():
+                wanted.append(_non_negative_int(raw.strip(), "frames"))
+        if len(wanted) > MAX_IMAGES_PER_PUSH:
+            raise ValueError(
+                f"เลือกได้สูงสุด {MAX_IMAGES_PER_PUSH} รูปต่อการส่งหนึ่งครั้ง "
+                "(LINE รับได้ 5 ข้อความต่อ 1 request และข้อความแรกคือ telemetry)"
+            )
+        if not wanted:
             # A reopened session has taken no shots this run, so fall back to the
             # last frame the manifest knows about.
-            shot = session.last_shot or await asyncio.to_thread(
+            first = session.last_shot or await asyncio.to_thread(
                 session.shot_at, session.frame_count - 1
             )
+            shots = [first] if first is not None else []
         else:
-            shot = await asyncio.to_thread(
-                session.shot_at, _non_negative_int(raw_index, "frame_index")
+            found = await asyncio.to_thread(
+                lambda: [session.shot_at(index) for index in dict.fromkeys(wanted)]
             )
-        if shot is None:
+            shots = [item for item in found if item is not None]
+        if not shots:
             return web.json_response(
                 {"error": "ยังไม่มีเฟรมที่ capture ไว้ใน session นี้"}, status=409
             )
+        shots.sort(key=lambda item: item.frame_index)
+        shot = shots[0]
 
         now = time.monotonic()
         waited = now - float(line_state["last_sent"])
@@ -1324,7 +1361,7 @@ def create_app(
             )
         line_state["last_sent"] = now
 
-        text = format_capture_message(shot, directory=session.directory)
+        text = format_capture_digest(shots, directory=session.directory)
 
         # Images only when a public base URL is configured. Without one there is
         # nowhere LINE could fetch from, and the message goes as text.
@@ -1341,7 +1378,7 @@ def create_app(
             try:
                 await ensure_share_server()
                 images = await asyncio.to_thread(
-                    _share_images, share_store, session, shot, base_url
+                    _share_images, share_store, session, shots, base_url
                 )
                 # Fetch it ourselves before LINE does.
                 #
@@ -1362,7 +1399,7 @@ def create_app(
                         retry_url = await ensure_quick_tunnel()
                         images = (
                             await asyncio.to_thread(
-                                _share_images, share_store, session, shot, retry_url
+                                _share_images, share_store, session, shots, retry_url
                             )
                             if retry_url
                             else []
@@ -1385,7 +1422,10 @@ def create_app(
         payload = {
             **result,
             "session": name,
+            # The first, kept for callers that send one frame; the list is what
+            # actually went.
             "frame_index": shot.frame_index,
+            "frame_indexes": [item.frame_index for item in shots],
             "text": text,
             "images": len(images),
             "share_error": share_error,
@@ -1515,20 +1555,87 @@ async def _reachable(
     return False
 
 
-def _share_images(store: Any, session: Any, shot: Any, base_url: str) -> list[str]:
-    """Publish the pictures for one shot and return their URLs.
+# Wide enough to stay sharp on a high-DPI screen at the size the strip draws
+# them, small enough that a hundred of them cost less than one full frame.
+_THUMBNAIL_WIDTH = 320
 
-    Only the annotated copy. Sending the original too put two pictures in the
-    chat that are identical apart from the boxes, and the reader could not tell
-    which was which without opening both. The unmarked frame stays on disk, and
-    the message names its path.
+
+def _thumbnail_of(path: Path, cache_dir: Path) -> Path | None:
+    """A small copy of a captured frame, made once and cached.
+
+    Written to disk rather than resized per request because the strip asks for
+    every thumbnail again on each refresh, and a capture never changes after it
+    is written -- so the second request onwards is a plain file read.
+
+    Kept in its own directory rather than beside the frame. `frames/` is the
+    recording that `extract` reads, and the next frame index is worked out by
+    scanning it: a `00000007.thumb.jpg` sorts after `00000007.jpg`, which would
+    have made the scan fall back to counting files and start overwriting the
+    session from an index it had already used.
+    """
+    try:
+        import cv2
+    except ImportError:  # pragma: no cover - OpenCV ships with the app
+        return None
+    thumb = cache_dir / path.name
+    if thumb.is_file() and thumb.stat().st_mtime >= path.stat().st_mtime:
+        return thumb
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    image = cv2.imread(str(path))
+    if image is None:
+        return None
+    height, width = image.shape[:2]
+    if width <= _THUMBNAIL_WIDTH:
+        return path
+    scale = _THUMBNAIL_WIDTH / width
+    small = cv2.resize(
+        image, (_THUMBNAIL_WIDTH, max(1, round(height * scale))), interpolation=cv2.INTER_AREA
+    )
+    ok, buffer = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    if not ok:
+        return None
+    # Written under a temporary name and moved into place: the strip reads these
+    # while captures are still being taken, and a half-written file is a broken
+    # image in the page. Encoded first rather than imwrite'd to the temporary
+    # name, because cv2 picks the format from the extension and ".part" is not
+    # one it knows.
+    staging = thumb.with_name(thumb.name + ".part")
+    staging.write_bytes(buffer.tobytes())
+    staging.replace(thumb)
+    return thumb
+
+
+def _shot_stage(shot: Any) -> str:
+    """How far a capture got: "ready", "no_model" or "no_result".
+
+    Kept as three words rather than a boolean because they are fixed in three
+    different places. "no_model" means best.pt was never loaded, "no_result"
+    means it was asked and did not answer in time, and "ready" means it ran --
+    including when it ran and found nothing, which is a real answer and belongs
+    with the successes.
+    """
+    status = getattr(getattr(shot, "detections", None), "status", "")
+    if status in {"no_model", "no_result"}:
+        return status
+    return "ready"
+
+
+def _share_images(store: Any, session: Any, shots: Any, base_url: str) -> list[str]:
+    """Publish the pictures for these shots and return their URLs, in order.
+
+    Only the annotated copy of each. Sending the original too put two pictures
+    in the chat that are identical apart from the boxes, and the reader could
+    not tell which was which without opening both. The unmarked frame stays on
+    disk, and the message names its path.
     """
     from .public_share import public_url
 
-    name = shot.annotated or shot.image
-    if not name:
-        return []
-    return [public_url(base_url, store.mint(session.directory / name))]
+    urls = []
+    for shot in shots:
+        name = shot.annotated or shot.image
+        if name:
+            urls.append(public_url(base_url, store.mint(session.directory / name)))
+    return urls
 
 
 def _encode_for_detection(frame: Any) -> bytes | None:
