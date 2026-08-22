@@ -54,6 +54,81 @@ class _FakeCapture:
         return None
 
 
+class _FakeDetector:
+    """Answers only for the frame it was actually given.
+
+    Written this way on purpose: returning a canned result regardless of input
+    would pass whether or not the capture submits its own frame, which is the
+    behaviour under test.
+    """
+
+    def __init__(self) -> None:
+        self.state = "ready"
+        self.submissions: list[Any] = []
+        self._result: dict[str, Any] | None = None
+
+    def start(self, path: Any, filename: str) -> None:
+        self.state = "ready"
+
+    def restart(self) -> None:
+        self.state = "ready"
+
+    def stop(self, timeout: float = 3.0) -> None:
+        self.state = "stopped"
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "status": self.state,
+            "loaded": self.state == "ready",
+            "filename": "fake.pt",
+            "worker_pid": 4242 if self.state == "ready" else None,
+            "tracker": "BoT-SORT",
+            "device": "cpu",
+            "error": None,
+            "dropped_frames": 0,
+            "classes": ["car"],
+            "architecture": "fake-yolo",
+            "epochs": 1,
+            "trained_image_size": 640,
+        }
+
+    def submit(self, frame: Any) -> bool:
+        if self.state != "ready":
+            return False
+        self.submissions.append(frame)
+        self._result = {
+            "source_id": frame.source_id,
+            "generation": frame.generation,
+            "sequence": frame.sequence,
+            "source_time_ms": frame.source_time_ms,
+            "width": 640,
+            "height": 360,
+            "inference_ms": 11.0,
+            "detections": [
+                {
+                    "x1": 10.0,
+                    "y1": 20.0,
+                    "x2": 60.0,
+                    "y2": 70.0,
+                    "confidence": 0.83,
+                    "class_id": 0,
+                    "label": "car",
+                    "track_id": 1,
+                }
+            ],
+        }
+        return True
+
+    def latest(self) -> dict[str, Any] | None:
+        return self._result
+
+    def reset(self, source_id: str, generation: int) -> None:
+        self._result = None
+
+    def drain(self) -> None:
+        return None
+
+
 class _StreamCv2:
     def __init__(self) -> None:
         import cv2
@@ -107,8 +182,14 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+        self.fake_detection_worker = _FakeDetector()
         server = TestServer(
-            create_app(config, FakeRecognizer(), stream_output_dir=self.root)
+            create_app(
+                config,
+                FakeRecognizer(),
+                stream_output_dir=self.root,
+                detection_worker_factory=lambda: self.fake_detection_worker,
+            )
         )
         self.client = TestClient(server, headers={GUARD_HEADER: "1"})
         await self.client.start_server()
@@ -255,6 +336,43 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shot["records"][0]["field_id"], "speed")
         await self.client.post("/api/stream/stop")
 
+    async def test_detection_runs_on_the_captured_frame(self) -> None:
+        """Not on whatever result happened to be newest.
+
+        Reusing the latest result put boxes on a capture that visibly did not
+        sit on the vehicles: the newest result belongs to whichever frame the
+        page last posted, and on a moving camera that is a different scene.
+        """
+        body = await (await self._shot()).json()
+        self.assertEqual(body["detections"]["status"], "ok")
+        # Zero, and meant literally: this is the frame that was inferred.
+        self.assertEqual(body["detections"]["age_ms"], 0.0)
+
+    async def test_the_capture_submits_its_own_frame(self) -> None:
+        """The frame goes to the detector rather than a result coming back from it.
+
+        And under its own source id: a one-off frame pushed under the page's id
+        would perturb the tracker the overlay depends on.
+        """
+        await self._shot()
+        self.assertEqual(len(self.fake_detection_worker.submissions), 1)
+        submitted = self.fake_detection_worker.submissions[0]
+        self.assertTrue(submitted.source_id.startswith("capture-"))
+        self.assertTrue(submitted.payload)
+
+    async def test_no_model_is_distinct_from_finding_nothing(self) -> None:
+        # A bare empty count cannot tell the two apart, and they are fixed in
+        # completely different ways.
+        self.fake_detection_worker.state = "unloaded"
+        body = await (await self._shot()).json()
+        self.assertEqual(body["detections"]["status"], "no_model")
+        self.assertEqual(body["detections"]["counts"], {})
+
+    async def test_the_boxes_are_drawn_from_that_result(self) -> None:
+        body = await (await self._shot()).json()
+        self.assertEqual(body["detections"]["counts"], {"car": 1})
+        self.assertTrue(body["annotated"])
+        self.assertTrue((self._dir("flight01") / body["annotated"]).is_file())
 
 if __name__ == "__main__":
     unittest.main()

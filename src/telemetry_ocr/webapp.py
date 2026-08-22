@@ -51,6 +51,16 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 SESSION_TTL_SECONDS = 3600.0
 
+# What a capture asks the detector for. A capture is one deliberate frame, not a
+# stream, so it can afford the larger input the checkpoints were trained at and
+# a threshold low enough to show the marginal boxes with their confidence
+# attached rather than silently dropping them.
+_CAPTURE_DETECT_IMAGE_SIZE = 960
+_CAPTURE_DETECT_CONFIDENCE = 0.25
+# Long enough for a cold model on this card, short enough that a wedged worker
+# costs the boxes rather than the capture.
+_CAPTURE_DETECT_TIMEOUT_S = 20.0
+
 # Smallest gap between two LINE pushes. Every push spends one message from the
 # account's monthly quota, so a wedged client or a held button must not be able
 # to drain it; three seconds is far below anything a person does deliberately.
@@ -932,51 +942,76 @@ def create_app(
             pass
         return response
 
-    def detection_boxes_now() -> tuple[list[Any], tuple[int, int] | None]:
-        """The raw boxes behind the counts, for drawing on the saved frame.
+    async def detect_on_frame(frame: Any) -> dict[str, Any] | None:
+        """Run the detector on this exact frame and wait for the answer.
 
-        Separate from the summary because they are needed in the detector's own
-        coordinate space, which the summary deliberately does not carry.
+        The alternative -- reading whatever result happened to be latest -- is
+        what put boxes on a capture that visibly did not sit on the vehicles:
+        the newest result belongs to whichever frame the page last posted, and
+        on a moving camera that is a different scene. A capture is a deliberate
+        act with time to spare, so it pays for its own inference.
+
+        Returns None when there is no model, or when the frame was superseded in
+        the worker's newest-wins queue before it was inferred.
         """
+        import uuid as _uuid
+
         state = app[detection_state_key]
         try:
             if state.worker.status().get("status") != "ready":
-                return [], None
-            latest = state.worker.latest()
+                return None
         except Exception:
-            return [], None
-        if not latest:
-            return [], None
-        width = int(latest.get("width") or 0)
-        height = int(latest.get("height") or 0)
-        return list(latest.get("detections") or []), ((width, height) if width else None)
+            _LOG.exception("Could not read detector status for a capture")
+            return None
 
-    def detection_summary_now(source_time_ms: float) -> Any:
-        """Count what the detector last saw, for the frame being captured.
+        # Its own source id, so this frame cannot be confused with the page's
+        # stream and the tracker is not perturbed by a one-off frame.
+        source_id = f"capture-{_uuid.uuid4().hex[:12]}"
+        payload = await asyncio.to_thread(_encode_for_detection, frame)
+        if payload is None:
+            return None
+        accepted = await asyncio.to_thread(
+            state.worker.submit,
+            DetectionFrame(
+                payload=payload,
+                source_id=source_id,
+                generation=0,
+                sequence=0,
+                source_time_ms=0.0,
+                confidence=_CAPTURE_DETECT_CONFIDENCE,
+                iou=0.45,
+                image_size=_CAPTURE_DETECT_IMAGE_SIZE,
+            ),
+        )
+        if not accepted:
+            return None
 
-        Read here rather than when something later asks for it, so the counts
-        belong to the picture. Detection runs at its own pace and never lands
-        exactly on the captured frame, so the gap is recorded too -- a large one
-        means these numbers describe a visibly different moment.
-        """
+        deadline = time.monotonic() + _CAPTURE_DETECT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            latest = state.worker.latest()
+            if latest and latest.get("source_id") == source_id:
+                return dict(latest)
+            await asyncio.sleep(0.05)
+        _LOG.info("Detector did not return a result for the captured frame in time")
+        return None
+
+    def summarise_detections(result: dict[str, Any] | None) -> Any:
+        """Counts and confidences for a result that belongs to this frame."""
         from collections import Counter
 
         from .capture_service import DetectionSummary
 
         state = app[detection_state_key]
         try:
-            status = state.worker.status()
-            if status.get("status") != "ready":
-                return DetectionSummary("no_model")
-            latest = state.worker.latest()
+            ready = state.worker.status().get("status") == "ready"
         except Exception:
-            # A worker mid-restart must not cost the operator the capture; the
-            # frame and its telemetry matter more than the counts.
-            _LOG.exception("Could not read detections for a capture")
-            return DetectionSummary("unknown")
-        if not latest:
+            ready = False
+        if not ready:
+            return DetectionSummary("no_model")
+        if result is None:
             return DetectionSummary("no_result")
-        boxes = latest.get("detections") or []
+
+        boxes = result.get("detections") or []
         counts = Counter(str(item.get("label", "?")) for item in boxes)
         scores: dict[str, list[float]] = {}
         for item in boxes:
@@ -993,18 +1028,13 @@ def create_app(
             for label, values in scores.items()
             if values
         }
-        result_time = latest.get("source_time_ms")
-        age = (
-            abs(source_time_ms - float(result_time))
-            if isinstance(result_time, (int, float))
-            else None
-        )
         return DetectionSummary(
             status="ok",
             counts=dict(counts),
             confidence=confidence,
             total=sum(counts.values()),
-            age_ms=age,
+            # Zero, and meant literally: this is the frame that was inferred.
+            age_ms=0.0,
         )
 
     def shot_verifier(live_records: list[Any]) -> Any:
@@ -1016,9 +1046,19 @@ def create_app(
         check.
         """
         from .capture_service import verify_shot
+        from .pipeline import TelemetryPipeline
 
         def verify(image_path: Path) -> Any:
-            return verify_shot(image_path, live_records, new_pipeline())
+            # A config of its own, with the fallback recipes switched on.
+            #
+            # The realtime path disables them to hold its frame budget: a second
+            # preprocessing pass per struggling ROI is time it does not have. A
+            # capture has all the time it needs, and this is the reading that
+            # goes out, so it should be the most thorough one the pipeline can
+            # produce rather than the cheapest.
+            thorough = clone_config(web_config)
+            thorough.runtime.enable_fallback = True
+            return verify_shot(image_path, live_records, TelemetryPipeline(thorough, recognizer))
 
         return verify
 
@@ -1079,16 +1119,17 @@ def create_app(
                 for field_id, item in snapshot.fields.items()
             ]
             session = capture_session_for(name, service.url, is_stream=True)
-            stream_boxes, stream_box_source = detection_boxes_now()
+            detected = await detect_on_frame(frame)
+            boxes, box_source = _boxes_of(detected)
             shot = await asyncio.to_thread(
                 session.save,
                 frame,
                 snapshot.source_time_ms,
                 records,
-                detection_summary_now(snapshot.source_time_ms),
+                summarise_detections(detected),
                 shot_verifier(records),
-                stream_boxes,
-                stream_box_source,
+                boxes,
+                box_source,
             )
             session.record_verification(shot)
             return web.json_response(asdict(shot))
@@ -1109,16 +1150,17 @@ def create_app(
                 browser_session.pipeline.process_frame, packet
             )
         session = capture_session_for(name, request.query.get("source", "browser"))
-        posted_boxes, posted_box_source = detection_boxes_now()
+        detected = await detect_on_frame(frame)
+        boxes, box_source = _boxes_of(detected)
         shot = await asyncio.to_thread(
             session.save,
             frame,
             source_time_ms,
             recognised,
-            detection_summary_now(source_time_ms),
+            summarise_detections(detected),
             shot_verifier([_as_record(item) for item in recognised]),
-            posted_boxes,
-            posted_box_source,
+            boxes,
+            box_source,
         )
         session.record_verification(shot)
         return web.json_response(asdict(shot))
@@ -1416,6 +1458,32 @@ def _share_images(store: Any, session: Any, shot: Any, base_url: str) -> list[st
     if not name:
         return []
     return [public_url(base_url, store.mint(session.directory / name))]
+
+
+def _encode_for_detection(frame: Any) -> bytes | None:
+    """The captured frame as JPEG, at the size the detector will work on."""
+    try:
+        import cv2
+    except ImportError:  # pragma: no cover - OpenCV ships with the app
+        return None
+    height, width = frame.shape[:2]
+    scale = min(1.0, _CAPTURE_DETECT_IMAGE_SIZE / max(width, height))
+    resized = (
+        frame
+        if scale >= 1.0
+        else cv2.resize(frame, (round(width * scale), round(height * scale)))
+    )
+    ok, buffer = cv2.imencode(".jpg", resized, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    return buffer.tobytes() if ok else None
+
+
+def _boxes_of(result: dict[str, Any] | None) -> tuple[list[Any], tuple[int, int] | None]:
+    """Boxes and the frame size they are expressed in, for drawing."""
+    if not result:
+        return [], None
+    width = int(result.get("width") or 0)
+    height = int(result.get("height") or 0)
+    return list(result.get("detections") or []), ((width, height) if width else None)
 
 
 def _as_record(record: Any) -> dict[str, Any]:
