@@ -66,6 +66,11 @@ class _FakeDetector:
         self.state = "ready"
         self.submissions: list[Any] = []
         self._result: dict[str, Any] | None = None
+        self._active_source = ""
+        # Hooks for the tests that need the capture to still be inside the
+        # detector when something else happens.
+        self.on_submit: Any = None
+        self.withhold = False
 
     def start(self, path: Any, filename: str) -> None:
         self.state = "ready"
@@ -96,6 +101,15 @@ class _FakeDetector:
         if self.state != "ready":
             return False
         self.submissions.append(frame)
+        # Like the real worker: one active source at a time, and a result that
+        # does not carry it is discarded rather than merely superseded.
+        if frame.source_id != self._active_source:
+            self._active_source = frame.source_id
+            self._result = None
+        if self.on_submit is not None:
+            self.on_submit(frame)
+        if frame.source_id != self._active_source:
+            return True
         self._result = {
             "source_id": frame.source_id,
             "generation": frame.generation,
@@ -120,9 +134,15 @@ class _FakeDetector:
         return True
 
     def latest(self) -> dict[str, Any] | None:
-        return self._result
+        return None if self.withhold else self._result
+
+    def take_over(self, source_id: str) -> None:
+        """What an overlay frame does to a capture that is still waiting."""
+        self._active_source = source_id
+        self._result = None
 
     def reset(self, source_id: str, generation: int) -> None:
+        self._active_source = source_id
         self._result = None
 
     def drain(self) -> None:
@@ -596,6 +616,80 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         await self.client.get("/api/capture/image?session=flight01&frame_index=0&thumb=1")
         reopened = CaptureSession(self.root / "sessions", "flight01", "reopened", [])
         self.assertEqual(reopened.frame_count, 3)
+
+
+    async def test_the_live_overlay_cannot_take_the_detector_mid_capture(self) -> None:
+        """The bug this guards: every capture came back with no boxes.
+
+        The worker keeps one active source id and discards any result that does
+        not carry it. A capture submits under its own `capture-` id, and the
+        page's overlay -- which posts a frame at least every 400 ms while a
+        video plays -- takes the active id straight back. Inference takes longer
+        than that, so the capture's answer was thrown away before it arrived and
+        every shot was filed as "no_result" with no annotated copy written.
+        """
+        overlay_frames = []
+
+        def overlay_cuts_in(frame: Any) -> None:
+            # Exactly once, and only for the capture: the first overlay frame
+            # that was already in flight when the capture claimed the detector.
+            if frame.source_id.startswith("capture-") and not overlay_frames:
+                overlay_frames.append(frame)
+                self.fake_detection_worker.take_over("page-source")
+
+        self.fake_detection_worker.on_submit = overlay_cuts_in
+        body = await (await self._shot()).json()
+        self.assertEqual(len(overlay_frames), 1)
+        # Resubmitted rather than given up on.
+        self.assertEqual(body["detections"]["status"], "ok")
+        self.assertEqual(body["detections"]["counts"], {"car": 1})
+        self.assertTrue(body["annotated"])
+
+    async def test_the_overlay_stands_down_while_a_capture_holds_it(self) -> None:
+        """The other half: the overlay is told to skip, not queued behind.
+
+        A frame held for half a second and then inferred would draw boxes from
+        the wrong moment, which is the fault this whole path exists to avoid.
+        """
+        import asyncio as _asyncio
+
+        released = _asyncio.Event()
+        overlay_result: dict[str, Any] = {}
+
+        async def overlay_posts() -> None:
+            response = await self.client.post(
+                "/api/detection/frame?source_id=page&generation=0&sequence=1"
+                "&source_time_ms=0&image_size=640",
+                data=self.jpeg,
+                headers={"Content-Type": "image/jpeg"},
+            )
+            overlay_result.update(await response.json())
+            # Only now may the capture see its answer, so the overlay is
+            # guaranteed to have been refused while the claim was held rather
+            # than served after it was released.
+            self.fake_detection_worker.withhold = False
+            released.set()
+
+        # submit() runs in a worker thread, so the loop is captured here and the
+        # overlay's post is handed back to it rather than started from there.
+        loop = _asyncio.get_running_loop()
+
+        def hold(frame: Any) -> None:
+            if frame.source_id.startswith("capture-") and not overlay_result:
+                # The overlay tries to post while the capture is inside the
+                # detector. It must be refused rather than served.
+                self.fake_detection_worker.withhold = True
+                _asyncio.run_coroutine_threadsafe(overlay_posts(), loop)
+
+        self.fake_detection_worker.on_submit = hold
+        shot = await (await self._shot()).json()
+        self.assertEqual(shot["detections"]["status"], "ok")
+        await _asyncio.wait_for(released.wait(), timeout=5.0)
+        self.assertTrue(overlay_result.get("deferred"))
+        self.assertFalse(overlay_result.get("accepted"))
+        # And nothing from the page reached the detector during the capture.
+        sources = [item.source_id for item in self.fake_detection_worker.submissions]
+        self.assertNotIn("page", sources)
 
 
 if __name__ == "__main__":

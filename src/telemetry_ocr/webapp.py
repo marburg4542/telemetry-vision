@@ -60,6 +60,10 @@ _CAPTURE_DETECT_CONFIDENCE = 0.25
 # Long enough for a cold model on this card, short enough that a wedged worker
 # costs the boxes rather than the capture.
 _CAPTURE_DETECT_TIMEOUT_S = 20.0
+# How long one submission is given before it is assumed lost and sent again.
+# Inference on this card is well under a second, so anything past a few seconds
+# means the frame was displaced rather than merely slow.
+_CAPTURE_DETECT_ATTEMPT_S = 5.0
 
 # Smallest gap between two LINE pushes. Every push spends one message from the
 # account's monthly quota, so a wedged client or a held button must not be able
@@ -304,6 +308,10 @@ def create_app(
         worker=(detection_worker_factory or ProcessDetectionWorker)(),
         temp_dir=tempfile.TemporaryDirectory(prefix="telemetry-ocr-model-"),
     )
+    # A capture takes the detector for itself while it runs. One at a time, and
+    # the live overlay stands down for the duration -- see detect_on_frame.
+    detector_claim = asyncio.Lock()
+    detection_holds = {"captures": 0}
 
     async def index(_: Any) -> Any:
         return web.FileResponse(
@@ -591,6 +599,17 @@ def create_app(
             raise ValueError("Detection frame body is empty")
         if len(payload) > detection_frame_limit:
             raise ValueError("Detection frame exceeds the 8 MB limit")
+        if detection_holds["captures"]:
+            # A capture has the detector. This frame is one of many and the next
+            # one is 400 ms away; the capture is a deliberate act that has to
+            # come back with boxes on the picture being saved. Skipped rather
+            # than queued, because a frame held for half a second and then
+            # inferred would draw boxes from the wrong moment.
+            deferred, deferred_status = detection_result_payload(source_time_ms)
+            deferred["accepted"] = False
+            deferred["accepted_sequence"] = None
+            deferred["deferred"] = True
+            return web.json_response(deferred, status=deferred_status)
         # submit() pickles up to 8 MB onto a multiprocessing queue and can spin
         # while the feeder thread catches up, so it does not belong on the loop.
         accepted = await asyncio.to_thread(
@@ -964,36 +983,60 @@ def create_app(
             _LOG.exception("Could not read detector status for a capture")
             return None
 
-        # Its own source id, so this frame cannot be confused with the page's
-        # stream and the tracker is not perturbed by a one-off frame.
-        source_id = f"capture-{_uuid.uuid4().hex[:12]}"
         payload = await asyncio.to_thread(_encode_for_detection, frame)
         if payload is None:
             return None
-        accepted = await asyncio.to_thread(
-            state.worker.submit,
-            DetectionFrame(
-                payload=payload,
-                source_id=source_id,
-                generation=0,
-                sequence=0,
-                source_time_ms=0.0,
-                confidence=_CAPTURE_DETECT_CONFIDENCE,
-                iou=0.45,
-                image_size=_CAPTURE_DETECT_IMAGE_SIZE,
-            ),
-        )
-        if not accepted:
-            return None
 
-        deadline = time.monotonic() + _CAPTURE_DETECT_TIMEOUT_S
-        while time.monotonic() < deadline:
-            latest = state.worker.latest()
-            if latest and latest.get("source_id") == source_id:
-                return dict(latest)
-            await asyncio.sleep(0.05)
-        _LOG.info("Detector did not return a result for the captured frame in time")
-        return None
+        # Claimed for the duration, because otherwise the live overlay takes the
+        # detector back before the capture's own frame has been inferred.
+        #
+        # The worker keeps one active source id and drops any result that does
+        # not carry it, so submitting under a fresh `capture-` id and then
+        # letting the page submit its next overlay frame does not merely
+        # overwrite the capture's answer -- it discards it. The overlay posts a
+        # frame at least every 400 ms while a video plays and inference takes
+        # longer than that, so with a video running the capture lost the race
+        # nearly every time: every shot came back "no_result" with no boxes
+        # drawn, while the same capture on a paused page succeeded.
+        async with detector_claim:
+            detection_holds["captures"] += 1
+            try:
+                deadline = time.monotonic() + _CAPTURE_DETECT_TIMEOUT_S
+                while time.monotonic() < deadline:
+                    # A fresh id per attempt. Reusing one would let a stale
+                    # answer from the previous attempt satisfy this one.
+                    source_id = f"capture-{_uuid.uuid4().hex[:12]}"
+                    accepted = await asyncio.to_thread(
+                        state.worker.submit,
+                        DetectionFrame(
+                            payload=payload,
+                            source_id=source_id,
+                            generation=0,
+                            sequence=0,
+                            source_time_ms=0.0,
+                            confidence=_CAPTURE_DETECT_CONFIDENCE,
+                            iou=0.45,
+                            image_size=_CAPTURE_DETECT_IMAGE_SIZE,
+                        ),
+                    )
+                    if not accepted:
+                        return None
+                    attempt_ends = min(
+                        deadline, time.monotonic() + _CAPTURE_DETECT_ATTEMPT_S
+                    )
+                    while time.monotonic() < attempt_ends:
+                        latest = state.worker.latest()
+                        if latest and latest.get("source_id") == source_id:
+                            return dict(latest)
+                        await asyncio.sleep(0.02)
+                    # An overlay frame already in flight when the claim was taken
+                    # can still displace the first attempt; a second one cannot,
+                    # because nothing new is being submitted while this holds.
+                    _LOG.info("Captured frame was displaced in the detector; resubmitting")
+                _LOG.info("Detector did not return a result for the captured frame in time")
+                return None
+            finally:
+                detection_holds["captures"] -= 1
 
     def summarise_detections(result: dict[str, Any] | None) -> Any:
         """Counts and confidences for a result that belongs to this frame."""
