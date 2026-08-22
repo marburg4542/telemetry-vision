@@ -346,6 +346,18 @@ class ImageSendTests(LineEndpointTests):
         await self.outside.start_server()
         self.addAsyncCleanup(self.outside.close)
 
+        # drone.example.com does not resolve, and the send path now refuses to
+        # hand LINE a URL it could not fetch itself. These tests are about what
+        # the push carries; UnreachableUrlTests covers the check.
+        async def _always_reachable(url: str, **kwargs: Any) -> bool:
+            self.checked.append(url)
+            return True
+
+        self.checked: list[str] = []
+        reach = mock.patch("telemetry_ocr.webapp._reachable", _always_reachable)
+        reach.start()
+        self.addCleanup(reach.stop)
+
     async def test_status_says_images_are_on(self) -> None:
         body = await (await self.client.get("/api/line/status")).json()
         self.assertTrue(body["images"])
@@ -396,6 +408,13 @@ class ImageSendTests(LineEndpointTests):
         path = image["originalContentUrl"].split("drone.example.com", 1)[1]
         self.assertEqual((await self.outside.get(path)).status, 403)
 
+    async def test_the_url_is_checked_before_line_is_given_it(self) -> None:
+        # The whole point of the guard: nothing is sent that was not fetched.
+        await self._shot()
+        await self._send()
+        self.assertEqual(len(self.checked), 1)
+        self.assertTrue(self.checked[0].startswith("https://drone.example.com/"))
+
     async def test_text_still_goes_when_no_public_url_is_set(self) -> None:
         # Images are a separate decision; turning them off must not stop the
         # telemetry, which is the part someone is waiting for.
@@ -425,3 +444,52 @@ class ImageSendTests(LineEndpointTests):
         await self._send()
         text = self.pushes[0]["body"]["messages"][0]["text"]
         self.assertEqual(text.count("รูป"), 1)
+
+
+@unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
+class UnreachableUrlTests(LineEndpointTests):
+    """What happens when the public address does not answer.
+
+    A quick tunnel can be torn down while cloudflared keeps running, so the
+    server can be advertising a hostname that no longer resolves. LINE fetches
+    an image URL once; if it fails, the chat shows a broken picture forever and
+    nothing retries. So an unfetchable URL must not be sent at all.
+    """
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        env = mock.patch.dict(
+            "os.environ", {"TELEMETRY_OCR_PUBLIC_URL": "https://gone.example.com"}
+        )
+        env.start()
+        self.addCleanup(env.stop)
+
+        async def _never_reachable(url: str, **kwargs: Any) -> bool:
+            return False
+
+        reach = mock.patch("telemetry_ocr.webapp._reachable", _never_reachable)
+        reach.start()
+        self.addCleanup(reach.stop)
+
+    async def test_no_image_is_sent_when_the_url_does_not_answer(self) -> None:
+        await self._shot()
+        response = await self._send()
+        self.assertEqual(response.status, 200)
+        kinds = [item["type"] for item in self.pushes[0]["body"]["messages"]]
+        self.assertEqual(kinds, ["text"])
+
+    async def test_the_telemetry_still_goes(self) -> None:
+        """A picture that cannot be published is not a reason to withhold the numbers.
+
+        Those are the part someone is waiting for.
+        """
+        await self._shot()
+        await self._send()
+        sent = self.pushes[0]["body"]["messages"][0]["text"]
+        self.assertIn("flight01", sent)
+
+    async def test_the_caller_is_told_why_there_is_no_picture(self) -> None:
+        await self._shot()
+        body = await (await self._send()).json()
+        self.assertEqual(body["images"], 0)
+        self.assertIn("URL", body["share_error"])

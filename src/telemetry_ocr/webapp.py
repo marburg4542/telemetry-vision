@@ -1232,6 +1232,38 @@ def create_app(
                 images = await asyncio.to_thread(
                     _share_images, share_store, session, shot, base_url
                 )
+                # Fetch it ourselves before LINE does.
+                #
+                # A tunnel process that is still alive is not the same as a
+                # tunnel that still resolves: a quick tunnel can be torn down
+                # while cloudflared keeps running, and the server went on
+                # advertising the dead hostname. LINE fetches once, gets
+                # nothing, and shows a broken picture that no retry ever fixes.
+                # A fresh tunnel also needs a moment to propagate before its
+                # first request succeeds, which this waits out.
+                if images and not await _reachable(images[0]):
+                    if quick_tunnel:
+                        _LOG.warning("Public URL unreachable; restarting the tunnel")
+                        tunnel = share_state["tunnel"]
+                        if tunnel is not None:
+                            await asyncio.to_thread(tunnel.stop)
+                        share_state["tunnel"] = None
+                        retry_url = await ensure_quick_tunnel()
+                        images = (
+                            await asyncio.to_thread(
+                                _share_images, share_store, session, shot, retry_url
+                            )
+                            if retry_url
+                            else []
+                        )
+                        if images and not await _reachable(images[0]):
+                            images = []
+                    else:
+                        images = []
+                    if not images:
+                        share_error = (
+                            "ส่งข้อความอย่างเดียว: URL สาธารณะยังเข้าถึงไม่ได้"
+                        )
             except Exception as exc:
                 # A picture that cannot be published is not a reason to withhold
                 # the telemetry, which is the part someone is waiting for.
@@ -1335,6 +1367,39 @@ def run_web_app(
         app.on_startup.append(launch_browser)
     print(f"Telemetry OCR web UI: {url}")
     web.run_app(app, host=host, port=port, print=None)
+
+
+async def _reachable(
+    url: str, attempts: int = 8, delay_s: float = 4.0, first_delay_s: float = 5.0
+) -> bool:
+    """Whether that URL actually returns the image, from outside this process.
+
+    Waits before the first attempt rather than asking immediately. A hostname
+    that has just been allocated does not resolve yet, and a failed lookup is
+    negatively cached by the resolver -- so asking too early does not merely
+    fail, it poisons the retries that follow.
+    """
+    await asyncio.sleep(first_delay_s)
+    try:
+        import aiohttp
+    except ImportError:  # pragma: no cover - aiohttp ships with the web extra
+        return False
+
+    timeout = aiohttp.ClientTimeout(total=10)
+    for attempt in range(attempts):
+        try:
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(url) as response,
+            ):
+                if response.status == 200:
+                    return True
+                _LOG.info("Public URL answered %s (attempt %d)", response.status, attempt + 1)
+        except Exception as exc:
+            _LOG.info("Public URL not reachable yet: %s (attempt %d)", exc, attempt + 1)
+        if attempt + 1 < attempts:
+            await asyncio.sleep(delay_s)
+    return False
 
 
 def _share_images(store: Any, session: Any, shot: Any, base_url: str) -> list[str]:

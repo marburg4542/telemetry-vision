@@ -33,6 +33,13 @@ _LOG = logging.getLogger(__name__)
 # keeps this working when the box changes.
 _URL_PATTERN = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
+# cloudflared prints the address as soon as it has been allocated, several
+# seconds before the tunnel is actually carrying traffic -- its own banner says
+# "it may take some time to be reachable". Handing that address to LINE in the
+# gap produced image messages pointing at a hostname that did not resolve yet,
+# and LINE fetches once. This line is the real readiness signal.
+_READY_PATTERN = re.compile(r"Registered tunnel connection")
+
 # Where cloudflared usually lands on Windows, checked before PATH so a machine
 # with it installed but not on PATH still works.
 _KNOWN_PATHS = (
@@ -58,6 +65,7 @@ class QuickTunnel:
         self.executable = executable or find_cloudflared()
         self._lock = threading.Lock()
         self._url: str | None = None
+        self._connected = False
         self._error: str | None = None
         self._process: subprocess.Popen[str] | None = None
         self._reader: threading.Thread | None = None
@@ -65,8 +73,9 @@ class QuickTunnel:
 
     @property
     def url(self) -> str | None:
+        """The address, once the tunnel is actually carrying traffic."""
         with self._lock:
-            return self._url
+            return self._url if self._connected else None
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -74,6 +83,9 @@ class QuickTunnel:
             return {
                 "available": bool(self.executable),
                 "running": running,
+                # Named but not yet connected is a real and misleading state, so
+                # it is reported rather than folded into "running".
+                "connected": self._connected,
                 "url": self._url,
                 "error": self._error,
                 "port": self.port,
@@ -127,11 +139,11 @@ class QuickTunnel:
                 return self.url
             if self._process.poll() is not None:
                 with self._lock:
-                    self._error = self._error or "cloudflared exited before announcing a URL"
+                    self._error = self._error or "cloudflared exited before connecting"
                 return None
             time.sleep(0.2)
         with self._lock:
-            self._error = f"cloudflared did not announce a URL within {_STARTUP_TIMEOUT_S:.0f}s"
+            self._error = f"cloudflared did not connect within {_STARTUP_TIMEOUT_S:.0f}s"
         _LOG.warning("%s", self._error)
         return None
 
@@ -142,18 +154,32 @@ class QuickTunnel:
         for line in process.stdout:
             if self._stopping.is_set():
                 return
-            match = _URL_PATTERN.search(line)
-            if match:
-                with self._lock:
-                    self._url = match.group(0)
-                    self._error = None
-                _LOG.info("Quick tunnel is at %s", match.group(0))
+            self._consume(line)
         # The process ended. The address it had is gone with it, and continuing
         # to hand it to LINE would produce image messages that fetch nothing.
         with self._lock:
             self._url = None
+            self._connected = False
             if not self._stopping.is_set():
                 self._error = "cloudflared exited"
+
+    def _consume(self, line: str) -> None:
+        """One line of cloudflared output.
+
+        Separate from the read loop so the two states it distinguishes --
+        allocated, and actually connected -- can be exercised without a live
+        process, which is the distinction that was got wrong.
+        """
+        match = _URL_PATTERN.search(line)
+        if match:
+            with self._lock:
+                self._url = match.group(0)
+                self._error = None
+            _LOG.info("Quick tunnel allocated %s", match.group(0))
+        if _READY_PATTERN.search(line):
+            with self._lock:
+                self._connected = True
+            _LOG.info("Quick tunnel connected")
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stopping.set()
@@ -162,6 +188,7 @@ class QuickTunnel:
             return
         with self._lock:
             self._url = None
+            self._connected = False
         if process.poll() is None:
             process.terminate()
             try:

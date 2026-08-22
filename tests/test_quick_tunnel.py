@@ -126,5 +126,67 @@ class PortTargetTests(unittest.TestCase):
         self.assertNotIn("8765", target)
 
 
+class ReadinessTests(unittest.TestCase):
+    """Allocated is not the same as reachable.
+
+    cloudflared prints the hostname several seconds before the tunnel carries
+    traffic -- its own banner says so. Handing that address to LINE in the gap
+    produced image messages pointing at a name that did not resolve, and LINE
+    fetches exactly once.
+    """
+
+    def _tunnel(self):
+        from telemetry_ocr.quick_tunnel import QuickTunnel
+
+        with mock.patch("telemetry_ocr.quick_tunnel.find_cloudflared", return_value=None):
+            return QuickTunnel(8766)
+
+    def _feed(self, tunnel, text: str) -> None:
+        for line in text.splitlines(keepends=True):
+            tunnel._consume(line)
+
+    def test_an_allocated_but_unconnected_tunnel_offers_no_url(self) -> None:
+        tunnel = self._tunnel()
+        self._feed(tunnel, CLOUDFLARED_OUTPUT.replace("Connection registered", "..."))
+        self.assertIsNone(tunnel.url)
+        status = tunnel.status()
+        # The address is known and reported, but not offered for use.
+        self.assertTrue(status["url"])
+        self.assertFalse(status["connected"])
+
+    def test_the_url_appears_once_the_connection_registers(self) -> None:
+        tunnel = self._tunnel()
+        self._feed(
+            tunnel,
+            CLOUDFLARED_OUTPUT
+            + "2026-08-22T01:35:06Z INF Registered tunnel connection connIndex=0\n",
+        )
+        self.assertEqual(
+            tunnel.url, "https://celebrity-genesis-gpl-brian.trycloudflare.com"
+        )
+        self.assertTrue(tunnel.status()["connected"])
+
+    def test_a_tunnel_that_dies_stops_offering_its_address(self) -> None:
+        # A dead tunnel's hostname stops resolving, so continuing to hand it out
+        # would produce exactly the broken image this guards against.
+        tunnel = self._tunnel()
+        self._feed(
+            tunnel,
+            CLOUDFLARED_OUTPUT
+            + "2026-08-22T01:35:06Z INF Registered tunnel connection connIndex=0\n",
+        )
+        self.assertIsNotNone(tunnel.url)
+
+        class _Ended:
+            stdout = iter(())
+
+            def poll(self):
+                return 0
+
+        tunnel._process = _Ended()
+        tunnel._read_output()
+        self.assertIsNone(tunnel.url)
+        self.assertFalse(tunnel.status()["connected"])
+
 if __name__ == "__main__":
     unittest.main()

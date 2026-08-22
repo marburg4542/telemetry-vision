@@ -76,17 +76,28 @@ class MessageFormattingTests(unittest.TestCase):
         self.assertIn("car 3", text)
         self.assertIn("รวม 3", text)
 
-    def test_an_unconfirmed_reading_is_marked_not_dropped(self) -> None:
-        """Hiding the hard fields would misreport what was on screen.
+    def test_a_validated_value_carries_no_marker(self) -> None:
+        """The marker used to follow temporal voting, and that was the wrong test.
 
-        The whole point of a capture is to say what the overlay showed, so a
-        value temporal voting has not agreed on yet is shown with a marker
-        rather than silently omitted.
+        Voting needs the same reading across consecutive frames; a capture is a
+        single moment, so the quorum is usually unmet and nearly every field came
+        out marked -- including ones validation had plainly repaired. A mark that
+        fires on almost everything teaches the reader to ignore it.
         """
         from telemetry_ocr.line_client import format_capture_message
 
         text = format_capture_message(_Shot(records=[_record("lrf_m", 721.7, confirmed=False)]))
-        self.assertIn("721.7 m?", text)
+        self.assertIn("721.7 m", text)
+        self.assertNotIn("721.7 m?", text)
+
+    def test_raw_text_still_carries_a_marker(self) -> None:
+        # The one case where doubt is real: nothing validated it.
+        from telemetry_ocr.line_client import format_capture_message
+
+        text = format_capture_message(
+            _Shot(records=[_record("lrf_m", None, confirmed=False, raw="4786n")])
+        )
+        self.assertIn("4786n?", text)
 
     def test_the_three_ways_of_having_no_counts_read_differently(self) -> None:
         # A bare zero cannot distinguish these, and they are fixed in completely
@@ -378,7 +389,6 @@ class ValuePolicyTests(unittest.TestCase):
         text = format_capture_message(shot)
         self.assertIn("478.6 m", text)
         self.assertNotIn("4786n", text)
-        self.assertIn("ใช้ค่าจาก voting แทน", text)
 
     def test_raw_text_only_when_neither_could_read_it(self) -> None:
         from telemetry_ocr.line_client import format_capture_message

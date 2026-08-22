@@ -314,9 +314,6 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
 
     lines.append("")
     lines.append(describe_detections(getattr(shot, "detections", None)))
-    verification_line = describe_verification(verification, rescued)
-    if verification_line:
-        lines.append(verification_line)
 
     if directory is not None:
         # The annotated copy when there is one. Naming the original as well put
@@ -365,11 +362,23 @@ def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
         return ""
     value = record.get("value")
     if value is None:
+        # Raw OCR text, marked, because nothing validated it. This is the only
+        # place the marker appears now.
         raw = (record.get("raw_text") or "").strip()
         return f"{_PREFIXES.get(field_id, '')}{raw or '—'}?" if raw else ""
     unit = _UNITS.get(field_id, "")
     prefix = _PREFIXES.get(field_id, "")
-    marker = "" if record.get("confirmed") else "?"
+    # No marker on a validated value.
+    #
+    # It used to follow `confirmed`, which is temporal voting having seen the
+    # same reading in enough consecutive frames. That is the right test for a
+    # running stream and the wrong one for a capture: a shot is a single moment,
+    # so voting has usually not reached its quorum and nearly everything came
+    # out marked. Worse, it marked readings that were plainly right --
+    # "10.3xFOV7.2°", repaired by validation from a garbled "1D.3xFQv7.2”" --
+    # which teaches the reader to ignore the mark. A value that passed the
+    # field's own regex and range is reported as a value.
+    marker = ""
     if "lat_dms" in field_id or "lon_dms" in field_id:
         # DMS, and no prefix: the hemisphere letter is part of the rendering.
         return f"{format_dms(float(value), 'lat_dms' in field_id)}{marker}"
