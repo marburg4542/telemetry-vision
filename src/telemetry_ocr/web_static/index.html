@@ -73,9 +73,6 @@
               </button>
               <small>หรือวางไฟล์วิดีโอลงในพื้นที่นี้</small>
             </div>
-            <div class="processing-badge" id="processingBadge" hidden>
-              <span></span> OCR LIVE
-            </div>
             <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
             <div class="stream-badge" id="streamBadge" hidden>
               <span></span> <span id="streamBadgeText">LIVE</span>
@@ -164,24 +161,11 @@
               <span class="time-separator">/</span>
               <span id="durationTime">00:00.000</span>
             </div>
-            <label class="toggle-control">
-              <input id="ocrToggle" type="checkbox" checked disabled />
-              <span class="toggle-track"><span></span></span>
-              <span>
-                <strong>Realtime OCR</strong>
-                <small>ประมวลผลเฉพาะ ROI ที่กำหนดไว้</small>
-              </span>
-            </label>
-            <label class="rate-control" for="rateSelect">
-              <span>Sampling rate</span>
-              <select id="rateSelect" disabled>
-                <option value="5">5 Hz</option>
-                <option value="8">8 Hz</option>
-                <option value="10" selected>10 Hz</option>
-                <option value="12">12 Hz</option>
-                <option value="15">15 Hz</option>
-              </select>
-            </label>
+            <!-- The Realtime OCR toggle and the sampling rate used to live
+                 here. Both are gone with the reading they controlled: OCR now
+                 runs on a captured frame, on request. A switch that stays on
+                 screen after the thing it switches has been removed is worse
+                 than no switch, because it looks like it still does something. -->
             <button class="ghost-button" id="resetButton" type="button" disabled>Reset session</button>
             <span class="hint" tabindex="0" role="note" aria-describedby="privacyHint">
               <span class="hint-icon" aria-hidden="true">LOCAL</span>
@@ -193,11 +177,11 @@
           </div>
         </section>
 
-        <aside class="telemetry-panel" aria-label="ผล OCR realtime">
+        <aside class="telemetry-panel" aria-label="ภาพที่ capture ไว้">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">LIVE EXTRACTION</p>
-              <h2>Telemetry stream</h2>
+              <p class="eyebrow">CAPTURE PREVIEW</p>
+              <h2>เลือกภาพก่อนส่ง</h2>
             </div>
             <div class="panel-heading-meta">
               <button class="install-button" id="installAppButton" type="button" hidden>
@@ -207,32 +191,30 @@
                 <span class="status-dot"></span>
                 <span id="engineStatusText">กำลังเตรียม OCR</span>
               </div>
-              <span class="record-count" id="recordCount">0 records</span>
+              <span class="record-count" id="recordCount">0 ภาพ</span>
             </div>
           </div>
 
-          <div class="metric-grid" aria-label="สถิติ OCR">
-            <div class="metric-card">
-              <span>OCR rate</span>
-              <strong id="ocrRate">0.0</strong>
-              <small>Hz</small>
-            </div>
-            <div class="metric-card">
-              <span>Latency</span>
-              <strong id="latency">—</strong>
-              <small>ms</small>
-            </div>
-            <div class="metric-card">
-              <span>Confirmed</span>
-              <strong id="confirmedRate">0</strong>
-              <small>%</small>
+          <!-- The thumbnails. Every shot in this session, newest first, so the
+               one just taken is where the eye already is. -->
+          <div class="shot-strip" id="shotStrip" role="listbox" aria-label="ภาพที่เก็บไว้"></div>
+
+          <div class="shot-preview" id="shotPreview" hidden>
+            <img id="shotImage" alt="ภาพที่เลือก" />
+            <div class="shot-toggle">
+              <label class="check-control" for="shotAnnotated"
+                     title="ภาพที่วาดกรอบตรวจจับแล้ว เทียบกับต้นฉบับ">
+                <input id="shotAnnotated" type="checkbox" checked />
+                <span>แสดงกรอบ</span>
+              </label>
+              <span id="shotDetections" class="shot-detections"></span>
             </div>
           </div>
 
           <div class="telemetry-list" id="telemetryList" aria-live="polite"></div>
 
           <p class="capture-status" id="captureStatus">
-            กด <strong>Capture</strong> เพื่อเก็บภาพเฟรมนี้พร้อม telemetry ของมันไว้ตรวจย้อนหลัง
+            กด <strong>Capture</strong> เพื่อเก็บภาพ แล้วเลือกภาพที่ต้องการส่ง
           </p>
 
           <div class="panel-actions">

@@ -19,7 +19,6 @@ const ui = {
   lineSendButtonText: $("lineSendButtonText"),
   streamBadgeText: $("streamBadgeText"),
   dropState: $("dropState"),
-  processingBadge: $("processingBadge"),
   detectionOverlay: $("detectionOverlay"),
   detectionCanvas: $("detectionCaptureCanvas"),
   modelInput: $("modelInput"),
@@ -43,16 +42,16 @@ const ui = {
   currentTime: $("currentTime"),
   durationTime: $("durationTime"),
   installAppButton: $("installAppButton"),
-  ocrToggle: $("ocrToggle"),
-  rateSelect: $("rateSelect"),
   resetButton: $("resetButton"),
   engineStatus: $("engineStatus"),
   engineStatusText: $("engineStatusText"),
   telemetryList: $("telemetryList"),
-  ocrRate: $("ocrRate"),
-  latency: $("latency"),
-  confirmedRate: $("confirmedRate"),
   recordCount: $("recordCount"),
+  shotStrip: $("shotStrip"),
+  shotPreview: $("shotPreview"),
+  shotImage: $("shotImage"),
+  shotAnnotated: $("shotAnnotated"),
+  shotDetections: $("shotDetections"),
   downloadJsonButton: $("downloadJsonButton"),
   downloadCsvButton: $("downloadCsvButton"),
   clearLogButton: $("clearLogButton"),
@@ -146,6 +145,9 @@ const state = {
   captureTimer: null,
   lineConfigured: false,
   lineSending: false,
+  // The captured shots this session holds, and which one the panel is showing.
+  shots: [],
+  selectedShot: null,
   detectionWorkerCycleMs: null,
 };
 
@@ -491,7 +493,6 @@ async function initialize() {
     const session = await jsonFetch("/api/session", { method: "POST" });
     state.sessionId = session.session_id;
     renderTelemetryRows();
-    chooseNearestRate(state.config.target_hz);
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
     initializeDetectionModel();
     adoptRunningStream();
@@ -508,15 +509,6 @@ async function initialize() {
       + ` เพื่อให้เปิดเองหลัง login) · รายละเอียด: ${error.message}`,
     );
   }
-}
-
-function chooseNearestRate(target) {
-  const options = [...ui.rateSelect.options];
-  const closest = options.reduce((best, option) => (
-    Math.abs(Number(option.value) - Number(target)) < Math.abs(Number(best.value) - Number(target))
-      ? option : best
-  ), options[0]);
-  ui.rateSelect.value = closest.value;
 }
 
 function renderTelemetryRows() {
@@ -601,7 +593,7 @@ async function resetSession(clearRecords = true) {
     await jsonFetch(`/api/session/${state.sessionId}/reset`, { method: "POST" });
     if (generation !== state.generation) return;
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
-    if (ui.video.readyState >= 2 && ui.ocrToggle.checked) submitFrame(true);
+    // No frame read on reset: reading happens when a capture is taken.
   } catch (error) {
     showToast(`รีเซ็ต OCR ไม่สำเร็จ: ${error.message}`);
   }
@@ -614,9 +606,6 @@ function resetCurrentValues() {
     value.textContent = "—";
     detail.textContent = "รอข้อมูล OCR";
   }
-  ui.ocrRate.textContent = "0.0";
-  ui.latency.textContent = "—";
-  ui.confirmedRate.textContent = "0";
 }
 
 function clearLog() {
@@ -640,7 +629,7 @@ function startFrameLoop() {
       state.mediaClockMs = metadata.mediaTime * 1000;
       state.mediaClockWall = performance.now();
       maybeSubmitDetection(metadata.mediaTime * 1000);
-      maybeSubmit(metadata.mediaTime * 1000, metadata.presentedFrames);
+      updatePlaybackTime();
       ui.video.requestVideoFrameCallback(tick);
     };
     ui.video.requestVideoFrameCallback(tick);
@@ -649,7 +638,7 @@ function startFrameLoop() {
       if (!ui.video.paused) {
         const sourceTimeMs = ui.video.currentTime * 1000;
         maybeSubmitDetection(sourceTimeMs);
-        maybeSubmit(sourceTimeMs, state.sequence);
+        updatePlaybackTime();
       }
     }, 35);
   }
@@ -1441,8 +1430,6 @@ function enterStreamMode(url) {
   ui.video.hidden = true;
   ui.streamImage.hidden = false;
   ui.dropState.hidden = true;
-  ui.ocrToggle.disabled = true;
-  ui.rateSelect.disabled = true;
   ui.streamButton.textContent = "หยุดสตรีม";
   ui.streamBadge.hidden = false;
   ui.streamBadgeText.textContent = "LIVE";
@@ -1494,8 +1481,6 @@ function leaveStreamMode() {
   ui.video.hidden = false;
   ui.streamBadge.hidden = true;
   ui.streamButton.textContent = "เปิดสตรีม";
-  ui.ocrToggle.disabled = !state.file;
-  ui.rateSelect.disabled = !state.file;
   if (!state.file) ui.dropState.hidden = false;
   stopCaptureHold();
   updateCaptureAvailability();
@@ -1668,8 +1653,8 @@ async function takeCaptureShot() {
     }
     const shot = await jsonFetch(`/api/capture/shot?${params}`, options);
     state.captureCount += 1;
-    updateLineAvailability();
     flashCapture();
+    await refreshShots(shot.frame_index);
     const confirmed = (shot.records || []).filter((item) => item.confirmed).length;
     setCaptureStatus(
       `เก็บแล้ว ${state.captureCount} เฟรม · ล่าสุด ${shot.image}`
@@ -1738,9 +1723,113 @@ function updateCaptureAvailability() {
 // ---------------------------------------------------------------------------
 
 function updateLineAvailability() {
-  // Needs somewhere to send to and something to send.
+  // Needs somewhere to send to and a chosen picture to send.
   ui.lineSendButton.disabled =
-    state.lineSending || !state.lineConfigured || state.captureCount === 0;
+    state.lineSending || !state.lineConfigured || state.selectedShot === null;
+}
+
+// ---------------------------------------------------------------------------
+// Capture preview
+//
+// This panel used to show the live reading as it streamed past. It does not any
+// more, because that is no longer what gets sent: OCR and detection both run on
+// the captured frame, so the thing worth looking at is the frame -- and which
+// of them you are about to send.
+// ---------------------------------------------------------------------------
+
+async function refreshShots(selectIndex = null) {
+  if (!state.captureSession) return;
+  try {
+    const params = new URLSearchParams({ session: state.captureSession });
+    const body = await jsonFetch(`/api/capture/shots?${params}`);
+    state.shots = body.shots || [];
+  } catch (error) {
+    setCaptureStatus(`อ่านรายการภาพไม่สำเร็จ: ${error.message}`, true);
+    return;
+  }
+  renderShotStrip();
+  // Newest first, so index 0 is the shot just taken.
+  const wanted = selectIndex === null ? state.shots[0]?.frame_index : selectIndex;
+  if (wanted !== undefined) selectShot(wanted);
+  ui.recordCount.textContent = `${state.shots.length} ภาพ`;
+  const hasShots = state.shots.length > 0;
+  ui.downloadJsonButton.disabled = !hasShots;
+  ui.downloadCsvButton.disabled = !hasShots;
+  ui.clearLogButton.disabled = !hasShots;
+}
+
+function renderShotStrip() {
+  ui.shotStrip.replaceChildren();
+  for (const shot of state.shots) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "shot-thumb";
+    button.dataset.frameIndex = String(shot.frame_index);
+    button.setAttribute("role", "option");
+    // The thumbnail is the annotated copy when there is one, so the strip shows
+    // what was found without having to open each frame.
+    button.style.backgroundImage = `url("${shotImageUrl(shot, Boolean(shot.annotated))}")`;
+    const label = document.createElement("span");
+    label.textContent = `#${shot.frame_index}`;
+    button.append(label);
+    button.addEventListener("click", () => selectShot(shot.frame_index));
+    ui.shotStrip.append(button);
+  }
+}
+
+function shotImageUrl(shot, annotated) {
+  const params = new URLSearchParams({
+    session: state.captureSession,
+    frame_index: String(shot.frame_index),
+  });
+  if (annotated) params.set("annotated", "1");
+  // Cache-busted on captured_at rather than on now(): the same frame keeps one
+  // URL, so switching back to it does not refetch.
+  params.set("v", shot.captured_at || "");
+  return `/api/capture/image?${params}`;
+}
+
+function selectShot(frameIndex) {
+  const shot = state.shots.find((item) => item.frame_index === frameIndex);
+  if (!shot) return;
+  state.selectedShot = frameIndex;
+  for (const button of ui.shotStrip.children) {
+    button.classList.toggle(
+      "is-selected", Number(button.dataset.frameIndex) === frameIndex,
+    );
+  }
+  ui.shotPreview.hidden = false;
+  // Only offer the boxes when there are boxes to show.
+  ui.shotAnnotated.disabled = !shot.annotated;
+  const wantsBoxes = ui.shotAnnotated.checked && Boolean(shot.annotated);
+  ui.shotImage.src = shotImageUrl(shot, wantsBoxes);
+  ui.shotDetections.textContent = describeShotDetections(shot.detections);
+  renderShotValues(shot);
+  updateLineAvailability();
+}
+
+function describeShotDetections(detections) {
+  if (!detections) return "";
+  if (detections.status === "no_model") return "ยังไม่ได้โหลดโมเดล";
+  if (detections.status === "no_result") return "โมเดลไม่ตอบสำหรับภาพนี้";
+  const counts = Object.entries(detections.counts || {});
+  if (!counts.length) return "ไม่พบวัตถุ";
+  return counts
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, count]) => {
+      const stat = (detections.confidence || {})[name];
+      return stat ? `${name} ${count} (${stat.mean.toFixed(2)})` : `${name} ${count}`;
+    })
+    .join(", ");
+}
+
+function renderShotValues(shot) {
+  resetCurrentValues();
+  for (const record of shot.records || []) updateTelemetryRow(record);
+}
+
+function selectedShotIndex() {
+  return state.selectedShot;
 }
 
 async function checkLineConfigured() {
@@ -1758,16 +1847,20 @@ async function checkLineConfigured() {
   updateLineAvailability();
 }
 
-async function sendLatestToLine() {
+async function sendSelectedToLine() {
   if (state.lineSending || !state.captureSession) return;
   state.lineSending = true;
   ui.lineSendButtonText.textContent = "กำลังส่ง...";
   updateLineAvailability();
   try {
     const params = new URLSearchParams({ session: state.captureSession });
+    // The chosen one, not simply the latest: choosing is the point of the panel.
+    if (state.selectedShot !== null) params.set("frame_index", String(state.selectedShot));
     const result = await jsonFetch(`/api/line/send?${params}`, { method: "POST" });
+    const withImage = result.images ? " พร้อมรูป" : "";
     setCaptureStatus(
-      `ส่งเข้า LINE แล้ว · เฟรม ${result.frame_index} · ${result.characters} ตัวอักษร`,
+      `ส่งเข้า LINE แล้ว${withImage} · เฟรม ${result.frame_index}`
+      + ` · ${result.characters} ตัวอักษร`,
     );
   } catch (error) {
     // The server passes LINE's own wording through, because a wrong token, a
@@ -1781,24 +1874,18 @@ async function sendLatestToLine() {
   }
 }
 
-function maybeSubmit(sourceTimeMs, suggestedFrame) {
-  updatePlaybackTime();
-  // In stream mode OCR belongs to the server, which refuses these with 409.
-  if (state.streamMode) return;
-  if (ui.video.paused || ui.video.ended || !ui.ocrToggle.checked || state.inFlight) return;
-  const intervalMs = 1000 / Number(ui.rateSelect.value);
-  if (sourceTimeMs - state.lastSubmittedMs < intervalMs) return;
-  submitFrame(false, sourceTimeMs, suggestedFrame);
-}
+// maybeSubmit is gone. Reading every frame of a file kept a panel current that
+// no longer exists, and the reading that gets sent is taken from the captured
+// image instead -- with the fallback recipes on, which the realtime path could
+// not afford. Continuing to run it would spend the GPU on an answer nothing
+// displays and nothing sends.
 
 async function submitFrame(force = false, sourceTimeMs = ui.video.currentTime * 1000, suggestedFrame = null) {
   if (!state.sessionId || !state.config || state.inFlight || ui.video.readyState < 2) return;
-  if (!force && !ui.ocrToggle.checked) return;
 
   const generation = state.generation;
   state.inFlight = true;
   state.lastSubmittedMs = sourceTimeMs;
-  ui.processingBadge.hidden = false;
   const frameIndex = Number.isInteger(suggestedFrame) && suggestedFrame >= 0
     ? Math.max(state.sequence++, suggestedFrame)
     : state.sequence++;
@@ -1820,7 +1907,6 @@ async function submitFrame(force = false, sourceTimeMs = ui.video.currentTime * 
     }
   } finally {
     state.inFlight = false;
-    ui.processingBadge.hidden = ui.video.paused || !ui.ocrToggle.checked;
   }
 }
 
@@ -1852,32 +1938,11 @@ function captureRois() {
   });
 }
 
+// Kept for the downloadable log only. The panel it used to fill now shows a
+// chosen capture instead, because that is what gets sent.
 function applyOcrResult(payload) {
-  setEngineStatus("ready", `${state.config.model} · OCR live`);
-  ui.latency.textContent = Math.round(payload.latency_ms).toString();
-  const now = performance.now();
-  state.completions.push(now);
-  state.completions = state.completions.filter((time) => now - time <= 4000).slice(-40);
-  if (state.completions.length > 1) {
-    const elapsed = (state.completions.at(-1) - state.completions[0]) / 1000;
-    ui.ocrRate.textContent = ((state.completions.length - 1) / Math.max(elapsed, 0.001)).toFixed(1);
-  }
-
-  let confirmed = 0;
-  for (const record of payload.records) {
-    updateTelemetryRow(record);
-    if (record.confirmed) confirmed += 1;
-    state.records.push(record);
-  }
+  for (const record of payload.records) state.records.push(record);
   if (state.records.length > 200000) state.records.splice(0, state.records.length - 200000);
-  ui.confirmedRate.textContent = payload.records.length
-    ? Math.round(confirmed * 100 / payload.records.length).toString()
-    : "0";
-  ui.recordCount.textContent = `${state.records.length.toLocaleString()} records`;
-  const hasRecords = state.records.length > 0;
-  ui.downloadJsonButton.disabled = !hasRecords;
-  ui.downloadCsvButton.disabled = !hasRecords;
-  ui.clearLogButton.disabled = !hasRecords;
 }
 
 function updateTelemetryRow(record) {
@@ -1889,9 +1954,14 @@ function updateTelemetryRow(record) {
   nodes.value.textContent = formatValue(record.value, record.field_id, nodes.unit);
   const confidence = Number.isFinite(record.confidence) ? `${(record.confidence * 100).toFixed(0)}%` : "—";
   const raw = record.raw_text || "no text";
+  // A capture's reading has no preprocess variant: it is one pass over the file
+  // that was saved, not the pick of several tries. Printing a field the reading
+  // does not carry as "undefined" is the panel claiming to know something it
+  // does not.
+  const variant = record.preprocess_variant ? ` · ${record.preprocess_variant}` : "";
   nodes.detail.textContent = isCoordinate
-    ? `conf ${confidence} · ${record.preprocess_variant}`
-    : `raw: ${raw} · conf ${confidence} · ${record.preprocess_variant}`;
+    ? `conf ${confidence}${variant}`
+    : `raw: ${raw} · conf ${confidence}${variant}`;
 }
 
 function formatValue(value, fieldId, unit) {
@@ -2000,7 +2070,10 @@ for (const name of ["pointerup", "pointerleave", "pointercancel"]) {
 // A pointer released anywhere else still ends the hold; without this, releasing
 // outside the button leaves it capturing with no visible cause.
 window.addEventListener("pointerup", () => stopCaptureHold());
-ui.lineSendButton.addEventListener("click", () => sendLatestToLine());
+ui.lineSendButton.addEventListener("click", () => sendSelectedToLine());
+ui.shotAnnotated.addEventListener("change", () => {
+  if (state.selectedShot !== null) selectShot(state.selectedShot);
+});
 ui.captureButton.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
@@ -2023,9 +2096,7 @@ ui.streamImage.addEventListener("error", () => {
 ui.video.addEventListener("loadedmetadata", () => {
   ui.durationTime.textContent = formatTime(ui.video.duration);
   ui.fileDetails.textContent = `${formatBytes(state.file.size)} · ${ui.video.videoWidth}×${ui.video.videoHeight} · ${formatTime(ui.video.duration)}`;
-  ui.ocrToggle.disabled = false;
   updateCaptureAvailability();
-  ui.rateSelect.disabled = false;
   ui.resetButton.disabled = false;
   drawDetections();
   startFrameLoop();
@@ -2036,11 +2107,9 @@ ui.video.addEventListener("loadeddata", async () => {
   await resetDetectionTracker();
   submitDetectionFrame(true);
 });
-ui.video.addEventListener("play", () => { ui.processingBadge.hidden = !ui.ocrToggle.checked; });
 ui.video.addEventListener("pause", () => {
-  ui.processingBadge.hidden = true;
   updatePlaybackTime();
-  if (ui.ocrToggle.checked) submitFrame(true);
+  // Playing a video no longer starts OCR; capturing does.
   if (ui.detectionToggle.checked) submitDetectionFrame(true);
 });
 ui.video.addEventListener("timeupdate", updatePlaybackTime);
@@ -2052,11 +2121,6 @@ ui.video.addEventListener("seeked", async () => {
   if (state.detectorLoaded) submitDetectionFrame(true);
 });
 ui.video.addEventListener("error", () => showToast("Browser ไม่สามารถเล่นวิดีโอนี้ได้ ลองใช้ MP4 (H.264) หรือ WebM"));
-ui.ocrToggle.addEventListener("change", () => {
-  if (ui.ocrToggle.checked && ui.video.readyState >= 2) submitFrame(true);
-  else ui.processingBadge.hidden = true;
-});
-ui.rateSelect.addEventListener("change", () => { state.lastSubmittedMs = -Infinity; });
 ui.modelInput.addEventListener("change", () => uploadDetectionModel(ui.modelInput.files[0]));
 ui.detectionToggle.addEventListener("change", () => {
   state.lastDetectionMs = -Infinity;

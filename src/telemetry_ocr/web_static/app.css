@@ -222,6 +222,64 @@ h3 { font-size: 18px; }
 
 .source-picker { display: flex; align-items: center; gap: 8px; }
 
+/* The captured shots. A horizontal strip rather than a grid: a session is a
+   handful of deliberate frames, not a gallery, and keeping it to one row leaves
+   the panel's height for the preview and the reading. */
+.shot-strip {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+  min-height: 62px;
+}
+.shot-strip:empty::after {
+  content: "ยังไม่มีภาพที่เก็บไว้";
+  align-self: center;
+  font-size: 11px;
+  color: var(--muted, #98a4ad);
+}
+.shot-thumb {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 52px;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background: #000 center/cover no-repeat;
+  cursor: pointer;
+  position: relative;
+  padding: 0;
+}
+.shot-thumb.is-selected { border-color: var(--accent, #a8f04b); }
+.shot-thumb span {
+  position: absolute;
+  left: 3px;
+  bottom: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(4,8,10,.78);
+  font-size: 9px;
+  font-weight: 700;
+  color: #cfe8a8;
+}
+
+.shot-preview { flex: 0 0 auto; }
+.shot-preview[hidden] { display: none; }
+.shot-preview img {
+  display: block;
+  width: 100%;
+  border-radius: 6px;
+  background: #000;
+}
+.shot-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.shot-detections { font-size: 11px; color: var(--muted, #98a4ad); }
+
 /* Deliberately the loudest control on the row. It is the only one that writes
    anything permanent, and it is pressed while watching rather than while
    looking for it. */

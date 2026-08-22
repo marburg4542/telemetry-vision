@@ -374,5 +374,123 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(body["annotated"])
         self.assertTrue((self._dir("flight01") / body["annotated"]).is_file())
 
+    async def test_the_shot_list_is_newest_first(self) -> None:
+        """The order the page shows them in.
+
+        Newest first because the shot you have just taken is the one you are
+        about to look at; scrolling to the end of a long strip to find it is the
+        panel getting in the way of the only common case.
+        """
+        await self._shot()
+        await self._shot()
+        await self._shot()
+        body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
+        self.assertEqual([shot["frame_index"] for shot in body["shots"]], [2, 1, 0])
+
+    async def test_each_listed_shot_carries_what_the_panel_shows(self) -> None:
+        await self._shot()
+        body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
+        shot = body["shots"][0]
+        self.assertTrue(shot["image"])
+        self.assertTrue(shot["annotated"])
+        self.assertEqual(shot["detections"]["counts"], {"car": 1})
+        self.assertEqual(shot["records"][0]["field_id"], "speed")
+
+    async def test_the_listed_reading_is_the_one_taken_from_the_image(self) -> None:
+        """Not the live reading held beside it.
+
+        The picture and the numbers under it have to describe the same moment,
+        and only the reading taken from the saved file is guaranteed to.
+        """
+        from telemetry_ocr.capture_service import VerifiedField
+
+        await self._shot()
+        session = self.root / "sessions" / "flight01"
+        self.assertTrue(session.is_dir())
+        body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
+        listed = {record["field_id"]: record for record in body["shots"][0]["records"]}
+        self.assertIn("speed", listed)
+        # The verification reading is the one with these keys and no others.
+        self.assertEqual(
+            set(listed["speed"]),
+            {"field_id", "value", "raw_text", "confidence", "confirmed"},
+        )
+        self.assertTrue(hasattr(VerifiedField, "__dataclass_fields__"))
+
+    async def test_an_unknown_session_lists_nothing_rather_than_failing(self) -> None:
+        # The page asks before the first capture of a run, which is not an error.
+        response = await self.client.get("/api/capture/shots?session=nothing")
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["shots"], [])
+
+    async def test_the_image_endpoint_serves_the_frame_and_the_marked_up_copy(self) -> None:
+        await self._shot()
+        plain = await self.client.get("/api/capture/image?session=flight01&frame_index=0")
+        boxed = await self.client.get(
+            "/api/capture/image?session=flight01&frame_index=0&annotated=1"
+        )
+        self.assertEqual(plain.status, 200)
+        self.assertEqual(boxed.status, 200)
+        self.assertEqual(plain.headers["Content-Type"], "image/jpeg")
+        # Different files: the boxes are drawn on a copy, never over the capture.
+        self.assertNotEqual(await plain.read(), await boxed.read())
+
+    async def test_asking_for_boxes_that_were_never_drawn_gives_the_plain_frame(self) -> None:
+        """Rather than a 404.
+
+        The toggle is disabled for a shot with nothing on it, but a stale page or
+        a direct call should get the picture, not an error about a copy that was
+        never made because there was nothing to draw.
+        """
+        self.fake_detection_worker.state = "unloaded"
+        body = await (await self._shot()).json()
+        self.assertFalse(body["annotated"])
+        response = await self.client.get(
+            "/api/capture/image?session=flight01&frame_index=0&annotated=1"
+        )
+        self.assertEqual(response.status, 200)
+        plain = await self.client.get("/api/capture/image?session=flight01&frame_index=0")
+        self.assertEqual(await response.read(), await plain.read())
+
+    async def test_a_frame_index_cannot_name_a_file_elsewhere(self) -> None:
+        """The index selects a manifest entry; it never becomes part of a path."""
+        await self._shot()
+        for index in ("../../../../windows/win.ini", "-1", "99"):
+            response = await self.client.get(
+                f"/api/capture/image?session=flight01&frame_index={index}"
+            )
+            self.assertIn(response.status, (400, 404), index)
+
+    async def test_the_frame_is_readable_without_the_guard_header(self) -> None:
+        """Deliberate, and worth writing down so it is not "fixed" later.
+
+        The panel shows the frame with an ordinary <img>, and an <img> cannot
+        send a custom header. Requiring one here would leave the preview blank.
+        What stands in front of these reads is the Host allowlist and the Origin
+        check; the header exists for the mutating calls, where it forces a
+        preflight in front of the model upload's pickle-based load.
+        """
+        await self._shot()
+        for path in (
+            "/api/capture/shots?session=flight01",
+            "/api/capture/image?session=flight01&frame_index=0",
+        ):
+            self.assertEqual((await self.raw_client.get(path)).status, 200, path)
+
+    async def test_another_site_cannot_fetch_a_capture(self) -> None:
+        """A cross-origin read carries an Origin, and that is refused.
+
+        An <img> on someone else's page sends no Origin and so still loads the
+        picture -- but it cannot read the pixels back, which is the difference
+        between a frame being displayable and a frame being exfiltrated.
+        """
+        await self._shot()
+        response = await self.raw_client.get(
+            "/api/capture/image?session=flight01&frame_index=0",
+            headers={"Origin": "https://evil.example"},
+        )
+        self.assertEqual(response.status, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

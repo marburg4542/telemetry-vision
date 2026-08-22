@@ -1165,6 +1165,78 @@ def create_app(
         session.record_verification(shot)
         return web.json_response(asdict(shot))
 
+    def open_session(name: str) -> Any:
+        """The session by that name, reopened from disk if this run did not make it."""
+        session = capture_sessions.get(name)
+        if session is None and (stream_output_dir / "sessions" / name).is_dir():
+            session = capture_session_for(name, "reopened")
+        return session
+
+    async def capture_shots(request: Any) -> Any:
+        """Everything captured in this session, newest first.
+
+        Enough per shot for the page to show it and decide about it -- the
+        reading, what was detected, whether a marked-up copy exists -- without a
+        second request per row.
+        """
+        name = (request.query.get("session") or "").strip()
+        if not name:
+            raise ValueError("session is required")
+        session = open_session(name)
+        if session is None:
+            return web.json_response({"session": name, "shots": []})
+
+        def collect() -> list[dict[str, Any]]:
+            shots = []
+            for index in range(session.frame_count):
+                shot = session.shot_at(index)
+                if shot is None:
+                    continue
+                data = asdict(shot)
+                # The records are the reading the image itself gave, which is
+                # what the page shows; the raw manifest carries more than that.
+                data["records"] = [
+                    {
+                        "field_id": item.field_id,
+                        "value": item.value,
+                        "raw_text": item.raw_text,
+                        "confidence": item.confidence,
+                        "confirmed": item.confirmed,
+                    }
+                    for item in shot.verification.fields
+                ] or shot.records
+                shots.append(data)
+            shots.reverse()
+            return shots
+
+        return web.json_response(
+            {"session": name, "shots": await asyncio.to_thread(collect)}
+        )
+
+    async def capture_image(request: Any) -> Any:
+        """One captured frame, for the page to display.
+
+        Reached only from the local page, so the ordinary guard applies. The
+        path is taken from the manifest rather than from the request, which is
+        what keeps a frame index from naming a file elsewhere on the disk.
+        """
+        name = (request.query.get("session") or "").strip()
+        if not name:
+            raise ValueError("session is required")
+        session = open_session(name)
+        if session is None:
+            raise web.HTTPNotFound(text="No such session")
+        index = _non_negative_int(request.query.get("frame_index", "0"), "frame_index")
+        shot = await asyncio.to_thread(session.shot_at, index)
+        if shot is None:
+            raise web.HTTPNotFound(text="No such frame")
+        wants_boxes = request.query.get("annotated") == "1"
+        relative = (shot.annotated if wants_boxes else None) or shot.image
+        path = session.directory / relative
+        if not path.is_file():
+            raise web.HTTPNotFound(text="Frame is missing from disk")
+        return web.FileResponse(path, headers={"Cache-Control": "no-store"})
+
     async def line_status(_: Any) -> Any:
         from .line_client import load_line_config
 
@@ -1213,13 +1285,10 @@ def create_app(
         name = (request.query.get("session") or "").strip()
         if not name:
             raise ValueError("session is required")
-        session = capture_sessions.get(name)
-        if session is None and (stream_output_dir / "sessions" / name).is_dir():
-            # Reopened from disk. Sessions are only held in memory for the life
-            # of the process, so a restart -- or simply capturing yesterday --
-            # would otherwise make an existing recording unsendable, which is
-            # not something the operator can see any reason for.
-            session = capture_session_for(name, "reopened")
+        # Reopened from disk when this run did not create it: sessions live in
+        # memory only for the life of the process, and a restart should not make
+        # an existing recording unsendable.
+        session = open_session(name)
         if session is None:
             raise web.HTTPNotFound(
                 text='{"error":"No such capture session"}', content_type="application/json"
@@ -1358,6 +1427,8 @@ def create_app(
     app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
+    app.router.add_get("/api/capture/shots", capture_shots)
+    app.router.add_get("/api/capture/image", capture_image)
     app.router.add_get("/api/line/status", line_status)
     app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
