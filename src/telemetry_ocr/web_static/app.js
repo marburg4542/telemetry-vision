@@ -58,6 +58,11 @@ const ui = {
   shotSelectBar: $("shotSelectBar"),
   shotSelectedCount: $("shotSelectedCount"),
   shotClearSelection: $("shotClearSelection"),
+  shotDeleteSelection: $("shotDeleteSelection"),
+  shotOverlay: $("shotOverlay"),
+  shotOverlayImage: $("shotOverlayImage"),
+  shotOverlayLabel: $("shotOverlayLabel"),
+  shotOverlayClose: $("shotOverlayClose"),
   shotPreview: $("shotPreview"),
   shotImage: $("shotImage"),
   shotAnnotated: $("shotAnnotated"),
@@ -155,6 +160,7 @@ const state = {
   captureTimer: null,
   lineConfigured: false,
   lineSending: false,
+  deleting: false,
   // The captured shots this session holds, and which one the panel is showing.
   shots: [],
   selectedShot: null,
@@ -1865,7 +1871,72 @@ function updateShotProgress() {
   ui.shotSelectedCount.textContent =
     `เลือกส่ง ${state.chosen.size} รูป (สูงสุด ${MAX_SEND_SELECTION})`;
   ui.shotClearSelection.disabled = state.chosen.size === 0;
+  ui.shotDeleteSelection.disabled = state.chosen.size === 0 || state.deleting;
   updateLineAvailability();
+}
+
+// ---------------------------------------------------------------------------
+// Throwing a capture away
+//
+// Asked about first, and only once: this removes the picture, its marked-up
+// copy and every telemetry line that named them. A record pointing at a file
+// that is gone would be worse than no record, because `extract` would read the
+// session back and report a frame nobody can look at.
+// ---------------------------------------------------------------------------
+
+async function deleteChosenShots() {
+  if (state.deleting || state.chosen.size === 0) return;
+  const frames = [...state.chosen].sort((a, b) => a - b);
+  const asked = window.confirm(
+    `ลบ ${frames.length} รูปนี้ถาวร?\n`
+    + `เฟรม ${frames.map((index) => `#${index}`).join(", ")}\n\n`
+    + "ทั้งรูป รูปที่ตีกรอบ และ telemetry ของรูปนั้นจะถูกลบ กู้คืนไม่ได้",
+  );
+  if (!asked) return;
+  state.deleting = true;
+  updateShotProgress();
+  try {
+    const params = new URLSearchParams({ session: state.captureSession });
+    for (const index of frames) params.append("frame_index", String(index));
+    const result = await jsonFetch(`/api/capture/shot?${params}`, { method: "DELETE" });
+    state.chosen.clear();
+    if (frames.includes(state.selectedShot)) {
+      state.selectedShot = null;
+      ui.shotPreview.hidden = true;
+      closeShotOverlay();
+      resetCurrentValues();
+    }
+    setCaptureStatus(`ลบแล้ว ${result.removed.length} รูป · เหลือ ${result.remaining} ภาพ`);
+    await refreshShots(state.selectedShot);
+  } catch (error) {
+    setCaptureStatus(`ลบไม่สำเร็จ: ${error.message}`, true);
+  } finally {
+    state.deleting = false;
+    updateShotProgress();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The enlarged view
+//
+// Over the video rather than beside it, because that is the only space on the
+// page big enough to read an OSD in -- and reading the OSD against the rows
+// below is the whole way of telling whether the extraction was right.
+// ---------------------------------------------------------------------------
+
+function openShotOverlay() {
+  const shot = state.shots.find((item) => item.frame_index === state.selectedShot);
+  if (!shot) return;
+  ui.shotOverlayImage.src = ui.shotImage.getAttribute("src");
+  ui.shotOverlayLabel.textContent =
+    `เฟรม #${shot.frame_index} · ${describeShotDetections(shot.detections)}`;
+  ui.shotOverlay.hidden = false;
+}
+
+function closeShotOverlay() {
+  ui.shotOverlay.hidden = true;
+  // Released so the browser is not holding a full frame for a hidden element.
+  ui.shotOverlayImage.removeAttribute("src");
 }
 
 function renderShotStrip() {
@@ -1992,6 +2063,7 @@ function selectShot(frameIndex) {
   ui.shotAnnotated.disabled = !shot.annotated;
   const wantsBoxes = ui.shotAnnotated.checked && Boolean(shot.annotated);
   ui.shotImage.src = shotImageUrl(shot, wantsBoxes);
+  if (!ui.shotOverlay.hidden) openShotOverlay();
   ui.shotDetections.textContent = describeShotDetections(shot.detections);
   renderShotValues(shot);
   updateLineAvailability();
@@ -2254,6 +2326,17 @@ document.addEventListener("fullscreenchange", () => drawDetections());
 ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
 ui.streamButton.addEventListener("click", () => toggleStream());
 ui.shotClearSelection.addEventListener("click", () => clearChosen());
+ui.shotDeleteSelection.addEventListener("click", () => deleteChosenShots());
+ui.shotImage.addEventListener("click", () => openShotOverlay());
+ui.shotOverlayClose.addEventListener("click", () => closeShotOverlay());
+ui.shotOverlay.addEventListener("click", (event) => {
+  // Only the backdrop closes it; clicking the picture itself is how you look
+  // at the picture.
+  if (event.target === ui.shotOverlay) closeShotOverlay();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !ui.shotOverlay.hidden) closeShotOverlay();
+});
 ui.captureButton.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   startCaptureHold();

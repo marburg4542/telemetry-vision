@@ -692,5 +692,107 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("page", sources)
 
 
+    async def _discard(self, *indexes: int, session: str = "flight01") -> Any:
+        from urllib.parse import urlencode
+
+        params = urlencode(
+            [("session", session)] + [("frame_index", str(i)) for i in indexes]
+        )
+        return await self.client.delete(f"/api/capture/shot?{params}")
+
+    async def test_discarding_removes_the_pictures_and_the_records(self) -> None:
+        """Both, together.
+
+        A telemetry line naming an image that is no longer on disk is worse than
+        no line: `extract` reads the session back and reports a frame nobody can
+        look at.
+        """
+        first = await (await self._shot()).json()
+        await self._shot()
+        session = self._dir("flight01")
+        self.assertTrue((session / first["image"]).is_file())
+
+        response = await self._discard(0)
+        self.assertEqual(response.status, 200)
+        body = await response.json()
+        self.assertEqual(body["removed"], [0])
+        # What is left, not the next number to hand out.
+        self.assertEqual(body["remaining"], 1)
+
+        self.assertFalse((session / first["image"]).is_file())
+        self.assertFalse((session / first["annotated"]).is_file())
+        for name in ("telemetry.jsonl", "telemetry-verified.jsonl"):
+            path = session / name
+            if path.is_file():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        self.assertNotEqual(json.loads(line)["image"], first["image"])
+
+    async def test_what_was_not_discarded_is_untouched(self) -> None:
+        await self._shot()
+        second = await (await self._shot()).json()
+        await self._shot()
+        await self._discard(0, 2)
+        body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
+        self.assertEqual([shot["frame_index"] for shot in body["shots"]], [1])
+        self.assertTrue(body["shots"][0]["records"])
+        self.assertTrue((self._dir("flight01") / second["image"]).is_file())
+
+    async def test_the_session_still_reads_back_after_a_deletion(self) -> None:
+        # The format is shared with the CLI, and a half-deleted session that
+        # `extract` chokes on would be worse than one that kept the frame.
+        from telemetry_ocr.capture import load_session
+
+        for _ in range(3):
+            await self._shot()
+        await self._discard(1)
+        info, records = load_session(self._dir("flight01"))
+        self.assertEqual(info.frame_count, 2)
+        for record in records:
+            self.assertTrue((self._dir("flight01") / record.file).is_file())
+
+    async def test_a_deleted_number_is_not_handed_out_again(self) -> None:
+        """A gap stays a gap.
+
+        Reusing the number would give a new capture an old capture's filename,
+        and the manifest would then describe two different pictures under one
+        index.
+        """
+        from telemetry_ocr.capture_service import CaptureSession
+
+        for _ in range(3):
+            await self._shot()
+        await self._discard(2)
+        reopened = CaptureSession(self.root / "sessions", "flight01", "reopened", [])
+        self.assertEqual(reopened.frame_count, 2)
+        fourth = await (await self._shot()).json()
+        self.assertEqual(fourth["frame_index"], 3)
+
+    async def test_discarding_a_frame_that_is_not_there_is_not_an_error(self) -> None:
+        # The page can ask twice -- two clicks, or a stale list -- and the
+        # second ask should report that nothing was removed, not fail.
+        await self._shot()
+        body = await (await self._discard(99)).json()
+        self.assertEqual(body["removed"], [])
+        self.assertEqual(body["remaining"], 1)
+
+    async def test_discarding_needs_the_guard_header(self) -> None:
+        # It deletes. Of everything in this file it is the one call that must
+        # not be reachable from another page.
+        await self._shot()
+        response = await self.raw_client.delete(
+            "/api/capture/shot?session=flight01&frame_index=0"
+        )
+        self.assertEqual(response.status, 403)
+        self.assertTrue((self._dir("flight01") / "frames" / "00000000.jpg").is_file())
+
+    async def test_the_thumbnail_goes_too(self) -> None:
+        await self._shot()
+        await self.client.get("/api/capture/image?session=flight01&frame_index=0&thumb=1")
+        await self._discard(0)
+        thumbs = self._dir("flight01") / "thumbs"
+        self.assertEqual(list(thumbs.glob("*")) if thumbs.is_dir() else [], [])
+
+
 if __name__ == "__main__":
     unittest.main()

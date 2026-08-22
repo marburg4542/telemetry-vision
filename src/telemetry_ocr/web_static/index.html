@@ -77,6 +77,19 @@
             <div class="stream-badge" id="streamBadge" hidden>
               <span></span> <span id="streamBadgeText">LIVE</span>
             </div>
+
+            <!-- A chosen capture at the size the video plays at, inside the
+                 stage so it covers exactly the area the video occupies. The
+                 panel's copy is too small to read an OSD off, and reading the
+                 OSD against the rows beside it is the only way to tell whether
+                 the extraction was right. -->
+            <div class="shot-overlay" id="shotOverlay" hidden>
+              <img id="shotOverlayImage" alt="ภาพที่เลือก ขยาย" />
+              <div class="shot-overlay-bar">
+                <span id="shotOverlayLabel"></span>
+                <button class="ghost-button" id="shotOverlayClose" type="button">ปิด (Esc)</button>
+              </div>
+            </div>
           </div>
 
           <section class="ai-model-panel" aria-labelledby="aiModelHeading">
@@ -216,11 +229,18 @@
 
           <div class="shot-select-bar" id="shotSelectBar" hidden>
             <span id="shotSelectedCount">เลือกส่ง 0 รูป</span>
-            <button class="link-button" id="shotClearSelection" type="button">ล้างที่เลือก</button>
+            <span class="shot-select-actions">
+              <!-- Two different intentions, and only one of them cannot be
+                   undone, so they are two buttons rather than one. -->
+              <button class="link-button" id="shotClearSelection" type="button">ล้างที่เลือก</button>
+              <button class="link-button is-danger" id="shotDeleteSelection" type="button">
+                ลบรูปที่เลือก
+              </button>
+            </span>
           </div>
 
           <div class="shot-preview" id="shotPreview" hidden>
-            <img id="shotImage" alt="ภาพที่เลือก" />
+            <img id="shotImage" alt="ภาพที่เลือก" title="คลิกเพื่อขยายทับพื้นที่วิดีโอ" />
             <div class="shot-toggle">
               <label class="check-control" for="shotAnnotated"
                      title="ภาพที่วาดกรอบตรวจจับแล้ว เทียบกับต้นฉบับ">

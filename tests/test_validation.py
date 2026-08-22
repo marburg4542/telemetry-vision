@@ -155,6 +155,98 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(validate_text("1:0x", ir).value, "1.0x")
         self.assertEqual(validate_text("1-0x", ir).value, "1.0x")
 
+    def test_optics_recovers_the_mark_the_font_never_renders_cleanly(self):
+        """Every number in this overlay ends in a mark -- an "x" or a degree
+        sign -- and it is the one glyph in the ROI that is not a digit, so it is
+        the one the recognizer gets wrong. All of these are real readings taken
+        from captures on disk; before this they were all thrown away."""
+        eo, ir = self._optics_fields()
+        for raw, expected in [
+            ("12.8xFOV58a", "12.8xFOV5.8°"),      # degree sign read as a letter
+            ("1.0x FOV 66.4ª", "1.0xFOV66.4°"),
+            ("1.0x FOv 66.4º", "1.0xFOV66.4°"),
+            ("10.3xFov72”", "10.3xFOV7.2°"),  # and as a quote
+            ("10.3x FOV 7.2", "10.3xFOV7.2°"),     # and as nothing at all
+            ("400xFOV19\"", "40.0xFOV1.9°"),
+            ("L0xF0V 664°", "1.0xFOV66.4°"),   # L for 1, zero for O
+            ("2Bx FOV 26.7°", "2.8xFOV26.7°"), # B for 8
+            ("3BxFDV 19.5", "3.8xFOV19.5°"),        # FDV for FOV
+        ]:
+            with self.subTest(raw=raw):
+                self.assertEqual(validate_text(raw, eo).value, expected)
+        for raw in ("10x", "102", "1.02", "1Ox", "1Dx", "I0x", "10A", "10."):
+            with self.subTest(raw=raw):
+                self.assertEqual(validate_text(raw, ir).value, "1.0x")
+
+    def test_a_surviving_point_keeps_every_digit_after_it(self):
+        """The trailing digit is only the mark when there is no point.
+
+        With one, the digits after it are real: dropping the last of "19.5"
+        gave 1.9 and the last of "10.3" gave 1.0.
+        """
+        eo, ir = self._optics_fields()
+        self.assertEqual(validate_text("3 BxFDv 19.5", eo).value, "3.8xFOV19.5°")
+        self.assertEqual(validate_text("10.3F0V 72", eo).value, "10.3xFOV7.2°")
+        self.assertEqual(validate_text("10.2x", ir).value, "10.2x")
+
+    def test_optics_refuses_a_reading_that_lost_a_digit(self):
+        # Nothing here invents a digit. Only the position of the point is
+        # reconstructed, and that is fixed by the overlay's one decimal place.
+        eo, ir = self._optics_fields()
+        for raw in ("19310v72", "20 6s Fov3ré\"", "10.3F"):
+            with self.subTest(raw=raw):
+                self.assertFalse(validate_text(raw, eo).valid)
+        for raw in ("1", "x", ""):
+            with self.subTest(raw=raw):
+                self.assertFalse(validate_text(raw, ir).valid)
+
+    def _optics_fields(self):
+        eo = FieldConfig(
+            field_id="eo_detail",
+            box=(0.0, 0.0, 0.2, 0.1),
+            allowed_chars="0123456789.xFOV°",
+            regex=r"^\d{1,2}\.\dxFOV\d{1,3}\.\d°$",
+            normalizer="optics",
+            profile="fast",
+        )
+        ir = FieldConfig(
+            field_id="ir_detail",
+            box=(0.0, 0.0, 0.2, 0.1),
+            allowed_chars="0123456789.x",
+            regex=r"^\d{1,2}\.\dx$",
+            normalizer="optics",
+            profile="fast",
+        )
+        return eo, ir
+
+    def test_a_point_that_was_seen_is_never_shifted(self):
+        """The worst failure this file guards against: a number that is wrong
+        and passes.
+
+        "646.Om" lost only the zero after the point, but the reader extracted
+        "646", found no point in it, and shifted one in -- giving 64.6, which
+        sits inside the field's range, reads as confirmed, and is ten times too
+        small. It also pre-empted the retry that maps O to 0 and reads it right.
+        """
+        field = FieldConfig(
+            field_id="lrf_m",
+            box=(0.0, 0.0, 0.2, 0.1),
+            allowed_chars="0123456789.",
+            regex=r"^\d{1,4}\.\d$",
+            data_type="float",
+            normalizer="numeric",
+            decimals=1,
+            min_value=15,
+            max_value=9999,
+            profile="fast",
+        )
+        self.assertEqual(validate_text("646.Om", field).value, 646.0)
+        self.assertEqual(validate_text("533：6", field).value, 533.6)
+        # And where the digit really is gone, it fails rather than guessing.
+        for raw in ("47&.2m", "513.án"):
+            with self.subTest(raw=raw):
+                self.assertFalse(validate_text(raw, field).valid)
+
     def test_dms_normalizer_uses_fixed_digit_layout(self):
         field = FieldConfig(
             field_id="latitude",

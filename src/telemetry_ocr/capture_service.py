@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -413,6 +414,84 @@ class CaptureSession:
             ),
             annotated=entry.get("annotated"),
         )
+
+    def discard(self, frame_index: int) -> bool:
+        """Remove one shot: its pictures and every record that named them.
+
+        The records go with the picture on purpose. A telemetry line whose image
+        is no longer on disk is worse than no line at all -- `extract` would read
+        the session back and report a frame nobody can look at.
+
+        The frame numbering is not reused. `_next_index` only ever climbs while
+        a session is open, and a reopened session takes its next number from the
+        highest file still present, so a gap stays a gap rather than becoming a
+        second frame with an old frame's name.
+        """
+        import json
+
+        with self._lock:
+            entries = self._read_manifest()
+            keep = [
+                entry for entry in entries
+                if int(entry.get("frame_index", -1)) != frame_index
+            ]
+            if len(keep) == len(entries):
+                return False
+            gone = [
+                entry for entry in entries
+                if int(entry.get("frame_index", -1)) == frame_index
+            ]
+            images = {str(entry.get("file", "")) for entry in gone}
+
+            for entry in gone:
+                for relative in (entry.get("file"), entry.get("annotated")):
+                    if not relative:
+                        continue
+                    # From the manifest, never from the request: this is the
+                    # only thing keeping a frame index from naming a file
+                    # somewhere else on the disk.
+                    path = self.directory / str(relative)
+                    with suppress(OSError):
+                        self.bytes_written -= path.stat().st_size
+                    path.unlink(missing_ok=True)
+                    (self.directory / "thumbs" / path.name).unlink(missing_ok=True)
+
+            # One object per line, like _append_json writes them. _dumps is the
+            # indented form the session file uses and would break the manifest
+            # into unparseable fragments.
+            self._write_lines(
+                MANIFEST_NAME,
+                [json.dumps(entry, ensure_ascii=False) for entry in keep],
+            )
+            for name in ("telemetry.jsonl", "telemetry-verified.jsonl"):
+                path = self.directory / name
+                if not path.is_file():
+                    continue
+                kept_lines = [
+                    line
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and json.loads(line).get("image") not in images
+                ]
+                self._write_lines(name, kept_lines)
+
+            if self.last_shot is not None and self.last_shot.frame_index == frame_index:
+                self.last_shot = None
+            self.info.frame_count = len(keep)
+            self._write_session()
+            return True
+
+    def _write_lines(self, name: str, lines: list[str]) -> None:
+        """Rewrite one of the session's logs, atomically.
+
+        Through a temporary file because the page reads these while captures are
+        still being taken, and a log truncated halfway through a rewrite would
+        lose shots that were never asked to be deleted.
+        """
+        path = self.directory / name
+        staging = path.with_name(path.name + ".part")
+        body = "\n".join(lines)
+        staging.write_text(body + "\n" if body else "", encoding="utf-8")
+        staging.replace(path)
 
     def status(self) -> dict[str, Any]:
         with self._lock:

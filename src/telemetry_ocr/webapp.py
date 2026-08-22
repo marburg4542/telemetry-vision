@@ -1258,6 +1258,41 @@ def create_app(
             {"session": name, "shots": await asyncio.to_thread(collect)}
         )
 
+    async def capture_discard(request: Any) -> Any:
+        """Throw away one capture.
+
+        Separate from the tick that chooses what to send, because they are
+        different intentions and only one of them cannot be undone. The page
+        asks before calling this.
+        """
+        name = (request.query.get("session") or "").strip()
+        if not name:
+            raise ValueError("session is required")
+        session = open_session(name)
+        if session is None:
+            raise web.HTTPNotFound(
+                text='{"error":"No such capture session"}', content_type="application/json"
+            )
+        indexes = [
+            _non_negative_int(value, "frame_index")
+            for value in request.query.getall("frame_index", [])
+            if value != ""
+        ]
+        if not indexes:
+            raise ValueError("frame_index is required")
+        def discard_all() -> tuple[list[int], int]:
+            gone = [index for index in dict.fromkeys(indexes) if session.discard(index)]
+            # How many are left, counted from the manifest. `frame_count` is the
+            # next number to hand out, which after a deletion is larger than the
+            # number of pictures -- reporting it told the operator "2 removed,
+            # 4 remaining" about a session holding 2.
+            return gone, len(session.all_shots())
+
+        removed, remaining = await asyncio.to_thread(discard_all)
+        return web.json_response(
+            {"session": name, "removed": removed, "remaining": remaining}
+        )
+
     async def capture_image(request: Any) -> Any:
         """One captured frame, for the page to display.
 
@@ -1512,6 +1547,7 @@ def create_app(
     app.router.add_get("/api/capture/status", capture_status)
     app.router.add_get("/api/capture/shots", capture_shots)
     app.router.add_get("/api/capture/image", capture_image)
+    app.router.add_delete("/api/capture/shot", capture_discard)
     app.router.add_get("/api/line/status", line_status)
     app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)

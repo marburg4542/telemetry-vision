@@ -55,26 +55,10 @@ def _normalize_for_field(text: str, config: FieldConfig) -> str:
     if config.normalizer == "none":
         return text
     if config.normalizer == "optics":
-        cleaned = text.upper().replace(",", ".").replace(":", ".")
-        cleaned = re.sub(r"(?<=\d)-(?=\d)", ".", cleaned)
-        cleaned = cleaned.replace("F0V", "FOV")
-        zoom = re.match(r"^(\d{1,2})\.(\d)X", cleaned)
-        if zoom is None:
-            return cleaned
-        if "FOV" not in cleaned:
-            return f"{zoom.group(1)}.{zoom.group(2)}x"
-        fov = re.fullmatch(r"(\d{1,2})\.(\d)XFOV(\d{2,4})(?:°)?", cleaned)
-        if fov:
-            fov_digits = fov.group(3)
-            cleaned = (
-                f"{fov.group(1)}.{fov.group(2)}xFOV"
-                f"{fov_digits[:-1]}.{fov_digits[-1]}°"
-            )
-        else:
-            cleaned = cleaned.replace("X", "x")
-        return cleaned
+        return _normalize_optics(text, config)
     if config.normalizer == "numeric":
         cleaned = text.replace(",", ".").replace("。", ".").replace("·", ".")
+        cleaned = cleaned.replace("．", ".").replace("：", ".").replace("，", ".")
         cleaned = re.sub(r"(?<=\d):(?=\d)", ".", cleaned)
         if cleaned.startswith(("=", "—", "–", "_")):
             cleaned = "-" + cleaned[1:]
@@ -103,6 +87,14 @@ def _normalize_for_field(text: str, config: FieldConfig) -> str:
         if not match:
             return text
         numeric = match.group(0)
+        if config.decimals and "." not in numeric and "." in cleaned:
+            # The reader saw a point but the digit beside it did not survive:
+            # "646.Om", "513.an", "47&.2m". Shifting the point left here would
+            # turn 646.0 into 64.6 -- a number that passes the range check and
+            # is reported as confirmed while being ten times wrong. Worse, it
+            # pre-empts the confusion-map retry, which reads "646.Om" correctly
+            # once O becomes 0. Fail the frame and let that retry happen.
+            return text
         if config.decimals and "." not in numeric:
             sign = "-" if numeric.startswith("-") else "+" if numeric.startswith("+") else ""
             digits = numeric[len(sign) :]
@@ -149,6 +141,112 @@ def _normalize_for_field(text: str, config: FieldConfig) -> str:
             seconds += "." + seconds_fraction
         return f'{degrees}°{minutes:02d}\'{seconds}"'
     return text
+
+
+# Letters this OSD font hands back in place of digits. Applied only inside the
+# number segments of an optics reading, never to the whole string: "O" is a
+# digit in "1O2" and a letter in "FOV", and one map cannot be right about both.
+_OPTICS_DIGITS = str.maketrans(
+    {
+        "O": "0", "Q": "0", "D": "0", "U": "0",
+        "I": "1", "L": "1", "|": "1", "!": "1",
+        "Z": "2", "S": "5", "B": "8", "G": "6", "T": "7",
+        # Accented vowels are what this font's 6 comes back as often enough to
+        # be worth naming: "1.0x FOv o6.4" is 66.4 with one 6 decoded as a vowel.
+        "Ó": "6", "Ò": "6", "Ô": "6", "Õ": "6", "Ö": "6",
+    }
+)
+
+# The zoom is written "N.Nx" and the field of view "N.N°": both carry exactly
+# one decimal, which is what makes a lost point recoverable rather than a guess.
+_OPTICS_DECIMALS = 1
+
+
+def _normalize_optics(text: str, config: FieldConfig) -> str:
+    """Rebuild "1.0xFOV66.4°" from what the recognizer actually returned.
+
+    Rebuilt from the parts rather than repaired in place, because the failures
+    are not spelling mistakes in one string -- they are a decimal point that
+    became nothing, a degree mark that became a letter, and an "F0V" that was
+    never three letters to begin with. Measured over every capture on disk, the
+    in-place repair validated 26 of 74 EO readings and 40 of 74 IR readings; the
+    rest were readable by eye in the saved frame, so the text was there and the
+    normalizer was what threw it away.
+
+    Nothing here invents a digit. The only thing reconstructed is *where* the
+    point sits, and that is fixed by the overlay's format: one decimal place,
+    always. A reading that loses a digit outright still fails.
+    """
+    cleaned = text.upper()
+    # "F0V", "FQv", "FDV", "ROV" -- the recognizer rarely gets all three.
+    cleaned = re.sub(r"[FPRE][O0QDU][VMWNY]", "FOV", cleaned)
+
+    head, marker, tail = cleaned.partition("FOV")
+    zoom = _optics_number(head)
+    if zoom is None:
+        return cleaned
+    if not marker:
+        # An IR reading is the zoom alone.
+        return f"{zoom}x"
+    fov = _optics_number(tail)
+    if fov is None:
+        return cleaned
+    return f"{zoom}xFOV{fov}°"
+
+
+def _optics_number(part: str) -> str | None:
+    """One "N.N" out of a segment, or None when the digits do not add up.
+
+    Every number in this overlay is followed by a mark -- the "x" of a zoom, the
+    degree sign of a field of view -- and that mark is the character the
+    recognizer gets wrong most often, because it is the one glyph in the ROI
+    that is not a digit. It comes back as "a", as a quote, as "2", as nothing at
+    all. So the trailing character is treated as the mark and dropped, and only
+    kept as a digit when dropping it would leave too few to read.
+
+    That distinction is what separates "102" from "400": the first is 1.0x with
+    the x decoded as a 2, the second is 40.0x with the x decoded correctly and
+    three real digits in front of it.
+    """
+    body = part.strip()
+    if not body:
+        return None
+    if not body[-1].isdigit():
+        # An explicit mark, however it was decoded. Drop it and read the rest.
+        return _optics_digits(body[:-1])
+    if "." in body or "," in body:
+        # The point survived, so every digit after it is a real digit and the
+        # mark was lost rather than decoded. Dropping one here turned 19.5 into
+        # 1.9 and 10.3 into 1.0.
+        return _optics_digits(body)
+    # No point and it ends in a digit, so the mark was decoded as one. Dropping
+    # it is right unless what is left is too short to be a reading at all.
+    without_mark = _optics_digits(body[:-1])
+    return without_mark if without_mark is not None else _optics_digits(body)
+
+
+def _optics_digits(part: str) -> str | None:
+    digits = "".join(
+        char
+        for char in part.translate(_OPTICS_DIGITS)
+        # A separator the font drew as a comma, a dash or a colon is still a
+        # separator; anything else in here is noise.
+        if char.isdigit() or char in ".,-:"
+    )
+    digits = re.sub(r"[,\-:]", ".", digits)
+    # Only the first point can be the real one; a second is a stray, and keeping
+    # it would make the number unparseable.
+    whole, point, fraction = digits.partition(".")
+    fraction = fraction.replace(".", "")
+    if point and whole and len(fraction) >= _OPTICS_DECIMALS:
+        return f"{whole[-2:]}.{fraction[:_OPTICS_DECIMALS]}"
+    run = whole + fraction
+    if len(run) < 1 + _OPTICS_DECIMALS or len(run) > 2 + _OPTICS_DECIMALS:
+        # Too few digits means one was lost; too many means something that is
+        # not part of this number came along. Either way the point cannot be
+        # placed from the count alone.
+        return None
+    return f"{run[:-_OPTICS_DECIMALS]}.{run[-_OPTICS_DECIMALS:]}"
 
 
 def _resolve_missing_point(sign: str, digits: str, config: FieldConfig) -> str | None:
