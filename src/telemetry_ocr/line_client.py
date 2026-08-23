@@ -246,7 +246,11 @@ def describe_verification(
     return "\n".join(parts)
 
 
-def format_capture_message(shot: Any, directory: str | Path | None = None) -> str:
+def format_capture_message(
+    shot: Any,
+    directory: str | Path | None = None,
+    dms_decimals: dict[str, int] | None = None,
+) -> str:
     """Turn one shot into the text that gets pushed."""
     values: dict[str, Any] = {}
     for record in getattr(shot, "records", []) or []:
@@ -300,7 +304,10 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
     lines.append("")
 
     for label, field_ids in _LAYOUT:
-        parts = [_format_field(field_id, values.get(field_id)) for field_id in field_ids]
+        parts = [
+            _format_field(field_id, values.get(field_id), dms_decimals)
+            for field_id in field_ids
+        ]
         rendered = [part for part in parts if part]
         if rendered:
             lines.append(f"{label}  " + "   ".join(rendered))
@@ -332,7 +339,28 @@ def format_capture_message(shot: Any, directory: str | Path | None = None) -> st
     return text
 
 
-def format_dms(degrees: float, is_latitude: bool) -> str:
+# Decimal places of arc-seconds in a printed coordinate.
+#
+# Two, because that is what `dms_decimal_places` says for every coordinate field
+# and what the field regexes require -- the overlay prints 14°50'57.37" and the
+# reading carries all of it. This was fixed at one place, so the message quietly
+# dropped a digit the system had read correctly and sent 14°50'57.4" instead.
+# A hundredth of an arc-second is about 0.31 m; rounding to a tenth moves the
+# position by up to 1.5 m, which is not a rounding error anyone should absorb
+# on a coordinate that is going to be acted on.
+DEFAULT_DMS_DECIMALS = 2
+
+# Decimal degrees in the map link. 1e-7 degrees is about 1.1 cm, two orders of
+# magnitude finer than the 0.31 m the source data is quantised to, so the link
+# and the printed DMS always describe the same point: converting the link's
+# number back to arc-seconds lands within 0.0004" of the digits above it.
+# At the previous 1e-6 they could differ by half a metre.
+_MAPS_DECIMALS = 7
+
+
+def format_dms(
+    degrees: float, is_latitude: bool, decimals: int = DEFAULT_DMS_DECIMALS
+) -> str:
     """Decimal degrees as the overlay writes them: 14°50\'42.6"N.
 
     The OSD shows DMS, so a message quoting the same reading in decimal makes
@@ -346,22 +374,37 @@ def format_dms(degrees: float, is_latitude: bool) -> str:
     minutes_all = (value - whole) * 60.0
     minutes = int(minutes_all)
     seconds = (minutes_all - minutes) * 60.0
-    # Seconds can round to 60 and produce 50'60.0"; carry it rather than print it.
-    if round(seconds, 1) >= 60.0:
+    # Seconds can round up to 60 and produce 50'60.00"; carry it rather than
+    # print a value no coordinate notation allows.
+    if round(seconds, decimals) >= 60.0:
         seconds = 0.0
         minutes += 1
     if minutes >= 60:
         minutes = 0
         whole += 1
-    return f"{whole}°{minutes:02d}\'{seconds:04.1f}\"{hemisphere}"
+    # Two digits before the point, the point itself, then the fraction.
+    width = decimals + 3
+    return f"{whole}°{minutes:02d}\'{seconds:0{width}.{decimals}f}\"{hemisphere}"
 
 
 def maps_link(latitude: float, longitude: float) -> str:
-    """A link that opens the position, in the app on a phone and the web elsewhere."""
-    return f"https://www.google.com/maps?q={float(latitude):.6f},{float(longitude):.6f}"
+    """A link that opens the position, in the app on a phone and the web elsewhere.
+
+    Built from the stored reading rather than from the rounded text above it, and
+    printed with enough digits that it cannot disagree with that text. See
+    _MAPS_DECIMALS.
+    """
+    return (
+        "https://www.google.com/maps?q="
+        f"{float(latitude):.{_MAPS_DECIMALS}f},{float(longitude):.{_MAPS_DECIMALS}f}"
+    )
 
 
-def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
+def _format_field(
+    field_id: str,
+    record: dict[str, Any] | None,
+    dms_decimals: dict[str, int] | None = None,
+) -> str:
     if record is None:
         return ""
     value = record.get("value")
@@ -385,7 +428,8 @@ def _format_field(field_id: str, record: dict[str, Any] | None) -> str:
     marker = ""
     if "lat_dms" in field_id or "lon_dms" in field_id:
         # DMS, and no prefix: the hemisphere letter is part of the rendering.
-        return f"{format_dms(float(value), 'lat_dms' in field_id)}{marker}"
+        places = (dms_decimals or {}).get(field_id, DEFAULT_DMS_DECIMALS)
+        return f"{format_dms(float(value), 'lat_dms' in field_id, places)}{marker}"
     rendered = f"{value:g}" if isinstance(value, float) else str(value)
     return f"{prefix}{rendered}{unit}{marker}"
 
@@ -399,7 +443,11 @@ MAX_IMAGES_PER_PUSH = 4
 _DIGEST_RULE = "\n\n" + "\u2014" * 8 + "\n\n"
 
 
-def format_capture_digest(shots: list[Any], directory: str | Path | None = None) -> str:
+def format_capture_digest(
+    shots: list[Any],
+    directory: str | Path | None = None,
+    dms_decimals: dict[str, int] | None = None,
+) -> str:
     """The text for several shots sent together.
 
     Each block is the message that shot would have sent on its own, so a digest
@@ -410,9 +458,14 @@ def format_capture_digest(shots: list[Any], directory: str | Path | None = None)
     if not shots:
         return ""
     if len(shots) == 1:
-        return format_capture_message(shots[0], directory=directory)
+        return format_capture_message(
+            shots[0], directory=directory, dms_decimals=dms_decimals
+        )
     header = f"[Capture x{len(shots)}]\n\n"
-    blocks = [format_capture_message(shot, directory=directory) for shot in shots]
+    blocks = [
+        format_capture_message(shot, directory=directory, dms_decimals=dms_decimals)
+        for shot in shots
+    ]
     text = header + _DIGEST_RULE.join(blocks)
     if len(text) <= MAX_TEXT:
         return text

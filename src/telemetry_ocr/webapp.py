@@ -1361,6 +1361,15 @@ def create_app(
             }
         )
 
+    # How many decimals of arc-second each coordinate carries, read once from the
+    # ROI configuration. Built out here rather than inside line_send because that
+    # function binds `config` to the LINE credentials, not to this one.
+    dms_decimals_by_field = {
+        item.field_id: item.dms_decimal_places
+        for item in config.fields
+        if item.data_type == "dms" and item.dms_decimal_places is not None
+    }
+
     async def line_send(request: Any) -> Any:
         """Push one captured shot to LINE as text.
 
@@ -1444,7 +1453,9 @@ def create_app(
             )
         line_state["last_sent"] = now
 
-        text = format_capture_digest(shots, directory=session.directory)
+        text = format_capture_digest(
+            shots, directory=session.directory, dms_decimals=dms_decimals_by_field
+        )
 
         # Images only when a public base URL is configured. Without one there is
         # nowhere LINE could fetch from, and the message goes as text.

@@ -70,7 +70,7 @@ class MessageFormattingTests(unittest.TestCase):
         self.assertIn("session-20260818-131353", text)
         self.assertIn("frames/00000000.jpg", text)
         # DMS, matching the overlay, rather than the decimal the pipeline stores.
-        self.assertIn("14°52'17.8\"N", text)
+        self.assertIn("14°52'17.79\"N", text)
         self.assertIn("721.7 m", text)
         self.assertIn("1.05°", text)
         self.assertIn("car 3", text)
@@ -384,8 +384,34 @@ class CoordinateFormattingTests(unittest.TestCase):
     def test_degrees_minutes_seconds(self) -> None:
         from telemetry_ocr.line_client import format_dms
 
-        self.assertEqual(format_dms(14.848431, is_latitude=True), '14°50\'54.4"N')
-        self.assertEqual(format_dms(101.999197, is_latitude=False), '101°59\'57.1"E')
+        self.assertEqual(format_dms(14.848431, is_latitude=True), '14°50\'54.35"N')
+        self.assertEqual(format_dms(101.999197, is_latitude=False), '101°59\'57.11"E')
+
+    def test_the_reading_keeps_every_digit_it_was_read_with(self) -> None:
+        """The overlay prints two decimals of arc-second and the field regex
+        requires two, so the message has to carry two.
+
+        It printed one. A hundredth of an arc-second is about 0.31 m, so
+        rounding to a tenth moved the position by up to 1.5 m -- silently, on
+        the one line in the message that someone acts on.
+        """
+        from telemetry_ocr.line_client import format_dms
+
+        # 14°50'57.37" exactly, as the overlay showed it.
+        exact = 14 + 50 / 60 + 57.37 / 3600
+        self.assertEqual(format_dms(exact, is_latitude=True), '14°50\'57.37"N')
+        self.assertEqual(format_dms(exact, is_latitude=True, decimals=1), '14°50\'57.4"N')
+
+    def test_the_precision_comes_from_the_field(self) -> None:
+        # Not from a constant in the formatter: it is `dms_decimal_places` in
+        # the ROI configuration that says how the field was read.
+        from telemetry_ocr.line_client import format_capture_message
+
+        shot = _Shot(records=[_record("tag_lat_dms", 14.845161)])
+        default = format_capture_message(shot)
+        coarse = format_capture_message(shot, dms_decimals={"tag_lat_dms": 1})
+        self.assertIn('42.58"', default)
+        self.assertIn('42.6"', coarse)
 
     def test_the_hemisphere_follows_the_sign(self) -> None:
         # A fixed "N " prefix would label a southern position wrongly, and the
@@ -401,8 +427,8 @@ class CoordinateFormattingTests(unittest.TestCase):
         from telemetry_ocr.line_client import format_dms
 
         rendered = format_dms(14.99999999, is_latitude=True)
-        self.assertNotIn("60.0", rendered)
-        self.assertEqual(rendered, '15°00\'00.0"N')
+        self.assertNotIn('60.00"', rendered)
+        self.assertEqual(rendered, '15°00\'00.00"N')
 
     def test_the_map_link_carries_decimal_degrees(self) -> None:
         # Google Maps takes decimal, not DMS; the message shows one and links
@@ -411,8 +437,37 @@ class CoordinateFormattingTests(unittest.TestCase):
 
         self.assertEqual(
             maps_link(14.845161, 102.006658),
-            "https://www.google.com/maps?q=14.845161,102.006658",
+            "https://www.google.com/maps?q=14.8451610,102.0066580",
         )
+
+    def test_the_link_and_the_printed_coordinate_are_the_same_place(self) -> None:
+        """They are read together, so they must not disagree.
+
+        The text is rounded to hundredths of an arc-second and the link is the
+        stored value; at six decimal places of degrees the link could land half
+        a metre from the coordinate printed above it. Converting the link's
+        number back has to reproduce the printed digits exactly.
+        """
+        from telemetry_ocr.line_client import format_dms, maps_link
+
+        for seconds in (0.0, 0.01, 12.34, 42.58, 57.37, 59.99):
+            for degrees, minutes in ((14, 50), (101, 59), (0, 0), (89, 59)):
+                value = degrees + minutes / 60 + seconds / 3600
+                with self.subTest(value=value):
+                    printed = format_dms(value, is_latitude=True)
+                    linked = float(maps_link(value, value).split("q=")[1].split(",")[0])
+                    self.assertEqual(format_dms(linked, is_latitude=True), printed)
+
+    def test_a_southern_or_western_position_survives_the_round_trip(self) -> None:
+        from telemetry_ocr.line_client import format_dms, maps_link
+
+        value = -(14 + 50 / 60 + 57.37 / 3600)
+        printed = format_dms(value, is_latitude=True)
+        linked = float(maps_link(value, value).split("q=")[1].split(",")[0])
+        self.assertEqual(printed, '14°50\'57.37"S')
+        self.assertEqual(format_dms(linked, is_latitude=True), printed)
+        # The link keeps the sign; Maps needs it to place the point.
+        self.assertLess(linked, 0)
 
     def test_the_message_links_the_target(self) -> None:
         from telemetry_ocr.line_client import format_capture_message
@@ -424,8 +479,8 @@ class CoordinateFormattingTests(unittest.TestCase):
             ]
         )
         text = format_capture_message(shot)
-        self.assertIn('14°50\'42.6"N', text)
-        self.assertIn("google.com/maps?q=14.845161,102.006658", text)
+        self.assertIn('14°50\'42.58"N', text)
+        self.assertIn("google.com/maps?q=14.8451610,102.0066580", text)
 
     def test_a_half_read_position_gets_no_link(self) -> None:
         """A link built from one coordinate would point somewhere real and wrong.
