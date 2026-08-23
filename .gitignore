@@ -79,3 +79,4 @@ Ultralytics/
 # is a judgement about how sensitive one machine's footage is, so it belongs to
 # the machine rather than to everyone who clones this.
 configs/quick-tunnel.enabled
+docs/*.docx
