@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .capture import FrameRecord, SessionInfo, load_session
+from .capture import SessionInfo, load_session
 from .config import AppConfig
 from .errors import TelemetryOCRError, VideoError
 from .ocr import Recognizer
@@ -166,8 +166,3 @@ def _warn_on_config_drift(info: SessionInfo, config: AppConfig) -> None:
         added or "none",
         removed or "none",
     )
-
-
-def frame_for(session_dir: str | Path, record: FrameRecord) -> Path:
-    """Where a manifest entry's image actually lives."""
-    return Path(session_dir) / record.file

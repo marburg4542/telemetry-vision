@@ -207,14 +207,6 @@ def _coordinate_link(values: dict[str, Any], lat_field: str, lon_field: str) -> 
     return maps_link(latitude, longitude)
 
 
-def _same(left: Any, right: Any) -> bool:
-    if left is None or right is None:
-        return False
-    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-        return abs(float(left) - float(right)) < 1e-6
-    return str(left).strip() == str(right).strip()
-
-
 def describe_verification(
     verification: Any, rescued: int = 0
 ) -> str:

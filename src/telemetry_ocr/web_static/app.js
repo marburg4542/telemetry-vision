@@ -100,12 +100,8 @@ const state = {
   sessionId: null,
   objectUrl: null,
   file: null,
-  inFlight: false,
   generation: 0,
-  sequence: 0,
-  lastSubmittedMs: -Infinity,
   records: [],
-  completions: [],
   rowElements: new Map(),
   loopStarted: false,
   fallbackTimer: null,
@@ -610,9 +606,6 @@ function handleFile(file) {
 
 async function resetSession(clearRecords = true) {
   const generation = ++state.generation;
-  state.sequence = 0;
-  state.lastSubmittedMs = -Infinity;
-  state.completions = [];
   if (clearRecords) clearLog();
   resetCurrentValues();
   if (!state.sessionId) return;
@@ -2139,69 +2132,17 @@ async function sendSelectedToLine() {
   }
 }
 
-// maybeSubmit is gone. Reading every frame of a file kept a panel current that
-// no longer exists, and the reading that gets sent is taken from the captured
-// image instead -- with the fallback recipes on, which the realtime path could
-// not afford. Continuing to run it would spend the GPU on an answer nothing
-// displays and nothing sends.
-
-async function submitFrame(force = false, sourceTimeMs = ui.video.currentTime * 1000, suggestedFrame = null) {
-  if (!state.sessionId || !state.config || state.inFlight || ui.video.readyState < 2) return;
-
-  const generation = state.generation;
-  state.inFlight = true;
-  state.lastSubmittedMs = sourceTimeMs;
-  const frameIndex = Number.isInteger(suggestedFrame) && suggestedFrame >= 0
-    ? Math.max(state.sequence++, suggestedFrame)
-    : state.sequence++;
-  try {
-    const blob = await captureRois();
-    const params = new URLSearchParams({
-      source_time_ms: sourceTimeMs.toFixed(3),
-      frame_index: String(frameIndex),
-    });
-    const payload = await jsonFetch(
-      `/api/session/${state.sessionId}/frame?${params}`,
-      { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob },
-    );
-    if (generation === state.generation) applyOcrResult(payload);
-  } catch (error) {
-    if (generation === state.generation) {
-      setEngineStatus("error", "OCR ขัดข้อง — กำลังลองเฟรมถัดไป");
-      showToast(`OCR ไม่สำเร็จ: ${error.message}`);
-    }
-  } finally {
-    state.inFlight = false;
-  }
-}
-
-function captureRois() {
-  const width = ui.video.videoWidth;
-  const height = ui.video.videoHeight;
-  ui.canvas.width = width;
-  ui.canvas.height = height;
-  const context = ui.canvas.getContext("2d", { alpha: false });
-  context.fillStyle = "#000";
-  context.fillRect(0, 0, width, height);
-
-  for (const field of state.config.fields) {
-    const [x, y, w, h] = field.box;
-    const pad = Number(field.padding || 0);
-    const left = Math.max(0, (x - w * pad) * width);
-    const top = Math.max(0, (y - h * pad) * height);
-    const right = Math.min(width, (x + w * (1 + pad)) * width);
-    const bottom = Math.min(height, (y + h * (1 + pad)) * height);
-    const roiWidth = right - left;
-    const roiHeight = bottom - top;
-    if (roiWidth > 0 && roiHeight > 0) {
-      context.drawImage(ui.video, left, top, roiWidth, roiHeight, left, top, roiWidth, roiHeight);
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    ui.canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("สร้างภาพเฟรมไม่สำเร็จ")), "image/jpeg", 0.92);
-  });
-}
+// The realtime read is gone from this page entirely.
+//
+// It used to montage every ROI onto a canvas and POST that to
+// /api/session/<id>/frame on a timer. Two things retired it: the panel it kept
+// current now shows a chosen capture instead, and the reading that actually
+// gets sent is taken from the saved image with the fallback recipes on, which
+// the per-frame path could never afford. What remained was a function nothing
+// called, spending nothing but still describing a design the page had left.
+//
+// The endpoint itself stays -- it is a documented part of the HTTP API and has
+// its own tests; it simply has no caller in this file any more.
 
 // Kept for the downloadable log only. The panel it used to fill now shows a
 // chosen capture instead, because that is what gets sent.

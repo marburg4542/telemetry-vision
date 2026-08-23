@@ -80,3 +80,4 @@ Ultralytics/
 # the machine rather than to everyone who clones this.
 configs/quick-tunnel.enabled
 docs/*.docx
+docs/*.pdf
