@@ -1,724 +1,799 @@
+/* White and blue, and nothing else.
+ *
+ * One accent hue carries every meaning the page needs -- selected, confirmed,
+ * live, ready -- so a colour that is not blue is a signal by itself. Only two
+ * escape it: red for the one destructive action and for a failure, amber for a
+ * capture the detector has not finished with. Adding a third accent would mean
+ * the reader has to learn which is which.
+ */
 :root {
-  color-scheme: dark;
-  --bg: #070b0e;
-  --panel: #0d1318;
-  --panel-2: #111a20;
-  --line: rgba(155, 181, 194, 0.14);
-  --line-strong: rgba(155, 181, 194, 0.24);
-  --text: #f3f7f8;
-  --muted: #8d9ba3;
-  --accent: #a8f04b;
-  --accent-soft: rgba(168, 240, 75, 0.12);
-  --cyan: #65d7dd;
-  --danger: #ff746c;
-  --radius: 14px;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light;
+
+  --bg: #eef3f9;
+  --surface: #ffffff;
+  --surface-sunken: #f6f9fd;
+  --line: #dde6f1;
+  --line-strong: #c6d5e6;
+
+  --text: #12212f;
+  --muted: #5f7789;
+
+  --blue: #1266d1;
+  --blue-hover: #0d55b0;
+  --blue-soft: #e8f1fd;
+  --blue-line: #b6d3f5;
+
+  --danger: #cf3b32;
+  --danger-soft: #fdeceb;
+  --warn: #b7791f;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(18, 33, 47, .05), 0 8px 24px rgba(18, 33, 47, .05);
+
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "Noto Sans Thai", sans-serif;
 }
 
 * { box-sizing: border-box; }
+
+/* Ahead of every rule below, and !important on purpose. `hidden` is how the
+   page hides the stream image, the overlay, the install button and the restart
+   button, and any later `display:` on a class those elements also carry would
+   silently override the attribute -- which is how a Restart worker button that
+   is meant to appear only when the worker has died ends up on screen always. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
   color: var(--text);
-  background:
-    radial-gradient(circle at 8% -8%, rgba(101, 215, 221, 0.08), transparent 28rem),
-    radial-gradient(circle at 95% 12%, rgba(168, 240, 75, 0.05), transparent 24rem),
-    var(--bg);
-}
-
-button, input, select { font: inherit; }
-button, label[for], select { cursor: pointer; }
-button:disabled, select:disabled { cursor: not-allowed; opacity: 0.45; }
-button:focus-visible, select:focus-visible, input:focus-visible, label:has(input:focus-visible) {
-  outline: 2px solid var(--cyan);
-  outline-offset: 3px;
-}
-
-.app-shell { width: min(1720px, 100%); margin: 0 auto; padding: 18px 26px 22px; }
-
-.section-heading, .panel-heading, .source-strip,
-.engine-status, .file-summary, .toggle-control, .playback-time, .panel-actions {
-  display: flex;
-  align-items: center;
+  background: var(--bg);
 }
 
 h1, h2, h3, p { margin: 0; }
-h2 { font-size: 19px; font-weight: 630; }
-h3 { font-size: 18px; }
-.eyebrow { margin-bottom: 5px; color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: 0.17em; }
+h1 { font-size: 16px; font-weight: 640; letter-spacing: -0.01em; }
+h2 { font-size: 15px; font-weight: 640; }
+h3 { font-size: 16px; font-weight: 620; }
 
-/* Moved out of the removed header and into the panel heading, so it has to be
-   small enough to sit beside the record count without crowding it. */
-.panel-heading-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
+button, input, select { font: inherit; color: inherit; }
+button, label[for], select, summary { cursor: pointer; }
+button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: .45; }
+button:focus-visible, select:focus-visible, input:focus-visible,
+summary:focus-visible, label:has(input:focus-visible) {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- shell */
+
+.app-shell {
+  width: min(1720px, 100%);
+  margin: 0 auto;
+  padding: 12px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100vh;
+}
+
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.topbar-meta { display: flex; align-items: center; gap: 10px; }
+
 .engine-status {
-  gap: 6px;
-  max-width: 100%;
-  padding: 4px 9px;
-  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 340px;
+  padding: 4px 11px 4px 9px;
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
+  background: var(--surface);
   color: var(--muted);
-  font-size: 10px;
-  background: rgba(255,255,255,0.02);
+  font-size: 12px;
 }
 .engine-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.engine-status.is-ready .status-dot { background: var(--accent); box-shadow: 0 0 10px rgba(168,240,75,.8); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.engine-status.is-ready { color: var(--blue); border-color: var(--blue-line); background: var(--blue-soft); }
+.engine-status.is-ready .status-dot { background: var(--blue); }
+.engine-status.is-error { color: var(--danger); border-color: #f0bcb8; background: var(--danger-soft); }
 .engine-status.is-error .status-dot { background: var(--danger); }
-.engine-status.is-loading .status-dot { background: var(--cyan); animation: pulse 1.3s ease-in-out infinite; }
-.install-button {
-  min-height: 26px;
-  padding: 0 10px;
-  border: 1px solid rgba(168,240,75,.45);
-  border-radius: 999px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-size: 11px;
-  font-weight: 700;
-}
-.install-button:hover { border-color: var(--accent); background: rgba(168,240,75,.18); }
-.install-button[hidden] { display: none; }
+.engine-status.is-loading .status-dot { background: var(--blue); animation: pulse 1.3s ease-in-out infinite; }
 
-/* One screen, no page scrolling. With the header gone the workspace is the
-   whole page less the shell's own padding, 18px top and 22px bottom, and the
-   video stage absorbs whatever the panels below it do not use. */
-.workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1.9fr) minmax(360px, .8fr);
-  gap: 22px;
-  height: calc(100vh - 40px);
+.install-button {
+  min-height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--blue-line);
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 620;
 }
+.install-button:hover { background: #d8e8fc; }
+
+/* One screen, no page scrolling. The video stage absorbs whatever the rows
+   below it do not use. */
+.workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.95fr) minmax(340px, .75fr);
+  gap: 14px;
+}
+
 .video-column, .telemetry-panel {
   min-width: 0;
   /* Without this a grid child refuses to shrink below its content, which is
-     what pushed the page past the viewport in the first place. */
+     what pushes the page past the viewport. */
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: linear-gradient(150deg, rgba(255,255,255,.02), transparent 45%), var(--panel);
+  background: var(--surface);
+  box-shadow: var(--shadow);
 }
-.video-column { display: flex; flex-direction: column; padding: 22px; }
-.telemetry-panel { display: flex; flex-direction: column; padding: 22px; }
-.section-heading, .panel-heading, .source-strip { justify-content: space-between; gap: 16px; }
-.section-heading, .panel-heading { flex: 0 0 auto; margin-bottom: 17px; }
 
-.file-button, .primary-button, .secondary-button, .ghost-button {
-  border-radius: 8px;
-  border: 1px solid var(--line-strong);
-  font-weight: 650;
-}
-.file-button, .primary-button {
+/* ---------------------------------------------------------------- buttons */
+
+.primary-button, .secondary-button, .ghost-button, .file-button,
+.model-file-button, .capture-button, .line-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 38px;
-  padding: 0 15px;
-  color: #0a1007;
-  background: var(--accent);
-  border-color: var(--accent);
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  font-weight: 600;
+  white-space: nowrap;
 }
-.file-button:hover, .primary-button:hover { background: #b6ff59; }
-.file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.primary-button, .file-button, .capture-button {
+  min-height: 36px;
+  padding: 0 15px;
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+.primary-button:hover, .file-button:hover, .capture-button:hover:not(:disabled) {
+  background: var(--blue-hover);
+  border-color: var(--blue-hover);
+}
+
+.ghost-button, .secondary-button, .model-file-button {
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: 13px;
+  color: var(--text);
+}
+.ghost-button:hover:not(:disabled),
+.secondary-button:hover:not(:disabled),
+.model-file-button:hover { background: var(--surface-sunken); border-color: var(--blue-line); }
+
+.text-button, .link-button {
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.text-button:hover:not(:disabled), .link-button:hover { color: var(--blue); }
+.link-button.is-danger { color: var(--danger); }
+
+.file-button input, .model-file-button input { display: none; }
+
+/* ---------------------------------------------------------------- source */
+
+.source-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.stream-field { flex: 1 1 auto; min-width: 0; display: block; }
+.stream-field input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.stream-field input::placeholder { color: #9aabbb; }
+.stream-field input:focus { background: var(--surface); }
+
+/* ---------------------------------------------------------------- stage */
 
 .video-stage {
   position: relative;
-  overflow: hidden;
-  /* Takes the height the panels leave rather than forcing 16/9, which on a wide
-     column was a fixed ~620px and is what made the page scroll. The video keeps
-     its own ratio through object-fit: contain, and the detection overlay derives
-     its letterboxing from this box, so neither depends on the stage being 16/9. */
   flex: 1 1 auto;
-  min-height: 200px;
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  background: #020304;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  /* The one dark surface on the page, because video is what it holds and a
+     white mat around a frame changes how its exposure reads. */
+  background: #0d1620;
 }
-.video-stage.is-dragging { border-color: var(--accent); box-shadow: inset 0 0 50px rgba(168,240,75,.1); }
-.video-stage video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
-/* Identical geometry to the video, because the overlay's letterbox arithmetic
-   is written once and has to hold for whichever of the two is on screen. */
-.video-stage img#streamImage {
+.video-stage video, .video-stage img#streamImage {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
   display: block;
+}
+.video-stage.is-dragging { border-color: var(--blue); box-shadow: inset 0 0 0 2px var(--blue-soft); }
+
+.detection-overlay {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  background: #000;
+  pointer-events: none;
 }
-.video-stage img#streamImage[hidden] { display: none; }
-.detection-overlay { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
+
 .drop-state {
   position: absolute;
-  z-index: 3;
   inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 13px;
-  padding: 30px;
+  gap: 12px;
+  padding: 24px;
   text-align: center;
-  background:
-    linear-gradient(rgba(7,11,14,.82), rgba(7,11,14,.93)),
-    repeating-linear-gradient(0deg, transparent 0 30px, rgba(101,215,221,.04) 30px 31px),
-    repeating-linear-gradient(90deg, transparent 0 30px, rgba(101,215,221,.04) 30px 31px);
+  color: #cfdae5;
+  background: #0d1620;
 }
-.drop-state[hidden] { display: none; }
-.drop-state p, .drop-state small { color: var(--muted); }
-.drop-state p { max-width: 490px; font-size: 13px; line-height: 1.65; }
-.drop-state small { font-size: 11px; }
-.drop-orbit { position: relative; width: 62px; height: 62px; border: 1px solid rgba(101,215,221,.35); border-radius: 50%; }
-.drop-orbit::before, .drop-orbit::after { content: ""; position: absolute; inset: 11px; border: 1px dashed rgba(168,240,75,.6); border-radius: 50%; }
-.drop-orbit::after { inset: 27px; border-style: solid; background: var(--accent); box-shadow: 0 0 14px var(--accent); }
-.drop-orbit span { position: absolute; width: 1px; height: 75px; top: -7px; left: 30px; background: rgba(101,215,221,.25); }
+.drop-state p { color: #8ea3b6; font-size: 13px; max-width: 34ch; }
 
-.processing-badge {
-  position: absolute;
-  z-index: 4;
-  top: 14px;
-  right: 14px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 9px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: rgba(5,10,8,.82);
-  border: 1px solid rgba(168,240,75,.3);
-  backdrop-filter: blur(8px);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .12em;
-}
-.processing-badge[hidden] { display: none; }
-/* Sits under the OCR badge so both can show at once: a live stream is running
-   OCR too, and seeing only one of them would be misleading. */
 .stream-badge {
   position: absolute;
-  z-index: 4;
-  top: 48px;
-  right: 14px;
-  display: flex;
+  top: 12px; left: 12px;
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 9px;
-  border-radius: 5px;
-  color: #ff6b6b;
-  background: rgba(5,10,8,.82);
-  border: 1px solid rgba(255,107,107,.35);
-  backdrop-filter: blur(8px);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .12em;
-}
-.stream-badge[hidden] { display: none; }
-.stream-badge span:first-child {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ff6b6b;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-.source-picker { display: flex; align-items: center; gap: 8px; }
-
-/* The captured shots. A horizontal strip rather than a grid: a session is a
-   handful of deliberate frames, not a gallery, and keeping it to one row leaves
-   the panel's height for the preview and the reading. */
-.shot-strip {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 2px 2px 6px;
-  min-height: 62px;
-}
-.shot-strip:empty::after {
-  content: "ยังไม่มีภาพที่เก็บไว้";
-  align-self: center;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: rgba(18, 102, 209, .92);
+  color: #fff;
   font-size: 11px;
-  color: var(--muted, #98a4ad);
+  font-weight: 700;
+  letter-spacing: .06em;
 }
-.shot-thumb {
-  flex: 0 0 auto;
-  width: 84px;
-  height: 52px;
-  border-radius: 5px;
-  border: 2px solid transparent;
-  background: #000;
-  position: relative;
-  padding: 0;
+.stream-badge > span:first-child {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  animation: pulse 1.3s ease-in-out infinite;
 }
-/* Being looked at and being chosen to send are different things, so they are
-   different marks: an outline for the one on screen, a filled tick for the ones
-   that will actually go. */
-.shot-thumb.is-selected { border-color: var(--accent, #a8f04b); }
-.shot-thumb.is-chosen { box-shadow: 0 0 0 2px #4bb0f0 inset; }
-.shot-thumb-open {
+
+.capture-flash {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  border-radius: 3px;
-  background: #000 center/cover no-repeat;
-  cursor: pointer;
-  padding: 0;
-}
-.shot-thumb-label {
-  position: absolute;
-  left: 3px;
-  bottom: 2px;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: rgba(4,8,10,.78);
-  font-size: 9px;
-  font-weight: 700;
-  color: #cfe8a8;
+  background: #fff;
+  opacity: 0;
   pointer-events: none;
 }
-.shot-thumb-tick {
+.capture-flash.is-firing { animation: flash .32s ease-out; }
+
+.shot-overlay {
   position: absolute;
-  top: 2px;
-  left: 3px;
-  z-index: 1;
+  inset: 0;
   display: flex;
-  margin: 0;
-  padding: 1px;
-  border-radius: 3px;
-  background: rgba(4,8,10,.78);
-  cursor: pointer;
+  flex-direction: column;
+  background: #0d1620;
+  z-index: 3;
 }
-.shot-thumb-tick input { margin: 0; cursor: pointer; accent-color: #4bb0f0; }
-.shot-thumb-badge {
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: rgba(240,160,60,.9);
-  font-size: 8px;
-  font-weight: 700;
-  color: #1a1206;
-  pointer-events: none;
-}
-/* A capture that has not come back yet. It holds the same space the finished
-   thumbnail will, so the strip does not jump when the model answers. */
-.shot-thumb.is-pending {
+.shot-overlay img { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; }
+.shot-overlay-bar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border-color: rgba(168,240,75,.35);
-  background: rgba(168,240,75,.06);
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  color: #dce6f1;
+  font-size: 12px;
+  background: rgba(255, 255, 255, .06);
 }
-.shot-spinner {
-  width: 13px;
-  height: 13px;
+.shot-overlay-bar .ghost-button {
+  background: transparent;
+  border-color: rgba(255, 255, 255, .3);
+  color: #fff;
+}
+.shot-overlay-bar .ghost-button:hover { background: rgba(255, 255, 255, .12); }
+
+/* ---------------------------------------------------------------- actions */
+
+.action-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.capture-button { min-width: 132px; }
+.capture-dot {
+  width: 9px; height: 9px;
   border-radius: 50%;
-  border: 2px solid rgba(168,240,75,.25);
-  border-top-color: var(--accent, #a8f04b);
-  animation: shot-spin .7s linear infinite;
+  background: currentColor;
 }
-@keyframes shot-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .shot-spinner { animation-duration: 2.4s; }
+.capture-button.is-recording { background: var(--danger); border-color: var(--danger); }
+.capture-button.is-recording .capture-dot { animation: pulse .8s ease-in-out infinite; }
+
+.line-button {
+  min-height: 36px;
+  padding: 0 15px;
+  border-color: var(--blue-line);
+  background: var(--blue-soft);
+  color: var(--blue);
 }
+.line-button:hover:not(:disabled) { background: #d8e8fc; }
+/* The button keeps its own colour; the allowance is stated beside it. Only the
+   two states that need acting on tint it, and then only at the edge. */
+.line-button.is-warning { border-color: #e6c98a; }
+.line-button.is-exhausted { border-color: #f0bcb8; background: var(--danger-soft); color: var(--danger); }
+
+/* The month's allowance, beside the button rather than on it. Small, because it
+   is a standing fact about the account and not a thing to press. */
+.line-quota {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.line-quota.is-warning { color: var(--warn); font-weight: 600; }
+.line-quota.is-exhausted { color: var(--danger); font-weight: 600; }
+
+.playback-time {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.time-separator { opacity: .5; }
+
+.source-line {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+.source-line strong { color: var(--text); font-weight: 600; }
+.source-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- model */
+
+.model-panel {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.model-panel > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  list-style: none;
+  font-size: 13px;
+}
+.model-panel > summary::-webkit-details-marker { display: none; }
+.model-panel > summary::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-right: 1.6px solid var(--muted);
+  border-bottom: 1.6px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+.model-panel[open] > summary::before { transform: rotate(45deg); }
+.model-summary-title { font-weight: 620; }
+.model-panel summary small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.model-settings { gap: 14px; }
+
+.field-control, .check-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.field-control select, .field-control input {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.field-control input[type="number"] { width: 68px; }
+.check-control input { accent-color: var(--blue); }
+
+.toggle-control { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; }
+.toggle-control input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle-track {
+  width: 34px; height: 20px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background .15s ease;
+}
+.toggle-track > span {
+  display: block;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .15s ease;
+}
+.toggle-control input:checked + .toggle-track { background: var(--blue); }
+.toggle-control input:checked + .toggle-track > span { transform: translateX(14px); }
+.toggle-control input:disabled + .toggle-track { opacity: .45; }
+
+.model-status { font-size: 12px; color: var(--muted); }
+.model-status.is-error { color: var(--danger); }
+.model-status code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+}
+.model-warning {
+  padding: 8px 10px;
+  border: 1px solid #f0dcb4;
+  border-radius: 6px;
+  background: #fdf6e7;
+  color: #7a5a12;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.metrics strong { color: var(--text); font-weight: 620; }
+
+/* ---------------------------------------------------------------- panel */
+
+.panel-heading {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.record-count { color: var(--muted); font-size: 12px; }
 
 .shot-progress {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: var(--muted, #98a4ad);
+  margin-bottom: 10px;
 }
 .shot-progress-item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 7px;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
-  background: rgba(255,255,255,.05);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 11.5px;
 }
-.shot-progress-item[hidden] { display: none; }
-.shot-progress-item.is-working { color: #cfe8a8; background: rgba(168,240,75,.12); }
-.shot-progress-item.is-ready { color: #8fd0f5; background: rgba(75,176,240,.12); }
-.shot-progress-item.is-warning { color: #f0c07a; background: rgba(240,160,60,.14); }
-.shot-progress-item.is-error { color: #f5a3a3; background: rgba(240,80,80,.14); }
+.shot-progress-item.is-working { border-color: var(--blue-line); background: var(--blue-soft); color: var(--blue); }
+.shot-progress-item.is-ready { border-color: var(--blue-line); color: var(--blue); }
+.shot-progress-item.is-warning { border-color: #f0dcb4; background: #fdf6e7; color: var(--warn); }
+.shot-progress-item.is-error { border-color: #f0bcb8; background: var(--danger-soft); color: var(--danger); }
+.shot-spinner {
+  width: 10px; height: 10px;
+  border: 1.6px solid var(--blue-line);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+.shot-strip {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+}
+/* The picture is a background-image on the button, not an <img>: app.js sets
+   `open.style.backgroundImage`, so the card needs its own height and the button
+   needs to fill it. Styling a child <img> here leaves the button at zero height
+   and the strip renders as empty outlines with a tick floating in them. */
+.shot-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 108px;
+  height: 68px;
+  padding: 0;
+  border: 2px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+/* Being looked at and being chosen to send are different things, so they are
+   different marks: a ring for the one on screen, a filled border for the ones
+   that will actually go. */
+.shot-thumb.is-selected { box-shadow: 0 0 0 2px var(--blue-soft); border-color: var(--blue); }
+.shot-thumb.is-chosen { border-color: var(--blue); }
+.shot-thumb.is-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-style: dashed;
+  border-color: var(--blue-line);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.shot-thumb-open {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: #0d1620 center/cover no-repeat;
+}
+.shot-thumb-label {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(13, 22, 32, .78);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+/* In a pending card the label is the caption beside the spinner rather than a
+   chip over a picture there is not one of yet. */
+.shot-thumb.is-pending .shot-thumb-label {
+  position: static;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.shot-thumb-tick {
+  position: absolute;
+  top: 4px; left: 4px;
+  z-index: 1;
+  display: inline-flex;
+  margin: 0;
+  padding: 2px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 1px 3px rgba(18, 33, 47, .25);
+}
+.shot-thumb-tick input { accent-color: var(--blue); margin: 0; }
+.shot-thumb-badge {
+  position: absolute;
+  top: 4px; right: 4px;
+  z-index: 1;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(183, 121, 31, .95);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 650;
+  pointer-events: none;
+}
 
 .shot-select-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin: -2px 0 6px;
-  font-size: 11px;
-  color: var(--muted, #98a4ad);
+  gap: 10px;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--muted);
 }
-.shot-select-bar[hidden] { display: none; }
-.link-button {
-  border: 0;
-  background: none;
-  padding: 0;
-  font: inherit;
-  color: var(--accent, #a8f04b);
-  cursor: pointer;
-  text-decoration: underline;
-}
-.link-button:disabled { color: var(--muted, #98a4ad); cursor: default; text-decoration: none; }
+.shot-select-actions { display: inline-flex; gap: 4px; }
 
-.shot-preview { flex: 0 0 auto; }
-.shot-preview[hidden] { display: none; }
+.shot-preview { flex: 0 0 auto; margin: 8px 0; }
 .shot-preview img {
   display: block;
   width: 100%;
-  border-radius: 6px;
-  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
 }
 .shot-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   margin-top: 6px;
 }
-.shot-detections { font-size: 11px; color: var(--muted, #98a4ad); }
+.shot-detections { color: var(--muted); font-size: 11.5px; text-align: right; }
 
-/* Deliberately the loudest control on the row. It is the only one that writes
-   anything permanent, and it is pressed while watching rather than while
-   looking for it. */
-.capture-button {
+/* The readings. Scrolls on its own so the strip and the buttons around it stay
+   where the eye left them. */
+.telemetry-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+.telemetry-group { display: flex; flex-direction: column; gap: 5px; }
+.telemetry-group h3 {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  color: var(--blue);
+}
+.telemetry-group-rows { display: flex; flex-direction: column; gap: 3px; }
+.telemetry-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+}
+.telemetry-row.is-pending { opacity: .55; }
+.telemetry-label {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  min-height: 34px;
-  padding: 0 13px;
-  border-radius: 6px;
-  border: 1px solid rgba(255,107,107,.45);
-  background: rgba(255,107,107,.12);
-  color: #ff8f8f;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
 }
-.capture-button:hover:not(:disabled) { background: rgba(255,107,107,.22); }
-.capture-button:disabled { opacity: .4; cursor: not-allowed; }
-.capture-button .capture-dot {
-  width: 8px;
-  height: 8px;
+.telemetry-label > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-indicator {
+  width: 6px; height: 6px;
   border-radius: 50%;
-  background: #ff6b6b;
+  background: var(--line-strong);
+  flex: 0 0 auto;
 }
-.capture-button.is-recording .capture-dot { animation: pulse 1s ease-in-out infinite; }
-
-/* Quieter than Capture on purpose. Capture is pressed while watching and has to
-   be findable without looking; this one is pressed deliberately, afterwards. */
-.line-button {
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  padding: 0 13px;
-  border-radius: 6px;
-  border: 1px solid rgba(6,199,85,.45);
-  background: rgba(6,199,85,.1);
-  color: #4fd882;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  cursor: pointer;
-}
-.line-button:hover:not(:disabled) { background: rgba(6,199,85,.2); }
-.line-button:disabled { opacity: .4; cursor: not-allowed; }
-
-/* One frame of white over the video, so a shot is confirmed where the operator
-   is already looking instead of in a panel they would have to glance away to. */
-.capture-flash {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  background: #fff;
-  opacity: 0;
-  pointer-events: none;
-}
-.capture-flash.is-firing { animation: capture-flash .32s ease-out; }
-@keyframes capture-flash {
-  0% { opacity: .55; }
-  100% { opacity: 0; }
-}
+.telemetry-row.is-confirmed .field-indicator { background: var(--blue); }
+.telemetry-value { text-align: right; white-space: nowrap; }
+.telemetry-value strong { font-size: 13.5px; font-weight: 640; font-variant-numeric: tabular-nums; }
+.telemetry-value small { display: block; color: var(--muted); font-size: 10.5px; }
 
 .capture-status {
   flex: 0 0 auto;
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(255,255,255,.03);
-  border: 1px solid rgba(255,255,255,.07);
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--muted, #98a4ad);
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
 }
-.capture-status.is-error { border-color: rgba(255,107,107,.4); color: #ff8f8f; }
-.stream-field { display: flex; }
-.stream-field input {
-  width: 210px;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(255,255,255,.14);
-  background: rgba(255,255,255,.04);
-  color: inherit;
-  font: inherit;
-  font-size: 11px;
-}
-.stream-field input:focus { outline: none; border-color: var(--accent); }
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-.processing-badge span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.capture-status.is-error { color: var(--danger); }
+.capture-status strong { color: var(--text); }
 
-/* The file summary and the OCR controls used to be two stacked rows plus a
-   paragraph of explanation. One row, with the explanation behind a hint. */
-.source-strip {
+.panel-actions {
   flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px 18px;
-  padding: 12px 2px 0;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--line);
-  margin-top: 12px;
 }
-.source-strip .file-summary { flex: 1 1 200px; }
-.source-strip .playback-time { margin-right: auto; }
-.ai-model-panel { flex: 0 0 auto; margin-top: 14px; padding: 14px; border: 1px solid rgba(168,240,75,.17); border-radius: 9px; background: rgba(168,240,75,.025); }
-.ai-model-heading, .ai-model-controls { display: flex; align-items: center; }
-.ai-model-heading { justify-content: space-between; gap: 12px; }
-.ai-model-actions { display: flex; align-items: center; gap: 10px; }
-.ai-model-heading h3 { font-size: 14px; }
-.model-file-button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid rgba(168,240,75,.42);
-  border-radius: 7px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-size: 11px;
-  font-weight: 700;
-}
-.model-file-button:hover { border-color: var(--accent); }
-.model-file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.ai-model-controls { flex-wrap: wrap; gap: 13px; margin-top: 13px; }
-.compact-toggle { margin-right: auto; }
-.confidence-control { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
-.confidence-control input { width: 68px; padding: 7px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: var(--panel-2); }
-.check-control { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; cursor: pointer; }
-.check-control input { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; }
-.check-control input:disabled { cursor: default; opacity: .5; }
-.model-status { margin-top: 11px; color: var(--cyan); font-size: 11px; line-height: 1.5; }
-.model-status.is-error { color: var(--danger); }
-.ai-runtime-metrics { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; color: var(--muted); font: 9px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.ai-runtime-metrics strong { color: var(--cyan); font-weight: 700; }
-/* Standing explanations that used to occupy a paragraph each. Shown on hover
-   and on keyboard focus, so the text is still reachable without a mouse. */
-.hint { position: relative; display: inline-flex; flex: 0 0 auto; cursor: help; }
-.hint-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
+.panel-actions .text-button { margin-left: auto; }
+
+/* ---------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 40px));
+  padding: 10px 16px;
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  color: var(--cyan);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .06em;
-}
-.hint:hover .hint-icon, .hint:focus-visible .hint-icon { border-color: var(--cyan); }
-.hint-body {
-  position: absolute;
-  z-index: 6;
-  right: 0;
-  bottom: calc(100% + 8px);
-  width: max-content;
-  max-width: 300px;
-  padding: 9px 11px;
-  border: 1px solid var(--line-strong);
-  border-radius: 7px;
-  color: var(--muted);
-  background: var(--panel-2);
-  box-shadow: 0 10px 26px rgba(0,0,0,.5);
-  font-size: 10.5px;
-  line-height: 1.55;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity .12s;
-}
-.hint-body strong { color: var(--text); }
-.hint:hover .hint-body, .hint:focus-visible .hint-body { opacity: 1; visibility: visible; }
-.file-summary { min-width: 0; gap: 11px; }
-.file-summary > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.file-summary strong, .file-summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-summary strong { font-size: 13px; }
-.file-summary span, .playback-time { color: var(--muted); font-size: 11px; }
-.file-glyph { flex: 0 0 auto; padding: 6px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--cyan) !important; font-size: 9px !important; letter-spacing: .08em; }
-.playback-time { flex: 0 0 auto; gap: 7px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.playback-time #currentTime { color: var(--text); }
-
-.toggle-control { gap: 11px; }
-.toggle-control input { position: absolute; opacity: 0; }
-.toggle-track { position: relative; flex: 0 0 auto; width: 39px; height: 22px; border-radius: 99px; background: #303a40; transition: background .2s; }
-.toggle-track span { position: absolute; width: 16px; height: 16px; top: 3px; left: 3px; border-radius: 50%; background: white; transition: transform .2s; }
-.toggle-control input:checked + .toggle-track { background: var(--accent); }
-.toggle-control input:checked + .toggle-track span { transform: translateX(17px); background: #071003; }
-.toggle-control > span:last-child { display: flex; flex-direction: column; gap: 2px; }
-.toggle-control strong { font-size: 12px; }
-.toggle-control small { color: var(--muted); font-size: 10px; }
-.rate-control { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; }
-.rate-control select { padding: 7px 28px 7px 9px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: var(--panel-2); }
-.ghost-button, .secondary-button { padding: 8px 11px; color: var(--text); background: transparent; }
-.ghost-button:hover:not(:disabled), .secondary-button:hover:not(:disabled) { border-color: var(--cyan); background: rgba(101,215,221,.06); }
-
-.record-count { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
-.metric-grid { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
-.metric-card { position: relative; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.018); }
-.metric-card > span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
-.metric-card strong { color: var(--cyan); font: 22px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.metric-card small { margin-left: 3px; color: var(--muted); font-size: 9px; }
-
-.telemetry-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
-  gap: 14px;
-  /* Scrolls inside the panel rather than growing the page. The old
-     min-height/max-height pair guessed the surrounding chrome in fixed pixels
-     and stopped being true the moment anything above or below it changed. */
-  flex: 1 1 auto;
-  overflow: auto;
-  min-height: 0;
-  scrollbar-color: #35434a transparent;
-}
-.telemetry-group { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.012); }
-.telemetry-group[data-group="sensor"], .telemetry-group[data-group="camera"] { grid-column: 1 / -1; }
-.telemetry-group > h3 { padding: 9px 11px; border-bottom: 1px solid var(--line); color: var(--accent); font-size: 10px; letter-spacing: .14em; }
-.telemetry-group-rows { padding: 0 8px; }
-.telemetry-row { display: grid; grid-template-columns: minmax(105px, .85fr) minmax(115px, 1fr); gap: 13px; padding: 11px 3px; border-bottom: 1px solid var(--line); }
-.telemetry-group[data-group="tag"] .telemetry-row,
-.telemetry-group[data-group="acft"] .telemetry-row { grid-template-columns: 28px minmax(0, 1fr); gap: 5px; }
-.telemetry-group[data-group="tag"] .telemetry-value strong,
-.telemetry-group[data-group="acft"] .telemetry-value strong { font-size: 12px; }
-.telemetry-group-rows .telemetry-row:last-child { border-bottom: 0; }
-.telemetry-label { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--muted); font-size: 11px; }
-.field-indicator { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: #46545b; }
-.telemetry-row.is-confirmed .field-indicator { background: var(--accent); box-shadow: 0 0 8px rgba(168,240,75,.55); }
-.telemetry-value { min-width: 0; text-align: right; }
-.telemetry-value strong { display: block; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; font: 15px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.telemetry-value small { display: block; overflow: hidden; margin-top: 3px; color: #64747d; text-overflow: ellipsis; white-space: nowrap; font: 9px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.telemetry-row.is-pending .telemetry-value strong { color: #77868e; }
-
-.panel-actions { flex: 0 0 auto; flex-wrap: wrap; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
-.panel-actions .secondary-button { flex: 1; font-size: 10px; }
-.text-button { margin-left: auto; border: 0; color: var(--muted); background: none; font-size: 10px; }
-.text-button:hover:not(:disabled) { color: var(--danger); }
-
-.toast { position: fixed; right: 24px; bottom: 24px; z-index: 20; max-width: 430px; padding: 12px 15px; border: 1px solid rgba(255,116,108,.4); border-radius: 8px; color: #ffe6e4; background: rgba(64,19,18,.94); box-shadow: 0 14px 50px rgba(0,0,0,.4); font-size: 12px; }
-.toast[hidden] { display: none; }
-
-@keyframes pulse { 50% { opacity: .32; transform: scale(.82); } }
-
-@media (max-width: 1040px) {
-  .workspace { grid-template-columns: 1fr; }
-  .telemetry-panel { min-height: auto; }
-  .telemetry-list { max-height: none; }
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  z-index: 10;
 }
 
-@media (max-width: 640px) {
-  .app-shell { padding: 0 12px 18px; }
-  .engine-status { max-width: 150px; }
-  .install-button { padding: 0 9px; font-size: 10px; }
-  .video-column, .telemetry-panel { padding: 14px; }
-  .file-button { min-height: 34px; padding: 0 11px; font-size: 11px; }
-  .drop-state { padding: 18px; }
-  .drop-state h3 { font-size: 15px; }
-  .drop-orbit { display: none; }
-  .source-strip { align-items: flex-start; flex-direction: column; }
-  .ai-model-controls { align-items: flex-start; flex-direction: column; }
-  .compact-toggle { margin-right: 0; }
-  .metric-card { padding: 9px; }
-  .metric-card strong { font-size: 18px; }
-  .telemetry-list { gap: 8px; }
-  .telemetry-group-rows { padding: 0 5px; }
-  .telemetry-group[data-group="tag"] .telemetry-value strong,
-  .telemetry-group[data-group="acft"] .telemetry-value strong { font-size: 10.5px; }
-}
+/* ---------------------------------------------------------------- motion */
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes flash { 0% { opacity: .85; } 100% { opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
 
-/* Below this height a single screen would leave the video too small to judge
-   box alignment, which is the whole point of the view. Fall back to scrolling. */
-@media (max-height: 760px) {
-  .workspace { height: auto; }
-  .video-stage { flex: 0 0 auto; aspect-ratio: 16 / 9; }
-  .telemetry-list { max-height: 60vh; }
+/* ---------------------------------------------------------------- narrow */
+
+/* One column below the width where the video and the panel stop both being
+   readable side by side. The page scrolls here; holding it to one screen on a
+   phone would shrink the stage past the point of seeing an OSD in it. */
+@media (max-width: 1080px) {
+  .app-shell { height: auto; padding: 12px; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .video-stage { min-height: 46vh; }
+  .telemetry-list { max-height: 420px; }
 }
 
-/* The enlarged capture, over the stage the video plays in.
-   Sized with object-fit: contain like the video itself, so the picture keeps
-   its shape and the OSD stays legible whatever the column width is. */
-.shot-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(2,3,4,.94);
-  border-radius: 9px;
+@media (max-width: 620px) {
+  .source-bar, .action-bar { flex-wrap: wrap; }
+  .playback-time { margin-left: 0; }
+  .capture-button, .line-button { flex: 1 1 auto; }
+  /* Stacked rather than wrapped: the file name and the note about it are two
+     sentences, and wrapping them into each other reads as one. */
+  .source-line { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .source-line span { max-width: 100%; }
+  .topbar { flex-wrap: wrap; gap: 8px; }
 }
-.shot-overlay[hidden] { display: none; }
-.shot-overlay img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  cursor: default;
-}
-.shot-overlay-bar {
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 10px;
-  border-radius: 7px;
-  background: rgba(4,8,10,.82);
-  font-size: 12px;
-  color: var(--muted, #98a4ad);
-}
-
-.shot-preview img { cursor: zoom-in; }
-.shot-select-actions { display: inline-flex; gap: 12px; align-items: center; }
-.link-button.is-danger { color: #f5a3a3; }
-.link-button.is-danger:disabled { color: var(--muted, #98a4ad); }

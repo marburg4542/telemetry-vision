@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#070b0e" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#ffffff" />
     <meta name="application-name" content="Telemetry OCR" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Telemetry OCR — Flight Data Lab</title>
     <meta
       name="description"
@@ -23,38 +23,45 @@
   </head>
   <body>
     <div class="app-shell">
+      <!-- One bar for the two things that are true of the whole page: whether
+           the OCR engine is up, and whether this can be installed. Both used to
+           sit inside the capture panel, where they read as properties of the
+           captures rather than of the server. -->
+      <header class="topbar">
+        <h1>Telemetry OCR</h1>
+        <div class="topbar-meta">
+          <div class="engine-status is-loading" id="engineStatus" role="status" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="engineStatusText">กำลังเตรียม OCR</span>
+          </div>
+          <button class="install-button" id="installAppButton" type="button" hidden>
+            ติดตั้งแอป
+          </button>
+        </div>
+      </header>
+
       <main class="workspace">
         <section class="video-column" aria-label="วิดีโอต้นฉบับ">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">SOURCE VIDEO</p>
-              <h2>วิดีโอต้นฉบับ</h2>
-            </div>
-            <div class="source-picker">
-              <label class="stream-field" for="streamUrl">
-                <span class="visually-hidden">RTSP URL</span>
-                <input
-                  id="streamUrl"
-                  type="url"
-                  inputmode="url"
-                  spellcheck="false"
-                  placeholder="rtsp://host:port/path"
-                  aria-label="RTSP URL"
-                />
-              </label>
-              <button class="ghost-button" id="streamButton" type="button">เปิดสตรีม</button>
-              <button class="capture-button" id="captureButton" type="button" disabled>
-                <span class="capture-dot" aria-hidden="true"></span>
-                <span id="captureButtonText">Capture</span>
-              </button>
-              <button class="line-button" id="lineSendButton" type="button" disabled>
-                <span id="lineSendButtonText">ส่งเข้า LINE</span>
-              </button>
-              <label class="file-button" for="videoInput">
-                <span>เลือกวิดีโอ</span>
-                <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
-              </label>
-            </div>
+          <!-- Where the video comes from. Two ways in, side by side, because
+               neither is the default: a file for checking a recording, a stream
+               for watching one. -->
+          <div class="source-bar">
+            <label class="stream-field" for="streamUrl">
+              <span class="visually-hidden">RTSP URL</span>
+              <input
+                id="streamUrl"
+                type="url"
+                inputmode="url"
+                spellcheck="false"
+                placeholder="rtsp://host:port/path"
+                aria-label="RTSP URL"
+              />
+            </label>
+            <button class="ghost-button" id="streamButton" type="button">เปิดสตรีม</button>
+            <label class="file-button" for="videoInput">
+              <span>เลือกวิดีโอ</span>
+              <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
+            </label>
           </div>
 
           <div class="video-stage" id="videoStage">
@@ -65,13 +72,11 @@
             <img id="streamImage" alt="ภาพสดจากสตรีม" hidden />
             <canvas id="detectionOverlay" class="detection-overlay" aria-hidden="true"></canvas>
             <div class="drop-state" id="dropState">
-              <div class="drop-orbit" aria-hidden="true"><span></span></div>
-              <h3>เลือกไฟล์เที่ยวบินเพื่อเริ่มทดสอบ</h3>
-              <p>รองรับไฟล์วิดีโอที่ browser เล่นได้ เช่น MP4, MOV และ WebM</p>
+              <h3>เลือกไฟล์เที่ยวบินเพื่อเริ่ม</h3>
+              <p>ลากวางไฟล์ลงตรงนี้ หรือกดปุ่มด้านล่าง — MP4, MOV, WebM</p>
               <button class="primary-button" id="chooseVideoButton" type="button">
-                Browse from Explorer
+                เลือกไฟล์วิดีโอ
               </button>
-              <small>หรือวางไฟล์วิดีโอลงในพื้นที่นี้</small>
             </div>
             <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
             <div class="stream-badge" id="streamBadge" hidden>
@@ -92,83 +97,20 @@
             </div>
           </div>
 
-          <section class="ai-model-panel" aria-labelledby="aiModelHeading">
-            <div class="ai-model-heading">
-              <div>
-                <p class="eyebrow">AI ANNOTATION</p>
-                <h3 id="aiModelHeading">Ultralytics YOLO model</h3>
-              </div>
-              <div class="ai-model-actions">
-                <span class="hint" tabindex="0" role="note" aria-describedby="modelHint">
-                  <span class="hint-icon" aria-hidden="true">?</span>
-                  <span class="hint-body" id="modelHint" role="tooltip">
-                    โหลดเฉพาะไฟล์ <strong>.pt</strong> ที่เชื่อถือได้เท่านั้น checkpoint ของ PyTorch
-                    รันโค้ดได้ตอนโหลด โมเดลถูกเก็บชั่วคราวและลบเมื่อปิด OCR server
-                  </span>
-                </span>
-                <label class="model-file-button" for="modelInput">
-                  Browse .pt
-                  <input id="modelInput" type="file" accept=".pt,application/octet-stream" />
-                </label>
-              </div>
-            </div>
-            <div class="ai-model-controls">
-              <label class="toggle-control compact-toggle">
-                <input id="detectionToggle" type="checkbox" checked disabled />
-                <span class="toggle-track"><span></span></span>
-                <span>
-                  <strong>Bounding boxes</strong>
-                  <small id="modelName">ยังไม่ได้เลือกโมเดล</small>
-                </span>
-              </label>
-              <label class="rate-control" for="detectionRate">
-                <span>Frame submit</span>
-                <select id="detectionRate" disabled>
-                  <option value="auto" selected>Auto</option>
-                  <option value="5">5 Hz</option>
-                  <option value="10">10 Hz</option>
-                  <option value="15">15 Hz</option>
-                  <option value="20">20 Hz</option>
-                </select>
-              </label>
-              <label class="confidence-control" for="modelConfidence">
-                <span>Confidence</span>
-                <input id="modelConfidence" type="number" value="0.45" min="0.05" max="1" step="0.05" disabled />
-              </label>
-              <label class="rate-control" for="modelImageSize">
-                <span>Image size</span>
-                <select id="modelImageSize" disabled>
-                  <option value="416" selected>416 px</option>
-                  <option value="640">640 px</option>
-                  <option value="960">960 px</option>
-                </select>
-              </label>
-              <label class="check-control" for="trackIdToggle" title="เลขประจำตัวที่ tracker ใช้ไล่ตามวัตถุคันเดิมข้ามเฟรม; ถ้าเลขกระโดดแปลว่า tracker หลุด">
-                <input id="trackIdToggle" type="checkbox" disabled />
-                <span>Track ID</span>
-              </label>
-              <button class="ghost-button" id="restartWorkerButton" type="button" hidden>Restart worker</button>
-              <button class="ghost-button" id="clearModelButton" type="button" disabled>ล้างโมเดล</button>
-            </div>
-            <p class="model-status" id="modelStatus">เลือกไฟล์ `best.pt` เพื่อวาดกรอบตรวจจับทับวิดีโอ</p>
-            <div class="ai-runtime-metrics" aria-label="สถานะ Object Detection">
-              <span>Track <strong id="detectionFps">0.0</strong> FPS</span>
-              <span>Inference <strong id="detectionLatency">—</strong> ms</span>
-              <span>Lag <strong id="detectionLag">—</strong> ms</span>
-              <span>Capture <strong id="detectionCapture">—</strong> ms</span>
-              <span>Wait <strong id="detectionHarvest">—</strong> ms</span>
-              <span>Dropped <strong id="detectionDropped">0</strong></span>
-            </div>
-          </section>
-
-          <div class="source-strip">
-            <div class="file-summary">
-              <span class="file-glyph" aria-hidden="true">VID</span>
-              <div>
-                <strong id="fileName">ยังไม่ได้เลือกไฟล์</strong>
-                <span id="fileDetails">วิดีโอจะเล่นจากเครื่องโดยตรง</span>
-              </div>
-            </div>
+          <!-- The two things this page is for, at the size that says so. -->
+          <div class="action-bar">
+            <button class="capture-button" id="captureButton" type="button" disabled>
+              <span class="capture-dot" aria-hidden="true"></span>
+              <span id="captureButtonText">Capture</span>
+            </button>
+            <button class="line-button" id="lineSendButton" type="button" disabled>
+              <span id="lineSendButtonText">ส่งเข้า LINE</span>
+            </button>
+            <!-- Beside the button, not on it. The allowance is a standing fact
+                 about the account, and putting it in the label made it read as
+                 part of the action -- as though the number were how many sends
+                 this press was worth, or a daily count. It is the month's. -->
+            <span class="line-quota" id="lineQuotaLabel" hidden></span>
             <div class="playback-time">
               <span id="currentTime">00:00.000</span>
               <span class="time-separator">/</span>
@@ -179,33 +121,104 @@
                  runs on a captured frame, on request. A switch that stays on
                  screen after the thing it switches has been removed is worse
                  than no switch, because it looks like it still does something. -->
-            <button class="ghost-button" id="resetButton" type="button" disabled>Reset session</button>
-            <span class="hint" tabindex="0" role="note" aria-describedby="privacyHint">
-              <span class="hint-icon" aria-hidden="true">LOCAL</span>
-              <span class="hint-body" id="privacyHint" role="tooltip">
-                <strong>Local processing</strong> ไฟล์เต็มไม่ถูกอัปโหลด — browser ส่งเฉพาะภาพบริเวณ ROI
-                ของเฟรมที่กำลังเล่นไปยัง OCR server ในเครื่อง
-              </span>
-            </span>
+            <button class="ghost-button" id="resetButton" type="button" disabled>Reset</button>
           </div>
+
+          <p class="source-line">
+            <strong id="fileName">ยังไม่ได้เลือกไฟล์</strong>
+            <span id="fileDetails">วิดีโอเล่นจากเครื่องโดยตรง ไฟล์เต็มไม่ถูกอัปโหลด</span>
+          </p>
+
+          <!-- Collapsed, because none of it is needed to capture a frame. It is
+               how the detector is configured and how it is performing, which
+               matters when something is wrong and is noise the rest of the
+               time. The summary carries the one line worth seeing at a glance. -->
+          <details class="model-panel" id="modelPanel">
+            <summary>
+              <span class="model-summary-title">AI annotation</span>
+              <small id="modelName">ยังไม่ได้เลือกโมเดล</small>
+            </summary>
+
+            <div class="model-body">
+              <div class="model-row">
+                <label class="toggle-control">
+                  <input id="detectionToggle" type="checkbox" checked disabled />
+                  <span class="toggle-track"><span></span></span>
+                  <span>แสดงกรอบตรวจจับ</span>
+                </label>
+                <label class="model-file-button" for="modelInput">
+                  เลือกไฟล์ .pt
+                  <input id="modelInput" type="file" accept=".pt,application/octet-stream" />
+                </label>
+                <button class="ghost-button" id="restartWorkerButton" type="button" hidden>
+                  Restart worker
+                </button>
+                <button class="ghost-button" id="clearModelButton" type="button" disabled>
+                  ล้างโมเดล
+                </button>
+              </div>
+
+              <div class="model-row model-settings">
+                <label class="field-control" for="detectionRate">
+                  <span>Frame submit</span>
+                  <select id="detectionRate" disabled>
+                    <option value="auto" selected>Auto</option>
+                    <option value="5">5 Hz</option>
+                    <option value="10">10 Hz</option>
+                    <option value="15">15 Hz</option>
+                    <option value="20">20 Hz</option>
+                  </select>
+                </label>
+                <label class="field-control" for="modelConfidence">
+                  <span>Confidence</span>
+                  <input
+                    id="modelConfidence" type="number" value="0.45"
+                    min="0.05" max="1" step="0.05" disabled
+                  />
+                </label>
+                <label class="field-control" for="modelImageSize">
+                  <span>Image size</span>
+                  <select id="modelImageSize" disabled>
+                    <option value="416" selected>416 px</option>
+                    <option value="640">640 px</option>
+                    <option value="960">960 px</option>
+                  </select>
+                </label>
+                <label
+                  class="check-control" for="trackIdToggle"
+                  title="เลขที่ tracker ใช้ไล่ตามวัตถุคันเดิมข้ามเฟรม ถ้าเลขกระโดดแปลว่า tracker หลุด"
+                >
+                  <input id="trackIdToggle" type="checkbox" disabled />
+                  <span>Track ID</span>
+                </label>
+              </div>
+
+              <p class="model-status" id="modelStatus">
+                เลือกไฟล์ <code>best.pt</code> เพื่อวาดกรอบตรวจจับทับวิดีโอ
+              </p>
+              <!-- Kept in view rather than behind a tooltip: a .pt is a pickle
+                   and loading one runs code. That is not a footnote. -->
+              <p class="model-warning">
+                โหลดเฉพาะไฟล์ <strong>.pt</strong> ที่เชื่อถือได้ — checkpoint ของ PyTorch
+                รันโค้ดได้ตอนโหลด ไฟล์ถูกเก็บชั่วคราวและลบเมื่อปิด server
+              </p>
+
+              <div class="metrics" aria-label="สถานะ Object Detection">
+                <span>Track <strong id="detectionFps">0.0</strong> FPS</span>
+                <span>Inference <strong id="detectionLatency">—</strong> ms</span>
+                <span>Lag <strong id="detectionLag">—</strong> ms</span>
+                <span>Capture <strong id="detectionCapture">—</strong> ms</span>
+                <span>Wait <strong id="detectionHarvest">—</strong> ms</span>
+                <span>Dropped <strong id="detectionDropped">0</strong></span>
+              </div>
+            </div>
+          </details>
         </section>
 
         <aside class="telemetry-panel" aria-label="ภาพที่ capture ไว้">
           <div class="panel-heading">
-            <div>
-              <p class="eyebrow">CAPTURE PREVIEW</p>
-              <h2>เลือกภาพก่อนส่ง</h2>
-            </div>
-            <div class="panel-heading-meta">
-              <button class="install-button" id="installAppButton" type="button" hidden>
-                ติดตั้งแอป
-              </button>
-              <div class="engine-status is-loading" id="engineStatus" role="status" aria-live="polite">
-                <span class="status-dot"></span>
-                <span id="engineStatusText">กำลังเตรียม OCR</span>
-              </div>
-              <span class="record-count" id="recordCount">0 ภาพ</span>
-            </div>
+            <h2>ภาพที่เก็บไว้</h2>
+            <span class="record-count" id="recordCount">0 ภาพ</span>
           </div>
 
           <!-- What the captures are doing, in the panel rather than in a
@@ -260,12 +273,12 @@
 
           <div class="panel-actions">
             <button class="secondary-button" id="downloadJsonButton" type="button" disabled>
-              Download JSONL
+              JSONL
             </button>
             <button class="secondary-button" id="downloadCsvButton" type="button" disabled>
-              Download CSV
+              CSV
             </button>
-            <button class="text-button" id="clearLogButton" type="button" disabled>Clear log</button>
+            <button class="text-button" id="clearLogButton" type="button" disabled>ล้าง log</button>
           </div>
         </aside>
       </main>

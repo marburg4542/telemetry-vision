@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "telemetry-ocr-pwa-v14";
+const CACHE_NAME = "telemetry-ocr-pwa-v16";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",

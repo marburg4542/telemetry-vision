@@ -17,6 +17,7 @@ const ui = {
   captureFlash: $("captureFlash"),
   lineSendButton: $("lineSendButton"),
   lineSendButtonText: $("lineSendButtonText"),
+  lineQuotaLabel: $("lineQuotaLabel"),
   streamBadgeText: $("streamBadgeText"),
   dropState: $("dropState"),
   detectionOverlay: $("detectionOverlay"),
@@ -155,6 +156,11 @@ const state = {
   captureHolding: false,
   captureTimer: null,
   lineConfigured: false,
+  lineTo: "",
+  lineHow: "",
+  // What LINE says is left of the month's allowance, or null when it could not
+  // be read. Refreshed on load and after every send.
+  lineQuota: null,
   lineSending: false,
   deleting: false,
   // The captured shots this session holds, and which one the panel is showing.
@@ -289,7 +295,15 @@ async function jsonFetch(url, options = {}) {
   const response = await fetch(url, { ...options, headers });
   let payload = {};
   try { payload = await response.json(); } catch (_) { /* response may be empty */ }
-  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    // Carried along rather than thrown away: a refusal says more than its
+    // message. A 429 from the quota guard brings the quota that caused it, and
+    // the button needs that to stop offering a send that cannot happen.
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
+  }
   return payload;
 }
 
@@ -1791,10 +1805,75 @@ const MAX_SEND_SELECTION = 4;
 function updateLineAvailability() {
   // Needs somewhere to send to and at least one ticked picture.
   const count = state.chosen.size || (state.selectedShot === null ? 0 : 1);
-  ui.lineSendButton.disabled = state.lineSending || !state.lineConfigured || count === 0;
+  const quota = state.lineQuota;
+  const exhausted = Boolean(quota && quota.exhausted);
+  ui.lineSendButton.disabled =
+    state.lineSending || !state.lineConfigured || count === 0 || exhausted;
+
+  // The button says what pressing it does, and nothing else. The allowance goes
+  // in the label beside it.
   ui.lineSendButtonText.textContent = state.lineSending
     ? "กำลังส่ง..."
     : count > 1 ? `ส่ง ${count} รูปเข้า LINE` : "ส่งเข้า LINE";
+
+  ui.lineSendButton.classList.toggle("is-warning", Boolean(quota && quota.warn) && !exhausted);
+  ui.lineSendButton.classList.toggle("is-exhausted", exhausted);
+  ui.lineSendButton.title = lineButtonTitle(count, quota);
+  renderQuotaLabel(quota, exhausted);
+}
+
+function renderQuotaLabel(quota, exhausted) {
+  const label = ui.lineQuotaLabel;
+  // Nothing to say when the quota could not be read: the tooltip carries the
+  // reason, and a blank number beside the button would look like zero.
+  if (!quota || quota.error) {
+    label.hidden = true;
+    return;
+  }
+  // "เดือนนี้" every time, never just a bare number. The allowance resets
+  // monthly and a count on its own reads as a daily one.
+  label.textContent = quota.unlimited
+    ? `เดือนนี้ส่งไป ${quota.used} · ไม่จำกัด`
+    : `เดือนนี้เหลือ ${quota.remaining}/${quota.limit}`;
+  label.classList.toggle("is-warning", Boolean(quota.warn) && !exhausted);
+  label.classList.toggle("is-exhausted", Boolean(exhausted));
+  label.hidden = false;
+}
+
+function lineButtonTitle(count, quota) {
+  if (!state.lineConfigured) return state.lineHow || "ยังไม่ได้ตั้งค่า LINE";
+  const lines = [`ส่งไปยัง ${state.lineTo || "ปลายทางที่ตั้งไว้"}`];
+  if (quota && quota.error) {
+    lines.push(quota.error);
+  } else if (quota && quota.unlimited) {
+    lines.push(`ส่งไปแล้วเดือนนี้ ${quota.used} ข้อความ (แพ็กเกจไม่จำกัด)`);
+  } else if (quota && Number.isFinite(quota.remaining)) {
+    lines.push(`โควต้ารายเดือน ${quota.used}/${quota.limit} · เหลือ ${quota.remaining}`);
+    lines.push("นับรวมทั้งเดือน ไม่ใช่ต่อวัน และรีเซ็ตเมื่อขึ้นเดือนใหม่");
+    // Worth spelling out where the button is pressed: someone about to tick a
+    // fourth picture is reasonably worried it costs four.
+    lines.push("การส่ง 1 ครั้งนับเป็น 1 ข้อความ ไม่ว่าจะแนบกี่รูป");
+  }
+  if (count === 0) lines.push("เลือกภาพที่จะส่งก่อน");
+  return lines.join("\n");
+}
+
+function applyLineQuota(quota) {
+  if (!quota) return;
+  state.lineQuota = quota;
+  if (quota.exhausted) {
+    setCaptureStatus(
+      `โควต้า LINE ของเดือนนี้เต็มแล้ว (${quota.used}/${quota.limit} ข้อความ)`
+      + " จะได้โควต้าใหม่เมื่อขึ้นเดือนถัดไป",
+      true,
+    );
+  } else if (quota.warn) {
+    setCaptureStatus(
+      `โควต้า LINE เหลือ ${quota.remaining} ข้อความสำหรับทั้งเดือนนี้`,
+      true,
+    );
+  }
+  updateLineAvailability();
 }
 
 // ---------------------------------------------------------------------------
@@ -2088,15 +2167,20 @@ async function checkLineConfigured() {
   try {
     const status = await jsonFetch("/api/line/status");
     state.lineConfigured = Boolean(status.configured);
-    ui.lineSendButton.title = status.configured
-      ? `ส่งเฟรมล่าสุดไปยัง ${status.to}`
-      : status.how || "ยังไม่ได้ตั้งค่า LINE";
+    state.lineTo = status.to || "";
+    state.lineHow = status.how || "";
+    state.lineQuota = status.quota || null;
   } catch {
     // Not configured and not reachable look the same from here, and neither is
     // a reason to hold up the rest of the page.
     state.lineConfigured = false;
+    state.lineQuota = null;
   }
   updateLineAvailability();
+  // Said once on load when it is already low, rather than only at the press.
+  // Whoever is about to record a sortie should know before they start.
+  const quota = state.lineQuota;
+  if (quota && (quota.warn || quota.exhausted)) applyLineQuota(quota);
 }
 
 async function sendSelectedToLine() {
@@ -2120,14 +2204,23 @@ async function sendSelectedToLine() {
       + ` · ${result.characters} ตัวอักษร`,
     );
     if (result.share_error) setCaptureStatus(`ส่งแล้ว แต่: ${result.share_error}`, true);
+    // After the status line above, so a quota that has just crossed into the
+    // warning band is the last thing said rather than the first.
+    if (result.quota) state.lineQuota = result.quota;
+    if (result.quota && (result.quota.warn || result.quota.exhausted)) {
+      applyLineQuota(result.quota);
+    }
   } catch (error) {
     // The server passes LINE's own wording through, because a wrong token, a
     // wrong destination and an exhausted quota are fixed in three different
     // places and "ส่งไม่สำเร็จ" would hide which one happened.
     setCaptureStatus(`ส่งเข้า LINE ไม่สำเร็จ: ${error.message}`, true);
+    if (error.payload && error.payload.quota) state.lineQuota = error.payload.quota;
   } finally {
     state.lineSending = false;
-    ui.lineSendButtonText.textContent = "ส่งเข้า LINE";
+    // The button label is not restored here. updateLineAvailability owns it and
+    // has to run anyway to re-enable the button and repaint the quota beside it,
+    // so writing "ส่งเข้า LINE" first would only be overwritten a line later.
     updateLineAvailability();
   }
 }

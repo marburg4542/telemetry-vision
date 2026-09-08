@@ -29,6 +29,10 @@ jobs:
       # wrong: a box lands a few pixels out and nothing says why. node:test is
       # built in, so this needs no package manifest and no install step.
       - run: node --test tests/detection-math.test.js
+      # The seams between app.js, index.html and app.css. Nothing else notices
+      # when a redesign renames an id or styles an element that is not there:
+      # the page still loads and renders the wrong thing.
+      - run: node --test tests/web-shell.test.js
 
   lint:
     runs-on: ubuntu-latest
