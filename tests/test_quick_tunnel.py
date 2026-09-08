@@ -87,8 +87,9 @@ class MissingBinaryTests(unittest.TestCase):
             def poll(self) -> int:
                 return 0
 
-        tunnel._process = _Ended()  # type: ignore[assignment]
-        tunnel._read_output()
+        ended = _Ended()
+        tunnel._process = ended  # type: ignore[assignment]
+        tunnel._read_output(ended)  # type: ignore[arg-type]
         self.assertIsNone(tunnel.url)
         self.assertEqual(tunnel.status()["error"], "cloudflared exited")
 
@@ -183,10 +184,190 @@ class ReadinessTests(unittest.TestCase):
             def poll(self):
                 return 0
 
-        tunnel._process = _Ended()
-        tunnel._read_output()
+        ended = _Ended()
+        tunnel._process = ended
+        tunnel._read_output(ended)
         self.assertIsNone(tunnel.url)
         self.assertFalse(tunnel.status()["connected"])
+
+
+class _FakeProcess:
+    """Enough of Popen to drive start()/stop() without launching anything."""
+
+    def __init__(self, args: list[str], **kwargs: object) -> None:
+        self.args = args
+        self.stdout = iter(())
+        self.terminated = False
+        self.killed = False
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.returncode or 0
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+class RestartSafetyTests(unittest.TestCase):
+    """One object, one cloudflared.
+
+    The server asks for a tunnel whenever `url` is None, and `url` is None for
+    the whole window between a process being spawned and it registering a
+    connection. Starting a second one there replaced the handle, so stop() could
+    never reach the first: a public hostname went on answering after the share
+    server behind it was gone. Worse, the orphan's reader thread kept writing to
+    the same object, so when it finally died it cleared the *live* tunnel's
+    address -- and the send that followed had no URL to give LINE, fell back to
+    text only, and put a local Windows path in a phone's chat window.
+    """
+
+    def _tunnel(self, spawned: list[_FakeProcess]):
+        from telemetry_ocr.quick_tunnel import QuickTunnel
+
+        def _popen(args, **kwargs):
+            process = _FakeProcess(args, **kwargs)
+            spawned.append(process)
+            return process
+
+        patches = (
+            mock.patch("telemetry_ocr.quick_tunnel.find_cloudflared", return_value="cf.exe"),
+            mock.patch("telemetry_ocr.quick_tunnel.subprocess.Popen", _popen),
+        )
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        return QuickTunnel(8766)
+
+    def test_starting_again_while_one_runs_spawns_nothing(self) -> None:
+        spawned: list[_FakeProcess] = []
+        tunnel = self._tunnel(spawned)
+        tunnel.start(wait=False)
+        tunnel.start(wait=False)
+        tunnel.start(wait=False)
+        self.assertEqual(len(spawned), 1)
+        self.assertIs(tunnel._process, spawned[0])
+
+    def test_a_process_that_has_exited_is_replaced(self) -> None:
+        # The guard is about a *live* process. A tunnel that died has to be
+        # restartable, which is the whole reason the caller retries.
+        spawned: list[_FakeProcess] = []
+        tunnel = self._tunnel(spawned)
+        tunnel.start(wait=False)
+        spawned[0].returncode = 1
+        tunnel.start(wait=False)
+        self.assertEqual(len(spawned), 2)
+        self.assertIs(tunnel._process, spawned[1])
+
+    def test_stop_terminates_every_process_it_launched(self) -> None:
+        spawned: list[_FakeProcess] = []
+        tunnel = self._tunnel(spawned)
+        tunnel.start(wait=False)
+        # A process that exited on its own, then a replacement -- the sequence
+        # that used to leave the first handle unreachable.
+        spawned[0].returncode = None
+        tunnel._process = None  # simulate the handle having been lost
+        tunnel.start(wait=False)
+        self.assertEqual(len(spawned), 2)
+
+        tunnel.stop()
+        self.assertTrue(spawned[0].terminated, "the earlier cloudflared was left running")
+        self.assertTrue(spawned[1].terminated)
+
+    def test_a_new_process_does_not_inherit_the_previous_address(self) -> None:
+        spawned: list[_FakeProcess] = []
+        tunnel = self._tunnel(spawned)
+        tunnel.start(wait=False)
+        tunnel._consume("|  https://old-name.trycloudflare.com  |\n", spawned[0])
+        tunnel._consume("INF Registered tunnel connection connIndex=0\n", spawned[0])
+        self.assertEqual(tunnel.url, "https://old-name.trycloudflare.com")
+
+        spawned[0].returncode = 1
+        tunnel.start(wait=False)
+        # The replacement has not connected yet, so there is no address to give
+        # LINE. Reporting the dead one would produce a fetch of nothing.
+        self.assertIsNone(tunnel.url)
+
+
+class StaleReaderTests(unittest.TestCase):
+    """A reader thread outlives the process it was started for.
+
+    Everything it has to say about a process that has been replaced is stale,
+    and the object must not repeat any of it.
+    """
+
+    def _tunnel(self):
+        from telemetry_ocr.quick_tunnel import QuickTunnel
+
+        with mock.patch("telemetry_ocr.quick_tunnel.find_cloudflared", return_value=None):
+            return QuickTunnel(8766)
+
+    def test_a_dead_readers_exit_does_not_clear_the_live_address(self) -> None:
+        tunnel = self._tunnel()
+
+        class _Ended:
+            stdout = iter(())
+
+            def poll(self):
+                return 0
+
+        superseded = _Ended()
+        live = _Ended()
+        tunnel._process = live
+        tunnel._consume("|  https://live-one.trycloudflare.com  |\n", live)
+        tunnel._consume("INF Registered tunnel connection connIndex=0\n", live)
+        self.assertEqual(tunnel.url, "https://live-one.trycloudflare.com")
+
+        # The reader belonging to the process that was replaced reaches the end
+        # of its stream. It must say nothing about the tunnel that is up.
+        tunnel._read_output(superseded)
+        self.assertEqual(tunnel.url, "https://live-one.trycloudflare.com")
+        self.assertNotEqual(tunnel.status()["error"], "cloudflared exited")
+
+    def test_a_dead_readers_output_does_not_overwrite_the_live_address(self) -> None:
+        tunnel = self._tunnel()
+
+        class _Ended:
+            stdout = iter(())
+
+            def poll(self):
+                return 0
+
+        superseded = _Ended()
+        live = _Ended()
+        tunnel._process = live
+        tunnel._consume("|  https://live-one.trycloudflare.com  |\n", live)
+        tunnel._consume("INF Registered tunnel connection connIndex=0\n", live)
+
+        tunnel._consume("|  https://superseded.trycloudflare.com  |\n", superseded)
+        self.assertEqual(tunnel.url, "https://live-one.trycloudflare.com")
+
+    def test_the_owning_readers_exit_still_clears_the_address(self) -> None:
+        # The guard must not have disabled the behaviour it is guarding.
+        tunnel = self._tunnel()
+
+        class _Ended:
+            stdout = iter(())
+
+            def poll(self):
+                return 0
+
+        live = _Ended()
+        tunnel._process = live
+        tunnel._consume("|  https://live-one.trycloudflare.com  |\n", live)
+        tunnel._consume("INF Registered tunnel connection connIndex=0\n", live)
+
+        tunnel._read_output(live)
+        self.assertIsNone(tunnel.url)
+        self.assertEqual(tunnel.status()["error"], "cloudflared exited")
+
 
 if __name__ == "__main__":
     unittest.main()
