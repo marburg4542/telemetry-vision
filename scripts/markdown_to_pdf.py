@@ -19,7 +19,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from vision_lab.report import find_browser  # noqa: E402
+# Imported after the sys.path line above, which is what makes it importable at
+# all. It carries no suppression comment: E402 is already in pyproject's global
+# ignore list, so one would be unused and RUF100 fails the CI lint job over it.
+from vision_lab.report import find_browser
 
 # Ships with Windows and shapes Thai correctly; the rest are fallbacks for
 # anyone building this on another machine.
