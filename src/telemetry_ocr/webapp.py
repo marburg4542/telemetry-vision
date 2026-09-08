@@ -9,6 +9,7 @@ import webbrowser
 from collections.abc import Callable, Iterable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -17,6 +18,12 @@ from . import __version__
 from .config import AppConfig, clone_config
 from .detection_worker import DetectionFrame, DetectionWorker, ProcessDetectionWorker
 from .errors import DependencyError
+
+# line_client is imported lazily everywhere else in this file. These three are
+# the exception because the sharing helpers below are module-level functions run
+# on a worker thread, and because they are pure stdlib -- unlike the rest of that
+# module's surface, which is only ever reached from a request handler.
+from .line_client import ImageMessage, needs_smaller_preview, oversized_for_line
 from .ocr import Recognizer
 from .pipeline import FramePacket, TelemetryPipeline
 from .public_share import DEFAULT_SHARE_PORT, ShareServer, ShareStore
@@ -40,6 +47,16 @@ class DetectionState:
 _LOG = logging.getLogger(__name__)
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Where the server's own log goes. Beside the startup script's log rather than
+# in it: that file is the wrapper saying which build it chose, and this one is
+# the server saying what happened afterwards.
+DEFAULT_LOG_DIR = Path("output/logs")
+LOG_FILENAME = "ocr-web.log"
+# A day of INFO from a running server is a few hundred KB, so five files reach
+# back across several restarts while bounding the directory at 10 MB.
+_LOG_MAX_BYTES = 2 * 1024**2
+_LOG_BACKUPS = 4
 
 # A request carrying this header can never be a CORS-safelisted "simple" request,
 # so the browser must send a preflight the guard below can reject. Without it a
@@ -69,6 +86,10 @@ _CAPTURE_DETECT_ATTEMPT_S = 5.0
 # account's monthly quota, so a wedged client or a held button must not be able
 # to drain it; three seconds is far below anything a person does deliberately.
 _LINE_MIN_INTERVAL_S = 3.0
+# How long a quota reading is treated as current. The number changes only when
+# this server pushes, and a send updates the cache itself, so this is really the
+# window in which a send from somewhere else goes unnoticed.
+_LINE_QUOTA_TTL_S = 300.0
 
 # How often the supervisor re-checks a configured stream. Long enough that an
 # unreachable camera costs one connection attempt every half minute rather than
@@ -259,6 +280,25 @@ def create_app(
     # When the last LINE push went out, so the rate limit survives across
     # requests without being stored on the frozen Application.
     line_state: dict[str, float] = {"last_sent": 0.0}
+    # The month's allowance, cached. Two HTTP calls to LINE, and the number
+    # moves only when this server sends something, so asking on every status
+    # poll would spend more requests on watching the quota than on using it.
+    line_quota_state: dict[str, Any] = {"at": 0.0, "quota": None}
+
+    async def line_quota(config: Any, *, force: bool = False) -> Any:
+        from .line_client import fetch_quota
+
+        cached = line_quota_state["quota"]
+        fresh = time.monotonic() - float(line_quota_state["at"]) < _LINE_QUOTA_TTL_S
+        # A cached failure is not worth keeping: whatever was wrong may have been
+        # fixed, and the retry costs one request.
+        if cached is not None and fresh and not force and not cached.error:
+            return cached
+        quota = await fetch_quota(config)
+        line_quota_state["quota"] = quota
+        line_quota_state["at"] = time.monotonic()
+        return quota
+
     # Tokens for images LINE is allowed to fetch. Created only when a send needs
     # one, and expiring on their own.
     share_store = ShareStore(Path(stream_output_dir) / "sessions")
@@ -1358,6 +1398,9 @@ def create_app(
                 "quick_tunnel": (
                     share_state["tunnel"].status() if share_state["tunnel"] else None
                 ),
+                # What is left of the month. Cached, so a reload does not spend
+                # two requests on LINE every time the page opens.
+                "quota": (await line_quota(config)).as_dict(),
             }
         )
 
@@ -1451,6 +1494,23 @@ def create_app(
                 },
                 status=429,
             )
+
+        # Refused here rather than at LINE. The push would come back 429 having
+        # spent nothing, but the operator would have taken a shot and pressed
+        # send before finding out, and LINE's own wording does not say when the
+        # allowance comes back.
+        quota = await line_quota(config)
+        if quota.exhausted:
+            return web.json_response(
+                {
+                    "error": (
+                        f"โควต้าเดือนนี้เต็มแล้ว ({quota.used}/{quota.limit} ข้อความ) "
+                        "รอเดือนถัดไปหรืออัปเกรดแพ็กเกจของ OA"
+                    ),
+                    "quota": quota.as_dict(),
+                },
+                status=429,
+            )
         line_state["last_sent"] = now
 
         text = format_capture_digest(
@@ -1459,7 +1519,7 @@ def create_app(
 
         # Images only when a public base URL is configured. Without one there is
         # nowhere LINE could fetch from, and the message goes as text.
-        images: list[str] = []
+        images: list[ImageMessage] = []
         share_error = ""
         base_url = config.public_base_url
         if not base_url and quick_tunnel:
@@ -1471,9 +1531,13 @@ def create_app(
         if base_url:
             try:
                 await ensure_share_server()
-                images = await asyncio.to_thread(
+                images, notes = await asyncio.to_thread(
                     _share_images, share_store, session, shots, base_url
                 )
+                # A frame LINE would refuse is not a reason to withhold the
+                # telemetry, but it is a reason to say which frame and why.
+                if notes:
+                    share_error = " · ".join(notes)
                 # Fetch it ourselves before LINE does.
                 #
                 # A tunnel process that is still alive is not the same as a
@@ -1483,7 +1547,7 @@ def create_app(
                 # nothing, and shows a broken picture that no retry ever fixes.
                 # A fresh tunnel also needs a moment to propagate before its
                 # first request succeeds, which this waits out.
-                if images and not await _reachable(images[0]):
+                if images and not await _reachable(images[0].original):
                     if quick_tunnel:
                         _LOG.warning("Public URL unreachable; restarting the tunnel")
                         tunnel = share_state["tunnel"]
@@ -1491,14 +1555,12 @@ def create_app(
                             await asyncio.to_thread(tunnel.stop)
                         share_state["tunnel"] = None
                         retry_url = await ensure_quick_tunnel()
-                        images = (
-                            await asyncio.to_thread(
+                        images = []
+                        if retry_url:
+                            images, notes = await asyncio.to_thread(
                                 _share_images, share_store, session, shots, retry_url
                             )
-                            if retry_url
-                            else []
-                        )
-                        if images and not await _reachable(images[0]):
+                        if images and not await _reachable(images[0].original):
                             images = []
                     else:
                         images = []
@@ -1513,8 +1575,15 @@ def create_app(
                 share_error = str(exc)
 
         result = await push_capture(config, text, images)
+        if result["ok"]:
+            # One destination, so one message off the allowance however many
+            # pictures went with it. Applied locally rather than re-read: the
+            # number is known, and the send is already slow enough.
+            quota = quota.spend()
+            line_quota_state["quota"] = quota
         payload = {
             **result,
+            "quota": quota.as_dict(),
             "session": name,
             # The first, kept for callers that send one frame; the list is what
             # actually went.
@@ -1573,6 +1642,58 @@ def create_app(
     return app
 
 
+def configure_logging(log_dir: Path | str | None = DEFAULT_LOG_DIR) -> Path | None:
+    """Send the server's log to a file as well as to stderr.
+
+    The scheduled task runs this hidden, which means the process has no console
+    at all and everything written to stderr is discarded. Configuring a stream
+    handler and calling it a log was the bug: the only record of a tunnel that
+    would not connect, a public URL that answered 404 or a LINE push that was
+    refused went nowhere, so the operator saw a message arrive without its
+    picture and had no way to find out why.
+
+    Returns the file being written, or None when only stderr is available. A
+    directory that cannot be created is not a reason to refuse to serve, so it
+    degrades to stderr and says so rather than raising.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    path: Path | None = None
+    if log_dir is not None:
+        try:
+            directory = Path(log_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            candidate = directory / LOG_FILENAME
+            handlers.append(
+                RotatingFileHandler(
+                    candidate,
+                    maxBytes=_LOG_MAX_BYTES,
+                    backupCount=_LOG_BACKUPS,
+                    encoding="utf-8",
+                )
+            )
+            path = candidate
+        except OSError as exc:
+            # Reported through the stream handler installed below, so it is at
+            # least visible to someone running the server from a terminal.
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s %(levelname)s %(name)s %(message)s",
+                handlers=[logging.StreamHandler()],
+                force=True,
+            )
+            _LOG.warning("Could not open a log file under %s: %s", log_dir, exc)
+            return None
+    # force=True because a caller may already have configured the root logger,
+    # and basicConfig is otherwise a no-op that would leave the file unwritten.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+    return path
+
+
 def run_web_app(
     config: AppConfig,
     recognizer: Recognizer,
@@ -1584,6 +1705,7 @@ def run_web_app(
     share_port: int = DEFAULT_SHARE_PORT,
     quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
+    log_dir: Path | str | None = DEFAULT_LOG_DIR,
 ) -> None:
     try:
         from aiohttp import web
@@ -1591,12 +1713,7 @@ def run_web_app(
         raise DependencyError(
             "The web UI requires aiohttp; install the project with `pip install -e .[web]`."
         ) from exc
-    # The scheduled task runs this hidden, so refusals and 500s need somewhere
-    # to go besides a dropped stderr.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    log_path = configure_logging(log_dir)
     app = create_app(
         config,
         recognizer,
@@ -1614,7 +1731,21 @@ def run_web_app(
 
         app.on_startup.append(launch_browser)
     print(f"Telemetry OCR web UI: {url}")
-    web.run_app(app, host=host, port=port, print=None)
+    # Printed rather than only logged: when the server is started by hand this
+    # is where to look after it has been left running hidden, and the operator
+    # should not have to read the source to find out where that is.
+    print(f"Log: {log_path}" if log_path else "Log: stderr only (no log file)")
+    _LOG.info("Telemetry OCR %s serving on %s (quick_tunnel=%s)", __version__, url, quick_tunnel)
+    # access_log=None, and it matters now that the log is a file.
+    #
+    # aiohttp logs every request at INFO by default. That was invisible while
+    # this went to a stderr nobody read; against a rotating file it is a flood.
+    # The page long-polls /api/detection/result about once a second, so the
+    # first day of this wrote 3,604 access lines and one line about anything
+    # else, and rotated every 29 minutes -- a tunnel that failed an hour ago was
+    # already gone. This is a loopback server with one user; who fetched what is
+    # not the question the log exists to answer.
+    web.run_app(app, host=host, port=port, print=None, access_log=None)
 
 
 async def _reachable(
@@ -1715,22 +1846,102 @@ def _shot_stage(shot: Any) -> str:
     return "ready"
 
 
-def _share_images(store: Any, session: Any, shots: Any, base_url: str) -> list[str]:
-    """Publish the pictures for these shots and return their URLs, in order.
+# What a LINE preview is downscaled to when the full frame is too heavy to be
+# one. Wide enough to make out the scene in a chat bubble, far enough under the
+# 1 MB ceiling that a busy frame cannot creep back over it.
+_LINE_PREVIEW_WIDTH = 1024
+_LINE_PREVIEW_QUALITY = 80
+
+
+def _line_preview_of(path: Path, cache_dir: Path) -> Path | None:
+    """A copy of that frame small enough to be its own preview, or None.
+
+    Kept beside the thumbnails rather than in `frames/`, for the reason given on
+    _thumbnail_of: the next frame index is worked out by scanning that directory
+    and anything else living there corrupts the count.
+    """
+    try:
+        import cv2
+    except ImportError:  # pragma: no cover - OpenCV ships with the app
+        return None
+    preview = cache_dir / f"{path.stem}.line{path.suffix}"
+    if preview.is_file() and preview.stat().st_mtime >= path.stat().st_mtime:
+        return preview
+    image = cv2.imread(str(path))
+    if image is None:
+        return None
+    height, width = image.shape[:2]
+    if width > _LINE_PREVIEW_WIDTH:
+        scale = _LINE_PREVIEW_WIDTH / width
+        image = cv2.resize(
+            image,
+            (_LINE_PREVIEW_WIDTH, max(1, round(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    ok, buffer = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), _LINE_PREVIEW_QUALITY])
+    if not ok:
+        return None
+    data = buffer.tobytes()
+    if needs_smaller_preview(len(data)):
+        # The width alone was not enough. Rather than guess a second time, say
+        # so: a preview still over the ceiling would have the push refused, and
+        # sending the text without a picture is the better failure.
+        _LOG.warning("A downscaled preview of %s is still %d bytes", path.name, len(data))
+        return None
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    staging = preview.with_name(preview.name + ".part")
+    staging.write_bytes(data)
+    staging.replace(preview)
+    return preview
+
+
+def _share_images(
+    store: Any, session: Any, shots: Any, base_url: str
+) -> tuple[list[ImageMessage], list[str]]:
+    """Publish the pictures for these shots, and say what could not be sent.
 
     Only the annotated copy of each. Sending the original too put two pictures
     in the chat that are identical apart from the boxes, and the reader could
     not tell which was which without opening both. The unmarked frame stays on
     disk, and the message names its path.
+
+    A frame usually stands in for its own preview. It is re-encoded only when it
+    is over LINE's preview ceiling, which is a tenth of the ceiling on the
+    picture itself and the one a full-resolution capture actually approaches.
     """
     from .public_share import public_url
 
-    urls = []
+    images: list[ImageMessage] = []
+    notes: list[str] = []
     for shot in shots:
         name = shot.annotated or shot.image
-        if name:
-            urls.append(public_url(base_url, store.mint(session.directory / name)))
-    return urls
+        if not name:
+            continue
+        path = session.directory / name
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            notes.append(f"{name}: {exc}")
+            continue
+
+        too_big = oversized_for_line(size)
+        if too_big:
+            notes.append(f"{name}: {too_big}")
+            continue
+
+        original = public_url(base_url, store.mint(path))
+        if not needs_smaller_preview(size):
+            images.append(ImageMessage.same(original))
+            continue
+
+        preview_path = _line_preview_of(path, session.directory / "thumbs")
+        if preview_path is None:
+            notes.append(f"{name}: ย่อรูปให้เล็กพอสำหรับ preview ของ LINE ไม่ได้")
+            continue
+        images.append(
+            ImageMessage(original, public_url(base_url, store.mint(preview_path)))
+        )
+    return images, notes
 
 
 def _encode_for_detection(frame: Any) -> bytes | None:

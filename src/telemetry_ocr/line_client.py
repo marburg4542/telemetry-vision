@@ -34,6 +34,12 @@ _LOG = logging.getLogger(__name__)
 
 PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
+# What is left of the month's allowance, and how much of it has gone. Two calls
+# because LINE reports the ceiling and the consumption separately; neither
+# includes the other.
+QUOTA_URL = "https://api.line.me/v2/bot/message/quota"
+CONSUMPTION_URL = "https://api.line.me/v2/bot/message/quota/consumption"
+
 # LINE rejects a text message above 5000 characters. A capture is nowhere near
 # it, but a truncation here is far better than a push rejected in full.
 MAX_TEXT = 5000
@@ -44,9 +50,12 @@ _ENV_TOKEN = "TELEMETRY_OCR_LINE_TOKEN"
 _ENV_TO = "TELEMETRY_OCR_LINE_TO"
 _ENV_PUBLIC_URL = "TELEMETRY_OCR_PUBLIC_URL"
 
-# LINE's own ceilings on an image message. The originals here are around half a
-# megabyte, so neither is close, but a push rejected in full for one oversized
-# picture is a poor way to find that out.
+# LINE's own ceilings on an image message, and the two are an order of magnitude
+# apart. The full-resolution captures on disk run 400-650 KB at q95, which is
+# comfortable against the first and uncomfortably close to the second: a busier
+# scene crosses it, and a push whose previewImageUrl is over is refused whole,
+# taking the telemetry with it. These were declared here and never read, so the
+# limit they describe was never actually applied to anything.
 MAX_IMAGE_BYTES = 10 * 1024**2
 MAX_PREVIEW_BYTES = 1024**2
 
@@ -102,6 +111,44 @@ _PREFIXES = {
 
 
 @dataclass(frozen=True, slots=True)
+class ImageMessage:
+    """One picture as LINE takes it: a full copy, and a preview of it.
+
+    Two URLs rather than one because the ceilings differ by a factor of ten.
+    They are usually the same file -- re-encoding a frame that already fits
+    would cost an encode and a second token for no gain -- and differ only when
+    the original is too heavy to stand in for its own preview.
+    """
+
+    original: str
+    preview: str
+
+    @classmethod
+    def same(cls, url: str) -> ImageMessage:
+        return cls(url, url)
+
+
+def oversized_for_line(size_bytes: int) -> str:
+    """Why LINE would refuse a picture this size, or "" when it would not.
+
+    Checked before the push rather than after: LINE answers an oversized image
+    with a 400 naming the property, the whole request is rejected including the
+    text, and the operator is left with no telemetry and a message about a URL.
+    """
+    if size_bytes > MAX_IMAGE_BYTES:
+        return (
+            f"รูปขนาด {size_bytes / 1024**2:.1f} MB เกินขีดจำกัด "
+            f"{MAX_IMAGE_BYTES // 1024**2} MB ของ LINE"
+        )
+    return ""
+
+
+def needs_smaller_preview(size_bytes: int) -> bool:
+    """Whether this file is too heavy to be its own preview."""
+    return size_bytes > MAX_PREVIEW_BYTES
+
+
+@dataclass(frozen=True, slots=True)
 class LineConfig:
     channel_access_token: str
     to: str
@@ -150,6 +197,124 @@ def load_line_config(path: str | Path | None = None) -> LineConfig | None:
     if not token or not to:
         return None
     return LineConfig(token, to, base)
+
+
+# Below this many messages left, say so before the operator finds out from a
+# 429 with a capture already taken. A tenth of the plan, and never fewer than
+# ten: on a 300-message plan that is 30, which is a week of ordinary use rather
+# than a warning that arrives too late to act on.
+QUOTA_WARN_FRACTION = 0.1
+QUOTA_WARN_FLOOR = 10
+
+
+def quota_warning_threshold(limit: int) -> int:
+    return max(QUOTA_WARN_FLOOR, round(limit * QUOTA_WARN_FRACTION))
+
+
+@dataclass(frozen=True, slots=True)
+class Quota:
+    """The month's allowance, as LINE counts it.
+
+    LINE counts a push by the number of destinations, not by the number of
+    message objects in it -- their own example is four message objects to a room
+    of five people counting as five. One capture from this app goes to one
+    destination, so it costs exactly 1 however many pictures ride along, which
+    is what makes batching them into a single request worth doing.
+
+    `limit` is None when the account is on an unmetered plan, which LINE reports
+    as type "none" with no value at all rather than as a large number.
+    """
+
+    limit: int | None = None
+    used: int = 0
+    error: str = ""
+
+    @property
+    def remaining(self) -> int | None:
+        return None if self.limit is None else max(0, self.limit - self.used)
+
+    @property
+    def warn(self) -> bool:
+        left = self.remaining
+        return (
+            left is not None
+            and self.limit is not None
+            and left <= quota_warning_threshold(self.limit)
+        )
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining == 0
+
+    def spend(self, messages: int = 1) -> Quota:
+        """The same quota with a send accounted for.
+
+        Applied locally instead of asking LINE again. The number is known --
+        one destination, one message -- and a second round trip inside the send
+        would make the button that is already slow slower still.
+        """
+        return Quota(self.limit, self.used + messages, self.error)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "limit": self.limit,
+            "used": self.used,
+            "remaining": self.remaining,
+            "unlimited": self.limit is None and not self.error,
+            "warn": self.warn,
+            "exhausted": self.exhausted,
+            "error": self.error,
+        }
+
+
+async def fetch_quota(config: LineConfig, *, timeout_s: float = 8.0) -> Quota:
+    """Ask LINE what is left this month.
+
+    A failure here is reported rather than raised. Not knowing the quota is a
+    worse page, not a broken one, and the send itself does not depend on it --
+    LINE is the thing that enforces the limit, and this only forecasts it.
+    """
+    try:
+        import aiohttp
+    except ImportError as exc:  # pragma: no cover - aiohttp ships with the web extra
+        raise DependencyError(
+            "Reading the LINE quota requires aiohttp; install the project with "
+            "`pip install -e .[web]`."
+        ) from exc
+
+    headers = {"Authorization": f"Bearer {config.channel_access_token}"}
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            limit: int | None = None
+            async with session.get(QUOTA_URL) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    _LOG.warning("LINE quota lookup failed: %s %s", response.status, body[:200])
+                    return Quota(error=_quota_error(response.status, body))
+                payload = await response.json()
+            # "none" is an unmetered plan and carries no value; treating a
+            # missing value as zero would report an account with no limit as an
+            # account with no messages left.
+            if str(payload.get("type", "")) != "none":
+                limit = int(payload.get("value") or 0)
+
+            async with session.get(CONSUMPTION_URL) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    _LOG.warning("LINE usage lookup failed: %s %s", response.status, body[:200])
+                    return Quota(limit=limit, error=_quota_error(response.status, body))
+                payload = await response.json()
+            return Quota(limit=limit, used=int(payload.get("totalUsage") or 0))
+    except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+        _LOG.info("Could not read the LINE quota: %r", exc)
+        return Quota(error=f"อ่านโควต้าไม่ได้: {exc or type(exc).__name__}")
+
+
+def _quota_error(status: int, body: str) -> str:
+    if status == 401:
+        return "โควต้า: token ไม่ถูกต้อง (401)"
+    return f"โควต้า: LINE ตอบ {status} {_line_error(body)}".strip()
 
 
 def describe_detections(summary: Any) -> str:
@@ -477,7 +642,7 @@ def format_capture_digest(
 async def push_capture(
     config: LineConfig,
     text: str,
-    image_urls: list[str] | None = None,
+    images: list[ImageMessage] | None = None,
     *,
     timeout_s: float = 15.0,
 ) -> dict[str, Any]:
@@ -489,12 +654,13 @@ async def push_capture(
     one piece rather than as a text that might be followed by images.
     """
     messages: list[dict[str, Any]] = [{"type": "text", "text": text}]
-    for url in (image_urls or [])[:MAX_IMAGES_PER_PUSH]:
-        # Preview and original are the same file. Producing a smaller preview
-        # would mean a second encode and a second token for a picture that is
-        # already well inside LINE's preview limit.
+    for image in (images or [])[:MAX_IMAGES_PER_PUSH]:
         messages.append(
-            {"type": "image", "originalContentUrl": url, "previewImageUrl": url}
+            {
+                "type": "image",
+                "originalContentUrl": image.original,
+                "previewImageUrl": image.preview,
+            }
         )
     return await _push(config, messages, timeout_s=timeout_s)
 
