@@ -180,6 +180,21 @@ class StreamService:
     def status(self) -> dict[str, Any]:
         with self._lock:
             summary = self._summary
+            # The summary only exists once the run has returned, which for a
+            # live stream is never. While one is up, the decoder's own counters
+            # are the live version of the same two numbers -- and reporting a
+            # flat zero for the whole life of a stream made a camera that
+            # reconnects every twenty seconds look perfectly healthy.
+            decoder = self._pipeline.decoder
+            if summary is not None:
+                reconnects: int = summary.reconnects
+                decode_failures: int = summary.decode_failures
+            elif decoder is not None:
+                reconnects = decoder.reconnects
+                decode_failures = decoder.decode_failures
+            else:
+                reconnects = 0
+                decode_failures = 0
             return {
                 "url": self.url,
                 "running": self.running,
@@ -190,8 +205,8 @@ class StreamService:
                 ),
                 "revision": self._snapshot.revision,
                 "fields": len(self._snapshot.fields),
-                "reconnects": 0 if summary is None else summary.reconnects,
-                "decode_failures": 0 if summary is None else summary.decode_failures,
+                "reconnects": reconnects,
+                "decode_failures": decode_failures,
                 "update_hz": None if summary is None else summary.update_hz,
                 "latency_mean_ms": None if summary is None else summary.latency_mean_ms,
             }

@@ -394,6 +394,15 @@ class TelemetryPipeline:
         self.stabilizer = TemporalStabilizer(config)
         self._time_anchors: dict[str, tuple[int, float]] = {}
         self._last_candidates: dict[str, _Candidate] = {}
+        # The decoder of the run in progress, or None between runs.
+        #
+        # Published because PipelineSummary only exists once run() has returned,
+        # and for a live stream that is never. Its reconnect and decode-failure
+        # counts are exactly the numbers an operator needs *while* the feed is
+        # up -- the difference between "OCR is struggling" and "the feed is
+        # unreliable" that the summary's own comment describes -- and the web UI
+        # was reporting a flat zero for both for the entire life of a stream.
+        self.decoder: VideoDecoder | None = None
 
     def run(
         self,
@@ -435,6 +444,7 @@ class TelemetryPipeline:
         decoder = VideoDecoder(
             video_path, frame_queue, runtime.ocr_hz, runtime.realtime, stop_event
         )
+        self.decoder = decoder
         writer = RecordWriter(jsonl_path, csv_path)
         latencies: list[float] = []
         processed = 0

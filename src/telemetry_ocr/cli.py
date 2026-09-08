@@ -338,16 +338,28 @@ def main(argv: list[str] | None = None) -> int:
                     iou=args.detect_iou,
                     image_size=args.detect_image_size,
                 )
-                # Started before the recognizer so a bad checkpoint fails before
-                # PaddleOCR spends time loading its own model.
-                sidecar.start()
-
-            recognizer = create_recognizer(config.runtime)
-            if is_stream_source(args.video):
-                print(f"Reading stream: {args.video}")
-                if args.max_seconds is None:
-                    print("Press Ctrl+C to stop.")
+            # Inside the try that owns close(), not before it.
+            #
+            # start() spawns the worker and opens the output file before it
+            # waits up to two minutes for the model to report ready, and it
+            # raises when that wait times out. Outside the try, that raise
+            # skipped close() -- so the YOLO child was left to multiprocessing's
+            # exit handler, which does terminate() then an unbounded join(). A
+            # child stuck in a slow CUDA init, which is the very case that
+            # caused the timeout, can sit through terminate() and hang the CLI
+            # at exit with nothing printed. stop()'s terminate-then-kill
+            # escalation exists for exactly that and was being bypassed.
             try:
+                if sidecar is not None:
+                    # Started before the recognizer so a bad checkpoint fails
+                    # before PaddleOCR spends time loading its own model.
+                    sidecar.start()
+
+                recognizer = create_recognizer(config.runtime)
+                if is_stream_source(args.video):
+                    print(f"Reading stream: {args.video}")
+                    if args.max_seconds is None:
+                        print("Press Ctrl+C to stop.")
                 summary = TelemetryPipeline(config, recognizer).run(
                     args.video,
                     args.jsonl,
