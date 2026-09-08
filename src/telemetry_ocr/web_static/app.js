@@ -102,7 +102,6 @@ const state = {
   objectUrl: null,
   file: null,
   generation: 0,
-  records: [],
   rowElements: new Map(),
   loopStarted: false,
   fallbackTimer: null,
@@ -643,11 +642,16 @@ function resetCurrentValues() {
 }
 
 function clearLog() {
-  state.records = [];
-  ui.recordCount.textContent = "0 records";
-  ui.downloadJsonButton.disabled = true;
-  ui.downloadCsvButton.disabled = true;
-  ui.clearLogButton.disabled = true;
+  // Clears the readings on screen, and only those.
+  //
+  // It used to empty state.records and disable the two download buttons, from
+  // when those buttons serialised that array. They export the captured shots
+  // now, so disabling them here claimed to have thrown away something that is
+  // still on disk -- and the next refreshShots re-enabled them a moment later
+  // anyway. It also wrote "0 records" into the element the shot count owns,
+  // which then said "0 records" until the next capture rewrote it as "N ภาพ".
+  resetCurrentValues();
+  ui.shotDetections.textContent = "";
 }
 
 function startFrameLoop() {
@@ -1517,6 +1521,24 @@ function leaveStreamMode() {
   ui.streamButton.textContent = "เปิดสตรีม";
   if (!state.file) ui.dropState.hidden = false;
   stopCaptureHold();
+
+  // Leaving a stream is a source change, exactly as entering one is.
+  //
+  // handleFile and enterStreamMode both do this; only this one did not, so
+  // stream -> stop -> back to the file posted the video's frames under the
+  // stream's source id. The server sees no change, never sets reset_tracker,
+  // and BoT-SORT carries identities from the camera straight onto the video --
+  // the failure the source/generation counters exist to prevent. The tracks
+  // were not cleared either, so the camera's last boxes kept being drawn over
+  // the video for as long as two unrelated clocks happened to agree.
+  resetDetectionTracker();
+  state.detectionSourceId = globalThis.crypto?.randomUUID?.()
+    || `file-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  ++state.detectionGeneration;
+  state.detectionSequence = 0;
+  state.detectionTracks.clear();
+  resetDetectionFrame();
+
   updateCaptureAvailability();
   drawDetections();
 }
@@ -1589,26 +1611,22 @@ function applyStreamTelemetry(payload) {
     state.streamClockMs = sourceTimeMs;
     state.streamClockWall = performance.now();
   }
-  const fields = payload.fields || {};
-  const records = Object.entries(fields).map(([fieldId, item]) => ({
-    field_id: fieldId,
-    value: item.value,
-    raw_text: item.raw_text,
-    confidence: item.confidence,
-    confirmed: item.confirmed,
-    preprocess_variant: item.preprocess_variant || "stream",
-    source_time_ms: sourceTimeMs,
-    frame_index: Number(payload.frame_index) || 0,
-    latency_ms: Number(payload.latency_ms) || 0,
-  }));
-  if (!records.length) return;
-  // Deliberately the same path a file takes, including the log and the download
-  // buttons: a stream is a recording too, it just has no end.
-  applyOcrResult({
-    latency_ms: Number(payload.latency_ms) || 0,
-    records,
-  });
-  ui.streamBadgeText.textContent = `LIVE · ${Math.round(sourceTimeMs / 1000)}s`;
+  // The reading itself is not carried any further from here, and that is not an
+  // oversight to fix by adding a sink.
+  //
+  // It used to be mapped into record shape and pushed onto state.records, which
+  // no function ever read -- not the telemetry rows, which are painted only
+  // from the selected shot, and not the downloads, which now export the shots.
+  // So it was an array growing to 200,000 entries on a long stream to be read
+  // by nobody. The server writes the real record to
+  // output/stream-telemetry.jsonl as it goes; this page is a viewer, as the
+  // stream section of the README says.
+  //
+  // What the poll is still for is the clock above and the capture button below:
+  // a stream that is publishing is a stream a frame can be captured from.
+  if (Object.keys(payload.fields || {}).length) {
+    ui.streamBadgeText.textContent = `LIVE · ${Math.round(sourceTimeMs / 1000)}s`;
+  }
 }
 
 
@@ -2239,11 +2257,6 @@ async function sendSelectedToLine() {
 
 // Kept for the downloadable log only. The panel it used to fill now shows a
 // chosen capture instead, because that is what gets sent.
-function applyOcrResult(payload) {
-  for (const record of payload.records) state.records.push(record);
-  if (state.records.length > 200000) state.records.splice(0, state.records.length - 200000);
-}
-
 function updateTelemetryRow(record) {
   const nodes = state.rowElements.get(record.field_id);
   if (!nodes) return;
@@ -2297,15 +2310,74 @@ function formatDms(value, degreeDigits, decimalPlaces) {
   return DetectionMath.formatDms(value, degreeDigits, decimalPlaces).text;
 }
 
+// One row per field per captured shot.
+//
+// These used to serialise state.records, which is only ever filled by the
+// stream's telemetry poll. In file mode -- load a video, hold Capture, press
+// Download -- it is empty, so the JSONL was a single newline and the CSV was a
+// header row, with the buttons enabled and nothing said. The buttons are
+// enabled from the number of shots, so the shots are what they have to export.
+//
+// The stream's own reading is not included and is not missing: the server
+// writes it to output/stream-telemetry.jsonl as it goes. This page is a viewer
+// there, and duplicating that file into the browser's downloads would leave two
+// records of one run that could disagree.
+const EXPORT_COLUMNS = [
+  "frame_index",
+  "captured_at",
+  "source_time_ms",
+  "field_id",
+  "value",
+  "raw_text",
+  "confidence",
+  "confirmed",
+];
+
+function exportRows() {
+  const rows = [];
+  // Oldest first. The strip shows newest first because that is where the eye
+  // is after a capture; a file is read from the top, in the order it happened.
+  const shots = [...state.shots].sort((a, b) => a.frame_index - b.frame_index);
+  for (const shot of shots) {
+    for (const record of shot.records || []) {
+      rows.push({
+        frame_index: shot.frame_index,
+        captured_at: shot.captured_at,
+        source_time_ms: shot.source_time_ms,
+        field_id: record.field_id,
+        value: record.value,
+        raw_text: record.raw_text,
+        confidence: record.confidence,
+        confirmed: record.confirmed,
+      });
+    }
+  }
+  return rows;
+}
+
 function downloadJsonl() {
-  const content = state.records.map((record) => JSON.stringify(record)).join("\n") + "\n";
-  downloadBlob(content, "application/x-ndjson", buildDownloadName("jsonl"));
+  const rows = exportRows();
+  if (!rows.length) {
+    setCaptureStatus("ยังไม่มีค่าที่อ่านได้จากภาพที่เก็บไว้ จึงไม่มีอะไรให้ดาวน์โหลด", true);
+    return;
+  }
+  downloadBlob(
+    rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+    "application/x-ndjson",
+    buildDownloadName("jsonl"),
+  );
 }
 
 function downloadCsv() {
-  const columns = ["source_time_ms", "frame_index", "field_id", "value", "raw_text", "confidence", "confirmed", "preprocess_variant", "latency_ms"];
-  const lines = [columns.join(",")];
-  for (const record of state.records) lines.push(columns.map((key) => csvCell(record[key])).join(","));
+  const rows = exportRows();
+  if (!rows.length) {
+    setCaptureStatus("ยังไม่มีค่าที่อ่านได้จากภาพที่เก็บไว้ จึงไม่มีอะไรให้ดาวน์โหลด", true);
+    return;
+  }
+  const lines = [EXPORT_COLUMNS.join(",")];
+  for (const row of rows) {
+    lines.push(EXPORT_COLUMNS.map((key) => csvCell(row[key])).join(","));
+  }
   downloadBlob(lines.join("\r\n") + "\r\n", "text/csv;charset=utf-8", buildDownloadName("csv"));
 }
 

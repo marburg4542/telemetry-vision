@@ -394,6 +394,10 @@ class TelemetryPipeline:
         self.stabilizer = TemporalStabilizer(config)
         self._time_anchors: dict[str, tuple[int, float]] = {}
         self._last_candidates: dict[str, _Candidate] = {}
+        # Frames actually recognised, which is what ocr_interval/ocr_phase are
+        # counted in. See _process_frame_locked for why the decoder's own frame
+        # index is the wrong counter for this.
+        self._ocr_turn = 0
         # The decoder of the run in progress, or None between runs.
         #
         # Published because PipelineSummary only exists once run() has returned,
@@ -585,6 +589,26 @@ class TelemetryPipeline:
             return self._process_frame_locked(packet)
 
     def _process_frame_locked(self, packet: FramePacket) -> tuple[list[TelemetryRecord], float]:
+        # Which turn this is, counted in frames actually recognised.
+        #
+        # ocr_interval/ocr_phase used to be tested against packet.frame_index,
+        # which the realtime decoder increments for every *grabbed* source
+        # frame, scheduled for OCR or not. Only a subset of those indices ever
+        # reach here, and which residues that subset covers depends on the
+        # fps/ocr_hz ratio: at 30 fps and ocr_hz 15 the step is 2, so
+        # frame_index % 4 is only ever 0 or 2 and a field configured with
+        # ocr_phase 1 or 3 gets its turn on no frame at all. It is recognised
+        # once, before _last_candidates has an entry to hold, and then
+        # republished from that same held candidate for the rest of the run --
+        # arriving at the stabilizer identically every tick, reaching quorum,
+        # and being reported as confirmed. A frozen altitude presented as live.
+        #
+        # The shipped ocr_hz of 10.1 gives a step near 3, which happens to cover
+        # every residue mod 4, so the config in the repository was not affected.
+        # Counting here rather than relying on that is what makes the setting
+        # mean what the README says: successive OCR frames, taken in turn.
+        turn = self._ocr_turn
+        self._ocr_turn += 1
         primary_images: list[Any] = []
         primary_indexes: list[int] = []
         candidates: list[_Candidate | None] = [None] * len(self.config.fields)
@@ -600,7 +624,7 @@ class TelemetryPipeline:
                 continue
             if (
                 item.ocr_interval > 1
-                and packet.frame_index % item.ocr_interval != item.ocr_phase
+                and turn % item.ocr_interval != item.ocr_phase
                 and item.field_id in self._last_candidates
             ):
                 previous = self._last_candidates[item.field_id]

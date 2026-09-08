@@ -346,6 +346,37 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await cleared.json())["loaded"])
         self.assertFalse(self.loaded_model_paths[0].exists())
 
+    async def test_a_cleared_model_stops_being_reported_as_present(self):
+        """The worker keeps the name on purpose; the payload must not repeat it.
+
+        stop() deliberately retains _filename so restart() has something to
+        reopen. The payload used to read `state.filename or worker filename`,
+        and after clearing, state.filename is None -- so the `or` fell through
+        to the name of the checkpoint that had just been deleted. The page then
+        showed it as loaded, offered "Restart worker", and that answered 409
+        forever because model_path really was gone. Reloading showed the same.
+        """
+        form = self.FormData()
+        form.add_field(
+            "model", b"fake", filename="best.pt", content_type="application/octet-stream"
+        )
+        loaded = await (await self.client.post("/api/detection/model", data=form)).json()
+        self.assertEqual(loaded["filename"], "best.pt")
+
+        cleared = await (await self.client.delete("/api/detection/model")).json()
+        self.assertIsNone(cleared["filename"], "the deleted checkpoint is still named")
+        self.assertFalse(cleared["loaded"])
+        self.assertEqual(cleared["size_bytes"], 0)
+
+        # And it stays gone on the next read, which is what a page reload does.
+        again = await (await self.client.get("/api/detection/model")).json()
+        self.assertIsNone(again["filename"])
+
+        # The button the stale name revealed leads nowhere, so the state that
+        # revealed it must not come back either.
+        restart = await self.client.post("/api/detection/restart")
+        self.assertEqual(restart.status, 409)
+
     async def _load_model_and_submit(self, source_id, generation, sequence):
         if not self.loaded_model_paths:
             form = self.FormData()

@@ -494,7 +494,23 @@ def create_app(
     def detection_status_payload() -> dict[str, Any]:
         state = app[detection_state_key]
         payload = state.worker.status()
-        payload["filename"] = state.filename or payload.get("filename")
+        # The app's record of the checkpoint is the authority, including when it
+        # says there is none.
+        #
+        # This was `state.filename or payload.get("filename")`, and the fallback
+        # fired exactly when it must not: stop() keeps the worker's _filename on
+        # purpose so restart() can use it, so after clearing a model the stale
+        # name won the `or` and the page went on showing the deleted checkpoint
+        # as loaded. That also revealed "Restart worker", which then answered
+        # 409 forever because model_path really was gone -- and a reload showed
+        # the same thing.
+        #
+        # The worker's own name still fills in while a model is loaded and the
+        # app happens not to know its name.
+        if state.model_path is None:
+            payload["filename"] = None
+        else:
+            payload["filename"] = state.filename or payload.get("filename")
         payload["size_bytes"] = state.size_bytes
         return payload
 
@@ -1547,7 +1563,7 @@ def create_app(
                 # nothing, and shows a broken picture that no retry ever fixes.
                 # A fresh tunnel also needs a moment to propagate before its
                 # first request succeeds, which this waits out.
-                if images and not await _reachable(images[0].original):
+                if images and not await _all_reachable(images):
                     if quick_tunnel:
                         _LOG.warning("Public URL unreachable; restarting the tunnel")
                         tunnel = share_state["tunnel"]
@@ -1557,17 +1573,23 @@ def create_app(
                         retry_url = await ensure_quick_tunnel()
                         images = []
                         if retry_url:
-                            images, notes = await asyncio.to_thread(
+                            images, retry_notes = await asyncio.to_thread(
                                 _share_images, share_store, session, shots, retry_url
                             )
-                        if images and not await _reachable(images[0].original):
+                            # The retry's own skip reasons, which were being
+                            # assigned to `notes` and then never read.
+                            notes = retry_notes
+                        if images and not await _all_reachable(images):
                             images = []
                     else:
                         images = []
                     if not images:
-                        share_error = (
-                            "ส่งข้อความอย่างเดียว: URL สาธารณะยังเข้าถึงไม่ได้"
-                        )
+                        # Kept alongside any per-frame reasons rather than over
+                        # them: a frame skipped for size and a tunnel that will
+                        # not answer are different problems with different
+                        # fixes, and reporting only the second hides the first.
+                        reasons = [*notes, "URL สาธารณะยังเข้าถึงไม่ได้"]
+                        share_error = "ส่งข้อความอย่างเดียว: " + " · ".join(reasons)
             except Exception as exc:
                 # A picture that cannot be published is not a reason to withhold
                 # the telemetry, which is the part someone is waiting for.
@@ -1748,8 +1770,39 @@ def run_web_app(
     web.run_app(app, host=host, port=port, print=None, access_log=None)
 
 
+async def _all_reachable(images: list[ImageMessage]) -> bool:
+    """Every URL LINE will be given, not just the first of them.
+
+    A send carries up to four pictures and two URLs each. Checking only
+    images[0] proved the tunnel was up and assumed the rest of the tokens were,
+    which they need not be -- a token evicted by the store's cap, a preview
+    written after the check, a file removed between minting and pushing. LINE
+    fetches each URL once, so one that fails is a picture permanently broken in
+    the chat with nothing said about it.
+
+    The first URL pays the tunnel's warm-up wait; the rest are asked once each,
+    because by then the hostname resolves and a second URL that does not answer
+    is a fact rather than a timing problem.
+    """
+    if not images:
+        return True
+    if not await _reachable(images[0].original):
+        return False
+    rest = [images[0].preview]
+    for image in images[1:]:
+        rest.append(image.original)
+        rest.append(image.preview)
+    for url in dict.fromkeys(rest):
+        if url == images[0].original:
+            continue
+        if not await _reachable(url, attempts=1, first_delay_s=0.0):
+            _LOG.warning("A shared image URL did not answer; sending text only")
+            return False
+    return True
+
+
 async def _reachable(
-    url: str, attempts: int = 8, delay_s: float = 4.0, first_delay_s: float = 5.0
+    url: str, attempts: int = 4, delay_s: float = 4.0, first_delay_s: float = 5.0
 ) -> bool:
     """Whether that URL actually returns the image, from outside this process.
 
@@ -1757,6 +1810,13 @@ async def _reachable(
     that has just been allocated does not resolve yet, and a failed lookup is
     negatively cached by the resolver -- so asking too early does not merely
     fail, it poisons the retries that follow.
+
+    Four attempts, not eight. At eight this was 113 seconds in the worst case,
+    the caller ran it twice around a tunnel restart, and each restart waits up
+    to 45 more -- so one press of Send could hold the request for five minutes
+    with the button stuck on "กำลังส่ง..." and no way out. A quick tunnel that
+    has not answered in the first 45 seconds is not about to; the retry with a
+    fresh tunnel is the real second chance, and it still gets its own four.
     """
     await asyncio.sleep(first_delay_s)
     try:

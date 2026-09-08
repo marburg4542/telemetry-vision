@@ -285,7 +285,12 @@ class ProcessDetectionWorker:
                     self._frame_error = None
 
 
-def put_latest(channel: Any, item: Any, deadline_s: float = 2.0) -> int:
+def put_latest(
+    channel: Any,
+    item: Any,
+    deadline_s: float = 2.0,
+    evictable: Callable[[Any], bool] | None = None,
+) -> int:
     """Put without blocking, replacing queued items and returning drop count.
 
     The deadline is not a nicety. The retry below exists for a queue that
@@ -295,6 +300,15 @@ def put_latest(channel: Any, item: Any, deadline_s: float = 2.0) -> int:
     Without a bound this spins at a thousand iterations a second forever — and
     stop() calls it, so an unbounded spin there hangs application shutdown and
     burns an executor thread permanently.
+
+    `evictable` says what may be thrown away to make room. Without it this made
+    room by taking the queue *head*, which is the oldest message and therefore
+    exactly where a queued `ready` or `frame_error` sits -- so a burst of
+    results could silently evict the message announcing that the model had
+    loaded, and the parent would sit in "loading" for the rest of the run with
+    a live process and no way to notice. When the head must not be dropped it
+    goes back and this item is discarded instead, which is the right way round:
+    a detection is worthless in a moment, a state change never arrives again.
     """
     dropped = 0
     expires_at = time.monotonic() + deadline_s
@@ -304,11 +318,23 @@ def put_latest(channel: Any, item: Any, deadline_s: float = 2.0) -> int:
             return dropped
         except queue.Full:
             try:
-                channel.get_nowait()
-                dropped += 1
-                continue
+                candidate = channel.get_nowait()
             except queue.Empty:
-                pass
+                candidate = None
+            if candidate is not None:
+                if evictable is None or evictable(candidate):
+                    dropped += 1
+                    continue
+                # Put back what must not be lost, and give up on this item. It
+                # goes to the tail rather than back to the head -- a Queue has
+                # no head-insert -- so a control message can end up behind a
+                # result it preceded. Arriving one message late is recoverable;
+                # never arriving is what this is here to prevent.
+                try:
+                    channel.put_nowait(candidate)
+                except (queue.Full, OSError, ValueError):
+                    _LOG.error("Lost a %s message making room", _kind_of(candidate))
+                return dropped + 1
             if time.monotonic() >= expires_at:
                 _LOG.warning("Gave up enqueuing after %.1fs; the queue never drained", deadline_s)
                 return dropped
@@ -316,6 +342,15 @@ def put_latest(channel: Any, item: Any, deadline_s: float = 2.0) -> int:
         except (OSError, ValueError):
             # The queue was closed underneath us, which stop() can do.
             return dropped
+
+
+def _kind_of(message: Any) -> str:
+    return str(message.get("kind", "?")) if isinstance(message, dict) else "?"
+
+
+def _is_result(message: Any) -> bool:
+    """Whether this message is one a newer one may replace."""
+    return _kind_of(message) == "result"
 
 
 def drain_queue(channel: Any) -> int:
@@ -337,7 +372,8 @@ def _publish(channel: Any, message: dict[str, Any]) -> None:
     for room instead of shoving something out of the way.
     """
     if message.get("kind") == "result":
-        put_latest(channel, message)
+        # Only another result may be evicted to make room for this one.
+        put_latest(channel, message, evictable=_is_result)
         return
     try:
         channel.put(message, timeout=2.0)

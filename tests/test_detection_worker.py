@@ -69,6 +69,56 @@ class DetectionWorkerQueueTests(unittest.TestCase):
         self.assertEqual(channel.qsize(), 1)
         self.assertEqual(channel.get_nowait()["sequence"], 2)
 
+    def test_a_result_never_evicts_a_state_change(self):
+        """_publish's docstring, made true.
+
+        Control messages were published with a blocking put so they would not
+        shove anything out -- but nothing stopped a result shoving *them* out.
+        put_latest made room by taking the queue head, which is the oldest
+        message and exactly where a queued `ready` sits. A burst of results
+        while the pump was paused for a start/restart could evict it, and the
+        parent then sat in "loading" for the rest of the run: the process is
+        alive so status() never flips to error, submit() refuses every frame,
+        and the page polls a status that will never change.
+        """
+        from telemetry_ocr.detection_worker import _is_result
+
+        channel = queue.Queue(maxsize=2)
+        channel.put_nowait({"kind": "ready", "metadata": {"classes": ["car"]}})
+        channel.put_nowait({"kind": "result", "sequence": 1})
+
+        # Full, and the head must survive. The incoming result yields instead.
+        dropped = put_latest(channel, {"kind": "result", "sequence": 2}, evictable=_is_result)
+        self.assertEqual(dropped, 1)
+        kinds = [channel.get_nowait()["kind"], channel.get_nowait()["kind"]]
+        # Survival, not position: a Queue has no head-insert, so a control
+        # message put back goes to the tail. Arriving late is recoverable;
+        # never arriving is not.
+        self.assertIn("ready", kinds, "the ready message was evicted")
+        self.assertTrue(channel.empty(), "the yielding result was queued anyway")
+
+    def test_a_result_still_replaces_an_older_result(self):
+        # The behaviour the guard must not have disabled: an old detection is
+        # worthless, so a newer one takes its place.
+        from telemetry_ocr.detection_worker import _is_result
+
+        channel = queue.Queue(maxsize=1)
+        put_latest(channel, {"kind": "result", "sequence": 1}, evictable=_is_result)
+        dropped = put_latest(channel, {"kind": "result", "sequence": 2}, evictable=_is_result)
+        self.assertEqual(dropped, 1)
+        self.assertEqual(channel.get_nowait()["sequence"], 2)
+
+    def test_publish_protects_control_messages_without_being_told(self):
+        # The wiring, not just the helper: _publish has to pass the predicate.
+        from telemetry_ocr.detection_worker import _publish
+
+        channel = queue.Queue(maxsize=2)
+        channel.put_nowait({"kind": "frame_error", "error": "decode failed"})
+        channel.put_nowait({"kind": "result", "sequence": 1})
+        _publish(channel, {"kind": "result", "sequence": 2})
+        kinds = [channel.get_nowait()["kind"], channel.get_nowait()["kind"]]
+        self.assertIn("frame_error", kinds, "_publish did not protect the error")
+
     def test_drain_queue_removes_every_pending_item(self):
         channel = queue.Queue()
         for sequence in range(3):

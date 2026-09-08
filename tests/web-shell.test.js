@@ -103,6 +103,61 @@ test("hidden wins over any display a class also sets", () => {
   );
 });
 
+test("the downloads export the same thing the buttons are enabled by", () => {
+  /*
+   * The two buttons are enabled from `state.shots.length` and used to serialise
+   * `state.records`, which only the stream's telemetry poll ever filled. In file
+   * mode -- load a video, hold Capture, press Download -- the JSONL was a single
+   * newline and the CSV was a header row, with no error and no warning.
+   *
+   * `state.records` is gone entirely now: nothing read it, and it grew to
+   * 200,000 entries on a long stream to be read by nobody.
+   */
+  // Comment lines are stripped first: the ones explaining why it went name it.
+  const code = appJs
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
+  assert.doesNotMatch(
+    code,
+    /\bstate\.records\b/,
+    "state.records is referenced again outside a comment"
+  );
+
+  const exportRows = appJs.match(/function exportRows\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(exportRows, "exportRows() is missing");
+  assert.match(exportRows[0], /state\.shots/, "the export must read the captured shots");
+
+  for (const name of ["downloadJsonl", "downloadCsv"]) {
+    const fn = appJs.match(new RegExp(`function ${name}\\(\\)\\s*\\{[\\s\\S]*?\\n\\}`));
+    assert.ok(fn, `${name}() is missing`);
+    assert.match(fn[0], /exportRows\(\)/, `${name}() must serialise exportRows()`);
+    // An empty export says so rather than handing over an empty file.
+    assert.match(fn[0], /rows\.length/, `${name}() must refuse an empty export`);
+  }
+});
+
+test("leaving a stream rotates the detection source like entering one does", () => {
+  /*
+   * handleFile and enterStreamMode both reset the tracker, mint a new source id
+   * and bump the generation. leaveStreamMode did none of it, so stream -> stop
+   * -> file posted the video's frames under the stream's source id: the server
+   * saw no change, never set reset_tracker, and BoT-SORT carried track
+   * identities from the camera onto the video.
+   */
+  const fn = appJs.match(/function leaveStreamMode\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fn, "leaveStreamMode() is missing");
+  const body = fn[0];
+  assert.match(body, /resetDetectionTracker\(\)/, "the tracker must be reset");
+  assert.match(body, /state\.detectionSourceId\s*=/, "a new source id must be minted");
+  assert.match(body, /\+\+state\.detectionGeneration/, "the generation must advance");
+  assert.match(
+    body,
+    /state\.detectionTracks\.clear\(\)/,
+    "stale boxes must not be left to draw over the video"
+  );
+});
+
 test("the service worker cache turns over when the shell changes", () => {
   // An installed PWA serves the cached shell until CACHE_NAME changes, so a
   // redesign that leaves it alone ships to a browser that will not show it.

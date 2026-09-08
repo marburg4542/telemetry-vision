@@ -210,8 +210,15 @@ def benchmark_threads(
     for item in config.fields:
         if item.derive_from_source_time:
             continue
-        if item.ocr_interval > 1 and frame_index % item.ocr_interval != item.ocr_phase:
-            continue
+        # Every interval field is included, deliberately.
+        #
+        # This used to skip any whose phase did not match `frame_index`, which
+        # is the frame being decoded for the benchmark, not a turn counter. The
+        # pipeline's first OCR frame recognises every field regardless of phase
+        # -- nothing is cached yet to hold instead -- so skipping here measured
+        # a smaller batch than the run it is meant to predict, and the thread
+        # recommendation and estimated update rate came out of it. With the
+        # shipped config that dropped acft_alt_m, whose phase is 2.
         padding = config.runtime.padding if item.padding is None else item.padding
         crop = extract_roi(frame, item.box, padding)
         images.append(apply_recipe(crop, item.primary))
