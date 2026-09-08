@@ -199,7 +199,15 @@ class UltralyticsDetector:
             "epochs": _optional_int(train_args.get("epochs")),
             "trained_image_size": _optional_int(trained_size),
             "task": str(getattr(self.model, "task", "detect")),
-            "device": self.device,
+            # str() here like everywhere else in this dict, and not because
+            # resolve_torch_device returns anything else today -- it returns a
+            # plain str. This whole dict crosses the process boundary back into
+            # the one holding Paddle, and unpickling a value imports the module
+            # that defines its class; a torch.device or a str subclass would
+            # pull torch in and break OCR after the model had already loaded.
+            # Every other field is coerced, so leaving one bare is an invitation
+            # to reason about it, and the only safe amount of that is none.
+            "device": str(self.device),
         }
 
     def _parse_results(self, results: Any) -> list[Detection]:
