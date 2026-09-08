@@ -1080,7 +1080,17 @@ telemetry-ocr export-crops --video <video> --config configs/roi_calibrated_cuda.
 
 900 crops ÷ 3 ฟิลด์ = 300 เฟรม เทียบกับรอบแรกที่ได้ 83 เฟรม
 
-**2. กรอกช่อง `expected`**
+**2. สร้าง contact sheet แล้วกรอกช่อง `expected`**
+
+```bash
+python scripts/label_contact_sheet.py output/labels-pass2
+```
+
+เปิดไฟล์ 900 ไฟล์ทีละไฟล์คือส่วนที่ช้าที่สุดของงานนี้ สคริปต์นี้เรียง crop ลงแผ่นละ 25 ภาพ
+พร้อม frame index อยู่ข้างซ้าย อ่านทีเดียวทั้งจอแล้วพิมพ์ลง CSV ทีเดียว
+(`--field ir_detail` ทำทีละฟิลด์ · โดยปกติข้ามแถวที่กรอกแล้ว ใช้ `--all-rows` ถ้าอยากเห็นทั้งหมด)
+
+crop ถูกขยาย 3 เท่าแบบ nearest ไม่ resample ให้พอดีกริด เพราะภาพที่ถูกปรับขนาดคือภาพที่อ่านผิดได้
 
 ไฟล์ `output/labels-pass2/labels.csv` มีคอลัมน์ชุดเดียวกับ
 `examples/validation_labels_15-31-25-0.csv` พอดี จึงต่อท้ายกันได้ตรงๆ
