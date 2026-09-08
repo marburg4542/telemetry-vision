@@ -58,6 +58,25 @@ if ($null -eq $selected) {
 
 $ocrExe = $selected.Exe
 $ocrConfig = $selected.Config
+
+# Recorded because the battery is what stopped this task from running at all
+# before the two settings switches were added to the installer. If it ever
+# happens again -- an older task registration, a group policy, a power plan --
+# this line is the difference between a diagnosable fault and a PWA that talks
+# to nothing for no visible reason.
+try {
+    $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+    if ($null -eq $battery) {
+        Write-StartupLog "Power: no battery detected (desktop or docked)."
+    } else {
+        # BatteryStatus 2 is "AC connected"; everything else is running on cells.
+        $onAc = $battery.BatteryStatus -eq 2
+        $source = if ($onAc) { "AC" } else { "battery" }
+        Write-StartupLog "Power: running on $source ($($battery.EstimatedChargeRemaining)% charge)."
+    }
+} catch {
+    Write-StartupLog "Power: could not be read ($($_.Exception.Message))."
+}
 Set-Location -LiteralPath $projectDir
 
 # An optional camera to open at login. The whole point of the scheduled task is

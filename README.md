@@ -379,6 +379,23 @@ PNG **ช้ากว่าเรียลไทม์** ไฟล์รับ�
 ครั้งถัดไป OCR server จะเปิดแบบซ่อนอัตโนมัติหลัง Login Windows จึงเปิด PWA แล้วใช้งานได้เลย
 Scheduled Task นี้เปิดเฉพาะ standalone OCR web เท่านั้น ไม่เปิดหรือแก้ไข Flight Plan
 
+**Task ถูกตั้งให้ทำงานตอนใช้แบตเตอรี่ด้วย** (`-AllowStartIfOnBatteries`
+`-DontStopIfGoingOnBatteries`) ค่าเริ่มต้นของ Task Scheduler คือ**ไม่** start ตอนใช้แบต
+และ**สั่งหยุด**ถ้าถอดปลั๊กระหว่างรัน ซึ่งเหมาะกับงาน sync เบื้องหลัง แต่ผิดกับงานนี้ —
+ภาพถ่ายจากภาคสนาม เครื่องที่อ่านมันก็อยู่ภาคสนามและใช้แบต และอาการที่ได้คือ PWA เปิดได้แต่
+ไม่มีอะไรอยู่เบื้องหลัง โดยไม่มี log บรรทัดไหนบอกสาเหตุเลย เพราะ task ไม่ได้รันตั้งแต่แรก
+
+ถ้าติดตั้ง task ไว้ก่อนหน้านี้ ให้รันไฟล์ติดตั้งซ้ำหนึ่งครั้ง — `Register-ScheduledTask -Force`
+จะอัปเดตค่าเดิมให้ ตรวจได้ด้วย:
+
+```powershell
+(Get-ScheduledTask -TaskName "Telemetry OCR Web Server").Settings |
+  Select-Object DisallowStartIfOnBatteries, StopIfGoingOnBatteries
+```
+
+ทั้งสองค่าต้องเป็น `False` และทุกครั้งที่ start ตัวสคริปต์จะบันทึกแหล่งจ่ายไฟลง log ไว้ด้วย
+(`Power: running on AC (100% charge).`) เผื่อวันหนึ่งอาการนี้กลับมาจากสาเหตุอื่น
+
 หากต้องการถอน auto-start ให้ดับเบิลคลิก `remove-ocr-web-autostart.cmd` หรือรัน:
 
 ```powershell

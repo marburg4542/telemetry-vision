@@ -37,8 +37,18 @@ $principal = New-ScheduledTaskPrincipal `
     -UserId $currentUser `
     -LogonType Interactive `
     -RunLevel Limited
+# The two battery switches are not optional here, and they are not defaults.
+# Task Scheduler ships with DisallowStartIfOnBatteries and StopIfGoingOnBatteries
+# both on, which is sensible for a background sync job and wrong for this: the
+# footage is shot in the field, the laptop that reads it is on battery there, and
+# without these the server never starts at logon and is killed the moment the
+# machine is unplugged. It fails in the worst possible way, too -- the task never
+# runs, so the startup script never logs, and the PWA simply has nothing behind
+# it with no line anywhere saying why.
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
