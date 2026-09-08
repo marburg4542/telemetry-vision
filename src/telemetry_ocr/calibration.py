@@ -5,6 +5,7 @@ import json
 import math
 import statistics
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -252,19 +253,72 @@ def benchmark_threads(
     return report, best
 
 
+# The columns the labelling manifest carries, in the order the existing
+# examples/validation_labels_*.csv use. Only the first three are read back by
+# load_labels; `ocr_raw` and `verified` are the labeller's own record and are
+# left empty on export -- deliberately, because filling them would show the
+# labeller what OCR thought before they had decided for themselves, and the
+# 95.9% figure in the README was measured by looking at the picture first.
+LABEL_COLUMNS = ["frame_index", "field_id", "expected", "ocr_raw", "verified", "crop_path"]
+
+
+def labelled_pairs(path: str | Path | None) -> set[tuple[int, str]]:
+    """The (frame, field) pairs an existing labels file already answers.
+
+    Rows with an empty `expected` do not count: those are crops that were
+    exported and never filled in, and re-exporting them is the point.
+    """
+    if path is None:
+        return set()
+    done: set[tuple[int, str]] = set()
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if "".join((row.get("expected") or "").split()):
+                done.add((int(row["frame_index"]), row["field_id"]))
+    return done
+
+
 def export_validation_crops(
     video_path: str | Path,
     config: AppConfig,
     output_dir: str | Path,
     crop_count: int = 1000,
+    fields: Sequence[str] | None = None,
+    already_labelled: set[tuple[int, str]] | None = None,
 ) -> Path:
-    """Export uniformly sampled raw ROI crops and an empty labeling manifest."""
+    """Export uniformly sampled raw ROI crops and an empty labeling manifest.
+
+    `fields` narrows the export to particular field ids. A second labelling pass
+    is usually aimed at the few fields still short of target -- exporting all
+    twelve to get more of three means four times the crops and four times the
+    reading, for answers that are already known.
+
+    `already_labelled` skips (frame, field) pairs an earlier pass answered, so a
+    second export of the same video extends the label set instead of asking the
+    same questions again. The two CSVs share a column layout and concatenate.
+    """
     try:
         import cv2
     except ImportError as exc:
         raise DependencyError("OpenCV is required to export validation crops") from exc
     if crop_count <= 0:
         raise ValueError("crop_count must be positive")
+
+    known = {item.field_id for item in config.fields}
+    if fields is None:
+        wanted = known
+    else:
+        wanted = set(fields)
+        unknown = sorted(wanted - known)
+        if unknown:
+            raise ValueError(
+                f"No such field in this config: {', '.join(unknown)}. "
+                f"It defines: {', '.join(sorted(known))}"
+            )
+    selected = [item for item in config.fields if item.field_id in wanted]
+    if not selected:
+        raise ValueError("No fields selected for export")
+    done = already_labelled or set()
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise VideoError(f"Cannot open video: {video_path}")
@@ -276,7 +330,7 @@ def export_validation_crops(
         total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         if total_frames <= 0:
             raise VideoError("Video does not expose a finite frame count")
-        frame_count = min(total_frames, max(1, math.ceil(crop_count / len(config.fields))))
+        frame_count = min(total_frames, max(1, math.ceil(crop_count / len(selected))))
         indexes = sorted(
             {
                 round(index * (total_frames - 1) / max(frame_count - 1, 1))
@@ -293,6 +347,10 @@ def export_validation_crops(
             for field_position, item in enumerate(config.fields):
                 if exported >= crop_count:
                     break
+                if item.field_id not in wanted:
+                    continue
+                if (frame_index, item.field_id) in done:
+                    continue
                 padding = config.runtime.padding if item.padding is None else item.padding
                 crop = extract_roi(frame, item.box, padding)
                 safe_id = "".join(
@@ -308,6 +366,8 @@ def export_validation_crops(
                         "frame_index": frame_index,
                         "field_id": item.field_id,
                         "expected": "",
+                        "ocr_raw": "",
+                        "verified": "",
                         "crop_path": relative_path.as_posix(),
                     }
                 )
@@ -315,11 +375,13 @@ def export_validation_crops(
     finally:
         capture.release()
     if not rows:
-        raise VideoError("No validation crops could be exported")
-    with manifest_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle, fieldnames=["frame_index", "field_id", "expected", "crop_path"]
+        raise VideoError(
+            "No validation crops could be exported. Every sampled frame for the "
+            "selected fields is already labelled; raise --crop-count to reach "
+            "frames the first pass did not sample."
         )
+    with manifest_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LABEL_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
     return manifest_path

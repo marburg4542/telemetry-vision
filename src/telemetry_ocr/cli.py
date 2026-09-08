@@ -196,6 +196,22 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--config", required=True, type=Path)
     export.add_argument("--output-dir", required=True, type=Path)
     export.add_argument("--crop-count", type=int, default=1000)
+    export.add_argument(
+        "--fields",
+        help=(
+            "Comma-separated field ids to export, e.g. "
+            "sensor_angle_deg,eo_detail,ir_detail. Default: every field. A second "
+            "labelling pass usually wants only the fields still short of target"
+        ),
+    )
+    export.add_argument(
+        "--exclude-labels",
+        type=Path,
+        help=(
+            "An existing labels CSV. Frames it already answers are skipped, so a "
+            "second export extends the label set instead of asking again"
+        ),
+    )
 
     preview = commands.add_parser(
         "preview-rois", help="Save one video frame annotated with configured ROI boxes"
@@ -266,12 +282,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ROI preview saved: {destination}")
             return 0
         if args.command == "export-crops":
-            from .calibration import export_validation_crops
+            from .calibration import export_validation_crops, labelled_pairs
 
-            manifest = export_validation_crops(
-                args.video, config, args.output_dir, crop_count=args.crop_count
+            wanted = (
+                [name.strip() for name in args.fields.split(",") if name.strip()]
+                if args.fields
+                else None
             )
-            print(f"Validation crops exported; fill expected values in: {manifest}")
+            manifest = export_validation_crops(
+                args.video,
+                config,
+                args.output_dir,
+                crop_count=args.crop_count,
+                fields=wanted,
+                already_labelled=labelled_pairs(args.exclude_labels),
+            )
+            rows = sum(1 for _ in manifest.open(encoding="utf-8")) - 1
+            print(f"Exported {rows} crops for labelling.")
+            print(f"Fill the `expected` column in: {manifest}")
+            print(
+                "Read the picture first and write what it says; only then compare "
+                "with OCR. Looking at the reading first anchors the answer."
+            )
             return 0
         if args.command == "capture":
             from .capture import capture_session

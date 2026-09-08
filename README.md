@@ -1061,3 +1061,49 @@ telemetry-ocr calibrate --video <video> --config configs/roi_calibrated_cuda.yam
 ที่เหลือให้ไล่ต่อคือสองตัวท้ายตาราง: `sensor_angle_deg` ยังอ่านหลักนำหน้าเกินในบางเฟรม
 (`2.46` เป็น `32.46`) และ `eo_detail`/`ir_detail` พลาดจากตัวอักษรกำกวมของฟอนต์ OSD
 (`1.⑩x`, `FOv`, `F0V 1.9²`) ซึ่งน่าจะต้อง fine-tune โมเดลมากกว่าปรับ preprocessing
+
+### รอบ label ถัดไป (สำหรับดัน 95.9% → 97%)
+
+ช่องว่างกระจุกอยู่ที่สามฟิลด์ — `sensor_angle_deg` 91.6%, `eo_detail` 90.4%, `ir_detail` 90.4%
+รวม 249 จาก 876 ตัวอย่าง จึงไม่มีเหตุผลจะ label ครบสิบสองฟิลด์อีกรอบ
+
+**1. export เฉพาะสามฟิลด์ และข้ามเฟรมที่ตอบไปแล้ว**
+
+```bash
+telemetry-ocr export-crops --video <video> --config configs/roi_calibrated_cuda.yaml --output-dir output/labels-pass2 --crop-count 900 --fields sensor_angle_deg,eo_detail,ir_detail --exclude-labels examples/validation_labels_15-31-25-0.csv
+```
+
+`--fields` ทำให้โควตา crop ไปลงที่สามฟิลด์แทนที่จะถูกหารด้วยสิบสอง — `--crop-count` เท่าเดิม
+จึงครอบคลุมเฟรมได้มากกว่าเดิมสี่เท่า ส่วน `--exclude-labels` ข้ามคู่ (frame, field) ที่รอบแรก
+ตอบไปแล้ว รอบสองจึงเป็นการ**เพิ่ม** label ไม่ใช่ถามซ้ำ (แถวที่ `expected` ว่างไม่นับว่าตอบแล้ว
+— นั่นคือ crop ที่ export ไปแล้วไม่ได้กรอก ซึ่งต้อง export ใหม่)
+
+900 crops ÷ 3 ฟิลด์ = 300 เฟรม เทียบกับรอบแรกที่ได้ 83 เฟรม
+
+**2. กรอกช่อง `expected`**
+
+ไฟล์ `output/labels-pass2/labels.csv` มีคอลัมน์ชุดเดียวกับ
+`examples/validation_labels_15-31-25-0.csv` พอดี จึงต่อท้ายกันได้ตรงๆ
+
+| คอลัมน์ | ใครกรอก |
+|---|---|
+| `frame_index` `field_id` `crop_path` | export กรอกให้ |
+| `expected` | **คุณ** — สิ่งที่เห็นในภาพ |
+| `ocr_raw` `verified` | บันทึกของคุณเอง กรอกทีหลังหรือเว้นไว้ก็ได้ |
+
+`ocr_raw` **ถูกเว้นว่างไว้ตั้งใจ** ไม่ได้เติมผล OCR ไว้ให้ — ตัวเลข 95.9% ที่วัดไว้เกิดจากการ
+ดูภาพก่อนแล้วค่อยเทียบ ถ้าเห็นคำตอบของเครื่องก่อนจะถูกชี้นำโดยไม่รู้ตัว
+
+เว้นแถวที่อ่านไม่ออกจริงๆ ไว้ว่าง `load_labels` ข้ามให้เอง ดีกว่าเดา
+
+**3. รวมไฟล์แล้ววัดใหม่**
+
+```bash
+python -c "import pathlib; a=pathlib.Path('examples/validation_labels_15-31-25-0.csv').read_text(encoding='utf-8'); b=pathlib.Path('output/labels-pass2/labels.csv').read_text(encoding='utf-8'); pathlib.Path('examples/validation_labels_pass2.csv').write_text(a.rstrip()+chr(10)+chr(10).join(b.splitlines()[1:])+chr(10), encoding='utf-8')"
+```
+
+แล้วรัน `calibrate --labels examples/validation_labels_pass2.csv` เพื่อดูว่า preprocessing
+ยังพอมีที่ให้ขยับไหม — **คาดว่าไม่มี** รอบแรก `eo_detail`/`ir_detail` อยู่ที่ 90.4% ทั้งก่อนและ
+หลัง calibrate คือไม่ตอบสนองต่อ recipe ใดเลย ถ้ายืนยันซ้ำด้วยข้อมูลที่มากขึ้น ก็แปลว่าเหลือ
+ทางเดียวคือ **fine-tune `PP-OCRv6_tiny_rec`** ด้วย crops ที่ label ไว้แล้ว ซึ่งเป็นงานฝั่ง
+PaddleOCR ไม่ใช่ฝั่งโปรเจกต์นี้
