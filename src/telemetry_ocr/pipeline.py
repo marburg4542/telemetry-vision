@@ -216,7 +216,15 @@ class VideoDecoder:
                         while next_ocr_ms <= source_time_ms + epsilon_ms:
                             next_ocr_ms += interval_ms
                     frame_index += 1
-                if frame_index == 0:
+                if frame_index == 0 and not self.stop_event.is_set():
+                    # The stop-event guard is the whole point. This loop exits
+                    # for two reasons and only one of them is a fault: an input
+                    # that yielded nothing, and a caller that asked it to stop.
+                    # Without the guard, pressing Stop on a camera that has
+                    # accepted the connection but not yet published a frame is
+                    # reported as a corrupt source -- and because a decoder
+                    # error is re-raised, capture_session then loses the
+                    # manifest for everything already written.
                     raise VideoError(f"Video contains no decodable frames: {self.video_path}")
             finally:
                 if capture is not None:

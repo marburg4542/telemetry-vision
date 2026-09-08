@@ -134,13 +134,51 @@ class _FrameWriter:
         self._thread.start()
 
     def submit(self, index: int, frame: Any, source_time_ms: float) -> None:
-        self.queue.put((index, frame, source_time_ms))
+        self._enqueue((index, frame, source_time_ms))
 
     def close(self) -> None:
-        self.queue.put(None)
+        if self._thread.is_alive():
+            self._enqueue(None)
         self._thread.join()
+        if self.error:
+            raise self.error
+
+    def _enqueue(self, item: tuple[int, Any, float] | None) -> None:
+        """Hand one item to the writer, or say why it cannot be handed over.
+
+        A bare `queue.put` on a bounded queue blocks forever once the consumer
+        is gone, and this thread's consumer can die: the per-frame handler below
+        covers imwrite, but not the cv2 import, not frame.shape, and not the
+        append. When that happened the ninth submit blocked, the deadline and
+        max-frames checks in capture_session never ran again, stop_event was
+        never set, and the capture looked alive from the outside forever.
+
+        This is RecordWriter._enqueue in output.py, which has had the same
+        structure and this same guard from the start. The `error` attribute here
+        was declared and then never written or read.
+        """
+        while True:
+            if self.error:
+                raise self.error
+            if not self._thread.is_alive():
+                raise RuntimeError("Frame writer stopped unexpectedly")
+            try:
+                self.queue.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                continue
 
     def _run(self) -> None:
+        try:
+            self._write_frames()
+        except Exception as exc:
+            # Reported rather than lost. Everything outside the per-frame
+            # handler below -- the import, the shape read, the append -- used to
+            # kill this thread silently.
+            _LOG.exception("Frame writer stopped")
+            self.error = exc
+
+    def _write_frames(self) -> None:
         import cv2
 
         params = (
@@ -271,22 +309,44 @@ def capture_session(
                 frame_queue.task_done()
     except KeyboardInterrupt:
         # A stream has no other ending, and a session interrupted halfway is
-        # still a session: the manifest below is written either way.
+        # still a session: the manifest below is written on every path.
         _LOG.info("Capture stopped on interrupt")
     except BaseException as exc:
         caught = exc
     finally:
         stop_event.set()
         decoder.join()
-        writer.close()
+        try:
+            writer.close()
+        except Exception as exc:
+            # close() re-raises whatever killed the writer thread, and letting
+            # that escape from a finally would skip the manifest below and undo
+            # the reason it was moved up here. It is kept and re-raised after,
+            # and only when nothing worse is already on its way out.
+            if caught is None:
+                caught = exc
+            else:
+                _LOG.exception("Frame writer also failed while closing")
+
+    # Written before anything is re-raised, and that ordering is the point.
+    #
+    # The frames are already on disk by now. A manifest written only on the
+    # clean path meant that a stream which dropped and did not come back left
+    # every JPEG in place with no session.json and no frames.jsonl beside them
+    # -- and load_session rejects a directory without those two, so a long
+    # capture became permanently unreadable by the tooling that wrote it. The
+    # comment above about an interrupted session still being a session was true
+    # for Ctrl+C and false for every other ending.
+    #
+    # A partial manifest describing what was actually recorded is worth more
+    # than none, and the error still reaches the caller immediately below.
+    info.frame_count = len(writer.records)
+    _write_manifest(session_dir, info, writer.records)
 
     if caught is not None:
         raise caught
     if decoder.error is not None:
         raise decoder.error
-
-    info.frame_count = len(writer.records)
-    _write_manifest(session_dir, info, writer.records)
 
     wall = max(time.perf_counter() - started, 1e-9)
     return CaptureSummary(
