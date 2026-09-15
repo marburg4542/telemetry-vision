@@ -123,6 +123,8 @@ class RunRenderTests(unittest.TestCase):
         self.assertTrue((self.out / VIDEO_FILE).is_file())
         self.assertFalse(list(self.out.glob("*.part")))
         self.assertEqual(self.messages[-1]["kind"], "complete")
+        # Where the time went, so a slow render says which stage to fix.
+        self.assertEqual(set(meta["stages_ms"]), {"decode", "track", "draw", "encode"})
 
     def test_a_stride_keeps_every_nth_frame_and_halves_the_rate(self) -> None:
         self.render(RenderSettings(stride=2))
@@ -371,6 +373,38 @@ class VideoLibraryTests(unittest.TestCase):
                 self.assertAlmostEqual(float(frames.read(path, index).mean()), index * 20, delta=6)
         with self.assertRaises(ValueError):
             frames.read(path, FRAMES + 5)
+
+
+class EncoderChoiceTests(unittest.TestCase):
+    def test_the_first_encoder_that_works_is_chosen(self) -> None:
+        from unittest import mock
+
+        tried: list[str] = []
+
+        def works(ffmpeg, args):
+            tried.append(args[1])
+            return args[1] == "h264_qsv"
+
+        with mock.patch.object(render_job, "_encoder_works", works):
+            name, args = render_job.choose_encoder("ffmpeg")
+        self.assertEqual(name, "h264_qsv")
+        self.assertEqual(tried, ["h264_nvenc", "h264_qsv"])
+        self.assertIn("h264_qsv", args)
+
+    def test_software_encoding_is_the_last_resort(self) -> None:
+        from unittest import mock
+
+        with mock.patch.object(render_job, "_encoder_works", lambda ffmpeg, args: False):
+            self.assertEqual(render_job.choose_encoder("ffmpeg")[0], "libx264")
+
+    def test_the_environment_can_name_the_encoder(self) -> None:
+        from unittest import mock
+
+        with (
+            mock.patch.dict(os.environ, {"TELEMETRY_OCR_RENDER_ENCODER": "libx264"}),
+            mock.patch.object(render_job, "_encoder_works", lambda ffmpeg, args: True),
+        ):
+            self.assertEqual(render_job.choose_encoder("ffmpeg")[0], "libx264")
 
 
 class FfmpegTests(unittest.TestCase):

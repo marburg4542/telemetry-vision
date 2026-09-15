@@ -120,6 +120,51 @@ def is_current(meta: dict[str, Any], video_path: Path | None, model_path: Path |
     return True
 
 
+# Tried in order, each confirmed with a real two-frame encode: an encoder that
+# `ffmpeg -encoders` lists can still fail at run time for want of a driver or of
+# the silicon block. The hardware ones matter because x264 competes with the
+# tracker for the same few CPU cores, while NVENC runs on a fixed-function block
+# beside the GPU cores YOLO uses. Measured on the GTX 1650 machine over 600
+# frames of 1080p30: NVENC ~275 fps, QuickSync ~135, x264 veryfast ~105.
+_ENCODERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "h264_nvenc",
+        ("-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "27",
+         "-b:v", "0", "-maxrate", "8M", "-bufsize", "16M"),
+    ),
+    ("h264_qsv", ("-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "27")),
+    ("libx264", ("-c:v", "libx264", "-preset", "veryfast", "-crf", "23")),
+)
+SOFTWARE_ENCODER = _ENCODERS[-1]
+
+
+def choose_encoder(ffmpeg: str) -> tuple[str, tuple[str, ...]]:
+    """The first encoder that works here, or the one TELEMETRY_OCR_RENDER_ENCODER names."""
+    forced = os.environ.get("TELEMETRY_OCR_RENDER_ENCODER", "").strip()
+    candidates = [item for item in _ENCODERS if item[0] == forced] if forced else []
+    for name, args in candidates or list(_ENCODERS):
+        if _encoder_works(ffmpeg, args):
+            return name, args
+    return SOFTWARE_ENCODER
+
+
+def _encoder_works(ffmpeg: str, args: tuple[str, ...]) -> bool:
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=320x240:r=10",
+                "-frames:v", "2", *args, "-pix_fmt", "yuv420p", "-f", "null", "-",
+            ],
+            capture_output=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
 def find_ffmpeg() -> str | None:
     """ffmpeg from TELEMETRY_OCR_FFMPEG, the PATH, or where winget puts it.
 
@@ -178,6 +223,9 @@ def run_render(
     started = time.perf_counter()
     index = -1
     written = 0
+    # Where a frame's time goes, averaged over the frames written. Reported with
+    # the progress, because "slow" has a different fix for each of these.
+    spans = {"decode": 0.0, "track": 0.0, "draw": 0.0, "encode": 0.0}
     finished = False
     was_cancelled = False
     try:
@@ -199,6 +247,7 @@ def run_render(
                     if cancelled():
                         was_cancelled = True
                         break
+                    step = time.perf_counter()
                     if not capture.grab():
                         break
                     index += 1
@@ -209,6 +258,7 @@ def run_render(
                     ok, frame = capture.retrieve()
                     if not ok or frame is None:
                         break
+                    decoded = time.perf_counter()
                     detections = detector.track(
                         frame,
                         confidence=options.confidence,
@@ -216,11 +266,19 @@ def run_render(
                         image_size=options.image_size,
                         tracker="botsort.yaml",
                     )
+                    tracked = time.perf_counter()
                     boxes = [_plain(item) for item in detections]
                     marked = annotate_frame(frame, with_track_ids(boxes), width, height)
                     if (out_width, out_height) != (width, height):
                         marked = marked[:out_height, :out_width]
+                    drawn = time.perf_counter()
+                    # Blocks when ffmpeg falls behind, so this also measures
+                    # whether the encoder is keeping up.
                     encoder.write(marked)
+                    spans["decode"] += decoded - step
+                    spans["track"] += tracked - decoded
+                    spans["draw"] += drawn - tracked
+                    spans["encode"] += time.perf_counter() - drawn
                     tracks.write(
                         json.dumps(
                             {
@@ -243,6 +301,7 @@ def run_render(
                                 "done": index + 1,
                                 "total": total,
                                 "fps": round(written / elapsed, 2) if elapsed > 0 else 0.0,
+                                "stages_ms": _averages(spans, written),
                             }
                         )
             finished = not was_cancelled
@@ -277,6 +336,7 @@ def run_render(
         "height": out_height,
         "duration_ms": round(source_frames * 1000.0 / fps, 3),
         "elapsed_s": round(time.perf_counter() - started, 2),
+        "stages_ms": _averages(spans, written),
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "video_file": VIDEO_FILE,
         "tracks_file": TRACKS_FILE,
@@ -288,7 +348,15 @@ def run_render(
 class FfmpegEncoder:
     """Raw BGR frames in on stdin, a browser-playable H.264 MP4 out."""
 
-    def __init__(self, ffmpeg: str, path: Path, width: int, height: int, fps: float) -> None:
+    def __init__(
+        self,
+        ffmpeg: str,
+        path: Path,
+        width: int,
+        height: int,
+        fps: float,
+        codec: tuple[str, ...] = SOFTWARE_ENCODER[1],
+    ) -> None:
         # A file rather than a pipe: nothing reads ffmpeg's stderr while frames
         # are going in, and a full pipe would stall the encoder mid-render.
         self._log = tempfile.TemporaryFile()  # noqa: SIM115 - closed in close()
@@ -298,7 +366,7 @@ class FfmpegEncoder:
                 ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "rawvideo", "-pix_fmt", "bgr24",
                 "-s", f"{width}x{height}", "-r", f"{fps:.6f}", "-i", "-",
-                "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-an", *codec,
                 "-pix_fmt", "yuv420p",
                 # The index at the front, so the page can start playing and
                 # seeking before it has fetched the whole file.
@@ -368,14 +436,17 @@ def _render_process_main(job: dict[str, Any], progress: Any, cancel: Any) -> Non
         detector = load_ultralytics_detector(job["model_path"])
         publish({"kind": "loaded", "metadata": detector.metadata()})
         ffmpeg = str(job["ffmpeg"])
+        encoder_name, codec = choose_encoder(ffmpeg)
+        _LOG.info("Encoding with %s", encoder_name)
+        publish({"kind": "encoder", "name": encoder_name})
         run_render(
             video=job["video"],
             output_dir=job["output_dir"],
             settings=job["settings"],
-            meta=job["meta"],
+            meta={**job["meta"], "encoder": encoder_name},
             detector=detector,
             encoder_factory=lambda path, width, height, fps: FfmpegEncoder(
-                ffmpeg, path, width, height, fps
+                ffmpeg, path, width, height, fps, codec
             ),
             publish=publish,
             cancelled=cancel.is_set,
@@ -599,6 +670,10 @@ class RenderManager:
                 job["done"] = int(message.get("done", 0))
                 job["total"] = int(message.get("total", 0))
                 job["fps"] = float(message.get("fps", 0.0))
+                if isinstance(message.get("stages_ms"), dict):
+                    job["stages_ms"] = message["stages_ms"]
+            elif kind == "encoder":
+                job["encoder"] = str(message.get("name") or "")
             elif kind == "complete":
                 job["status"] = "complete"
                 job["done"] = job["total"] = int(message["meta"].get("source_frames", job["total"]))
@@ -673,6 +748,12 @@ class TrackIndex:
             record = json.loads(stream.readline())
         detections = record.get("detections")
         return detections if isinstance(detections, list) else []
+
+
+def _averages(spans: dict[str, float], frames: int) -> dict[str, float]:
+    if not frames:
+        return {}
+    return {name: round(total * 1000.0 / frames, 1) for name, total in spans.items()}
 
 
 def _plain(detection: Any) -> dict[str, Any]:
