@@ -1,7 +1,7 @@
 # Codebase Walkthrough — telemetry-vision
 
 **เอกสารสรุปความเข้าใจซอร์สโค้ด** สำหรับผู้ที่กำลังจะเข้ามาพัฒนาต่อ
-อ้างอิงจากโค้ดหลังถอดโหมดสตรีมออกจากหน้าเว็บ · เวอร์ชัน `0.5.0` · Python 3.10–3.12
+อ้างอิงจากโค้ดหลังเปลี่ยนหน้าเว็บเป็นวิดีโอที่ประมวลผลด้วย AI · เวอร์ชัน `0.5.0` · Python 3.10–3.12
 
 > เลขบรรทัดในเอกสารนี้เป็นค่าโดยประมาณและจะเลื่อนเมื่อแก้โค้ด
 > ใช้ชื่อฟังก์ชันและคลาสค้นหาแทน ส่วนตารางจำนวนบรรทัดในหัวข้อ 2.2
@@ -51,7 +51,7 @@
 | Extra | ไลบรารี | ใช้ทำอะไร |
 |---|---|---|
 | `ocr` | **PaddleOCR** `>=3.7,<3.8` | รู้จำข้อความ ใช้เฉพาะโมดูล **recognition** (`PP-OCRv6_tiny_rec`) ไม่ใช้ส่วน text detection |
-| `web` | **aiohttp** `>=3.10,<4` | เว็บเซิร์ฟเวอร์แบบ async สำหรับ REST API และ long-poll |
+| `web` | **aiohttp** `>=3.10,<4` | เว็บเซิร์ฟเวอร์แบบ async สำหรับ REST API และส่งไฟล์วิดีโอแบบ Range |
 | `ai` | **Ultralytics** `>=8.3,<9` | YOLOv8 ตรวจจับยานพาหนะ + ติดตามด้วย BoT-SORT |
 | `ai` | **dill**, **lap** | dill = serialize ของ Ultralytics · lap = Linear Assignment Problem สำหรับ tracker |
 | `report` | **pypdf**, **reportlab** | สร้างรายงาน PDF (อยู่ในแพ็กเกจ `vision_lab`) |
@@ -64,8 +64,9 @@
 > ทั้งสองไลบรารีแนบ **cuDNN 9** มาคนละชุด บน Windows ตัวที่โหลดทีหลังจะล้มด้วย `WinError 127`
 >
 > ผลคือ **`telemetry-ocr` (ฝั่ง OCR) ห้าม import torch เด็ดขาด** งาน YOLO ทั้งหมดจึงถูกผลักไปอยู่ใน
-> **โปรเซสลูกที่ spawn ออกไป** ([detection_worker.py](src/telemetry_ocr/detection_worker.py))
-> หรือรันแยกภายใต้คำสั่ง `vision-lab`
+> **โปรเซสลูกที่ spawn ออกไป** — [render_job.py](src/telemetry_ocr/render_job.py) สำหรับหน้าเว็บ
+> และ [detection_worker.py](src/telemetry_ocr/detection_worker.py) สำหรับ CLI `run --detect-model`
+> — หรือรันแยกภายใต้คำสั่ง `vision-lab`
 >
 > โค้ดที่บังคับเรื่องนี้อยู่ที่ [`_hide_torch_from_this_process()`](src/telemetry_ocr/ocr.py) — ocr.py:31
 
@@ -102,7 +103,7 @@ vision-lab     →  vision_lab.cli:main         ← เครื่องมื�
 ## 2.2 แผนผังไฟล์และความรับผิดชอบ
 
 ```
-src/telemetry_ocr/                       (23 ไฟล์ · 8,624 บรรทัด)
+src/telemetry_ocr/                       (26 ไฟล์ · 9,333 บรรทัด)
 │
 ├─ __main__.py            5    เรียก cli.main()
 ├─ cli.py               522    ★ Entry point · argparse · เชื่อมทุกคำสั่งเข้ากับโมดูล
@@ -121,37 +122,41 @@ src/telemetry_ocr/                       (23 ไฟล์ · 8,624 บรรท�
 │
 ├── ชั้นตรวจจับวัตถุ (แยกโปรเซส) ────────────────────────────
 ├─ detection.py         267    ห่อ Ultralytics YOLO · เลือก device · แปลงผลเป็น Detection
-├─ detection_worker.py  527    ★ โปรเซสลูก + คิวรับส่งเฟรม/ผล (กันชน torch)
+├─ render_job.py        792    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · วาดกรอบ · NVENC/x264 · แคชผล
+├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
+├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
 ├─ detect_sidecar.py    162    ตัวช่วยฝั่ง CLI สำหรับรัน detection คู่กับ run
 │
 ├── ชั้นเซสชัน/บันทึกภาพ ──────────────────────────────────
 ├─ capture.py           408    รูปแบบเซสชันบนดิสก์ · เขียน/อ่าน manifest
-├─ capture_service.py   900    ★ CaptureSession · ensemble · วาดกรอบ · ตรวจสอบซ้ำ
+├─ capture_service.py   818    ★ CaptureSession · ensemble · วาดกรอบ · ตรวจสอบซ้ำ
 ├─ extract.py           168    OCR ย้อนหลังจากเซสชันที่บันทึกไว้
 │
 ├── ชั้นเว็บ ─────────────────────────────────────
-├─ webapp.py          1,918    ★ ใหญ่ที่สุด: aiohttp app · 25 routes · middleware · state
+├─ video_library.py    155    รายการวิดีโอในโฟลเดอร์ · อ่านเฟรมต้นฉบับทีละเฟรม
+├─ webapp.py          1,663    ★ ใหญ่ที่สุด: aiohttp app · 30 routes · middleware · state
 ├─ public_share.py     207    เผยแพร่ภาพชั่วคราวด้วย token (ให้ LINE ดึงได้)
 ├─ quick_tunnel.py     262    คุม cloudflared quick tunnel
-├─ line_client.py      748    จัดรูปแบบข้อความ · แปลง DMS · push เข้า LINE
+├─ line_client.py      750    จัดรูปแบบข้อความ · แปลง DMS · push เข้า LINE
 │
 ├── เครื่องมือเสริม ────────────────────────────────────────
 ├─ calibration.py      387    กวาดสูตรปรับปรุงภาพทุกแบบ เลือกที่ดีที่สุด
 ├─ preview.py           79    วาดกรอบ ROI ลงภาพเพื่อตรวจตำแหน่ง
 │
-└── web_static/                 (3,646 บรรทัด)
-   ├─ index.html       277    โครงหน้า
-   ├─ app.js         2,334    ★ ตรรกะหน้าเว็บทั้งหมด
-   ├─ app.css          775    สไตล์
-   ├─ detection-math.js 142   คณิตศาสตร์ letterbox/scale (แชร์กับเทสต์ Node)
+└── web_static/                 (3,095 บรรทัด)
+   ├─ index.html       248    โครงหน้า
+   ├─ app.js         1,846    ★ ตรรกะหน้าเว็บทั้งหมด
+   ├─ app.css          840    สไตล์
+   ├─ format.js          43    จัดรูปแบบพิกัด DMS (แชร์กับเทสต์ Node)
    └─ service-worker.js  83   PWA offline shell
 
-src/vision_lab/                          (9 ไฟล์ · 2,829 บรรทัด) — แยกจากกันโดยสิ้นเชิง
+src/vision_lab/                          (10 ไฟล์ · 3,139 บรรทัด) — แยกจากกันโดยสิ้นเชิง
 ├─ cli.py              185    Entry point ที่สอง (`vision-lab`)
 ├─ report.py           968    สร้างรายงาน PDF ภาษาไทย
 ├─ handbook.py         868    สร้างคู่มือ
 ├─ evaluate.py         273    ประเมินโมเดล YOLO (mAP ฯลฯ)
-├─ paths.py            170    ทะเบียนที่อยู่ของ dataset/checkpoint
+├─ paths.py            229    ทะเบียนที่อยู่ของ dataset/checkpoint (+ overlay ของหน้าเว็บ)
+├─ model_registry.py   251    เพิ่ม/เอาออก/ตั้งค่าเริ่มต้นโมเดลจากหน้าเว็บ (models.local.yaml)
 ├─ envcheck.py         146    ตรวจสภาพแวดล้อม
 ├─ frames.py           109    สกัดเฟรมไปทำ dataset
 └─ torch_env.py        101    จัดการ torch (โมดูลนี้ import torch ได้)
@@ -343,27 +348,41 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 
 ---
 
-## 3.7 `detection_worker.py` — กันชน torch ★
+## 3.7 `render_job.py` — ประมวลผลวิดีโอทั้งไฟล์ ★
 
-### `ProcessDetectionWorker` (คลาส, บรรทัด 49)
-เจ้าของโปรเซสลูกและคิวสองทาง
+### `run_render(video, output_dir, settings, meta, detector, encoder_factory, publish, cancelled)`
+**ฟังก์ชันที่รันในโปรเซสลูก** (หรือใน thread ตอนเทสต์) — ที่เดียวของหน้าเว็บที่แตะ torch
+- **ทำอะไร:** ต่อเฟรม `grab()` → ข้ามตาม stride → `retrieve()` → `detector.track()` (BoT-SORT, persist)
+  → `annotate_frame()` + Track ID → `encoder.write()` → ต่อท้าย `tracks.jsonl`
+- ส่ง `progress` ทุก 0.5 วิ พร้อม `stages_ms` (decode/track/draw/encode) และยกเลิกได้ระหว่างทาง
+- เขียน `.part` ก่อน แล้ว `os.replace` เมื่อเสร็จ พร้อม `meta.json` ที่มี fingerprint ของวิดีโอและโมเดล
+- **Output:** `annotated.mp4`, `tracks.jsonl`, `meta.json` ในโฟลเดอร์ของ render
 
-| เมธอด | Input | ทำอะไร | Output |
-|---|---|---|---|
-| `start(model_path, filename)` (84) | path ของ `.pt` | spawn โปรเซสลูก โหลดโมเดล | — |
-| `submit(frame)` (189) | `DetectionFrame` | ใส่คิวไปให้ลูก (ทิ้งของเก่าถ้าเต็ม) | `bool` สำเร็จหรือไม่ |
-| `latest()` (220) | — | ผลล่าสุดที่ลูกส่งกลับ | `dict` หรือ `None` |
-| `reset(source_id, generation)` (234) | — | ล้างสถานะ tracker เมื่อเปลี่ยนแหล่งวิดีโอ | — |
-| `status()` (163) | — | สถานะโมเดล/โปรเซส/เฟรมที่ตกหล่น | `dict` |
-| `stop(timeout)` (116) | — | ปิดลูกอย่างเรียบร้อย | — |
+### `RenderManager` (คลาส) — ฝั่ง server ไม่ import torch
 
-### `_worker_main(...)` (บรรทัด 350)
-**ฟังก์ชันที่รันในโปรเซสลูก** — ที่เดียวในฝั่ง `telemetry_ocr` ที่ import torch/Ultralytics ได้
-วนรับเฟรมจากคิว → `detector.track()` หรือ `predict()` → ส่งผลกลับ
+| เมธอด | ทำอะไร |
+|---|---|
+| `start(...)` | spawn ลูกผ่าน `spawn_launcher` · งานซ้อนได้ `RenderBusy` · ไม่มี ffmpeg ได้ `RenderUnavailable` |
+| `status()` / `cancel()` | อ่านคิวความคืบหน้า · ตั้ง event ให้ลูกหยุด |
+| `renders(video_id)` / `delete(render_id)` | ผลที่เสร็จแล้วบนดิสก์ · ลบผล (ยกเว้นงานที่กำลังรัน) |
+| `detections_at(render_id, frame_index)` | กรอบของเฟรมหนึ่งจาก `tracks.jsonl` ผ่าน `TrackIndex` (byte offset) |
+| `shutdown()` | ยกเลิกและ terminate ลูกตอนปิด server |
 
-### `put_latest(channel, item, deadline_s)` (บรรทัด 288)
-ใส่คิวแบบ **เก็บเฉพาะของใหม่ล่าสุด** — ถ้าเต็มจะดึงของเก่าออกก่อน
-เพื่อไม่ให้ผลตรวจจับล้าหลังภาพจริง
+### `choose_encoder(ffmpeg)` · `FfmpegEncoder`
+ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม
+
+> **ทำไมต้องใช้ hardware encoder:** x264 วัดแยกได้ ~105 เฟรม/วินาที แต่ในสายงานจริงแย่ง CPU 4 คอร์
+> กับ tracker จนเหลือ 5 เฟรม/วินาที NVENC พาไปที่ 16 เฟรม/วินาทีบนเครื่องเดียวกัน
+
+### `video_library.py` — `VideoLibrary` · `SourceFrames`
+รายการวิดีโอใต้ `asset_dirs.videos` อ้างด้วย path สัมพัทธ์ (ไม่รับ path จาก request ตรงๆ) และอ่าน
+เฟรมต้นฉบับทีละเฟรมให้ Capture โดยเปิดไฟล์ค้างไว้ ข้ามไปข้างหน้าไม่เกิน 30 เฟรมด้วยการอ่านต่อแทนการ seek
+
+## 3.7b `detection_worker.py` — worker แบบสดสำหรับ CLI
+
+หน้าเว็บเลิกใช้แล้ว แต่ `telemetry-ocr run --detect-model` (ผ่าน `detect_sidecar.py`) ยังใช้
+`ProcessDetectionWorker` ส่งเฟรมเข้าคิว newest-wins ขนาด 1 ให้ลูกประมวลผลคู่กับ OCR แบบ realtime
+`put_latest` ทิ้งเฟรมเก่าเมื่อคิวเต็ม เพื่อไม่ให้ผลตรวจจับล้าหลังภาพ
 
 ---
 
@@ -398,7 +417,7 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 - **ทำไมจำกัดขอบเขต:** เปิดทุกฟิลด์แล้ววัดพบว่า `elevation_deg` แย่ลง (เครื่องหมายลบหาย)
   จึงเปิดเฉพาะฟิลด์ที่มีเฉลยยืนยันแล้ว
 
-### `annotate_frame(frame, boxes, source_width, source_height)` (บรรทัด 697)
+### `annotate_frame(frame, boxes, source_width, source_height)` ([annotate.py](src/telemetry_ocr/annotate.py))
 วาดกรอบลง **สำเนา** เสมอ — ภาพต้นฉบับคือหลักฐานและเป็นภาพที่ใช้ OCR ซ้ำ
 ถ้ากรอบพาดทับข้อความ OSD การอ่านซ้ำจะผิด
 
@@ -420,8 +439,8 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 
 > **`X-Telemetry-OCR` มีไว้ทำไม:** request ที่มี custom header จะไม่ใช่ CORS simple request
 > เบราว์เซอร์จึงต้องส่ง preflight มาก่อน และ guard จะปฏิเสธได้
-> ถ้าไม่มีชั้นนี้ เว็บใดก็ตามที่ผู้ใช้เปิดอยู่จะ POST ไปที่ `/api/detection/model` ได้
-> ซึ่งเป็นเส้นทางที่สั่งให้โหลด checkpoint ผ่าน `torch.load` (pickle)
+> ถ้าไม่มีชั้นนี้ เว็บใดก็ตามที่ผู้ใช้เปิดอยู่จะสั่ง `/api/renders` ให้ GPU ทำงานยาว หรือแก้
+> `/api/models` ว่าเครื่องนี้จะโหลด checkpoint (pickle) ตัวไหน
 >
 > **GET ไม่ต้องมี header โดยตั้งใจ** เพราะ `<img>` ส่ง custom header ไม่ได้ — ถ้าบังคับ ภาพในหน้าเว็บจะไม่ขึ้น
 
@@ -429,17 +448,20 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 
 | Route | ฟังก์ชัน | หน้าที่ |
 |---|---|---|
-| `POST /api/capture/shot` | `capture_shot` (1129) | ★ บันทึกภาพ + ตรวจจับ + OCR ซ้ำ (ซิงโครนัส) |
+| `POST /api/capture/shot` | `capture_shot` | ★ อ่านเฟรมต้นฉบับจากไฟล์ + OCR + กรอบจาก render + OCR ซ้ำ |
 | `GET /api/capture/shots` | `capture_shots` (1223) | รายการภาพทั้งหมด ใหม่สุดก่อน พร้อม `stage` |
 | `GET /api/capture/image` | `capture_image` (1301) | ส่งภาพ (มี `annotated=1`, `thumb=1`) |
 | `DELETE /api/capture/shot` | `capture_discard` (1266) | ลบภาพและ record ที่เกี่ยวข้อง |
 | `POST /api/line/send` | `line_send` (1373) | ส่งเข้า LINE (rate limit 3 วิ · สูงสุด 4 ภาพ) |
-| `GET /api/detection/models` | `detection_models` | รายการโมเดลในทะเบียน `configs/paths.yaml` |
-| `POST /api/detection/model` | `select_detection_model` | เลือกโมเดลตามชื่อในทะเบียน แล้ว spawn worker |
+| `GET/POST /api/models`, `DELETE /api/models/{name}` | `list_models` · `add_model` · `remove_model` | ทะเบียนโมเดล (เพิ่มจาก candidate id เท่านั้น) |
+| `GET /api/videos`, `GET /api/videos/source` | `list_videos` · `video_source` | รายการวิดีโอ · ส่งไฟล์ต้นฉบับแบบ Range |
+| `POST /api/renders`, `GET/DELETE /api/renders/current` | `start_render` · `render_status` · `cancel_render` | เริ่ม · ความคืบหน้า · ยกเลิกการประมวลผล |
+| `GET /api/renders/video`, `DELETE /api/renders` | `render_video` · `delete_render` | เล่น · ลบผลการประมวลผล |
 
 ### `capture_shot(request)` — เส้นทางที่ซับซ้อนที่สุด
-รับ JPEG ของเฟรมที่หน้าเว็บกำลังเล่นจาก body แล้ว OCR ที่นี่
-จากนั้น → `detect_on_frame` → `session.save` → `verify_shot` → `record_verification`
+ไม่มี body — หาเฟรมจาก `source_time_ms` × fps (ปัดตาม stride ของ render) แล้ว `SourceFrames.read()`
+จากไฟล์ต้นฉบับ จากนั้น → OCR → `renders.detections_at()` → `session.save` → `verify_shot`
+→ `record_verification`
 
 ---
 
@@ -516,26 +538,29 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
           ├─ load_config()            → AppConfig            [config.py]
           ├─ create_recognizer()      → PaddleRecognizer     [ocr.py]
           └─ run_web_app()                                   [webapp.py]
-               ├─ load_model_choices() → ทะเบียน configs/paths.yaml   [vision_lab/paths.py]
-               └─ create_app() → aiohttp Application
-                    └─ on_startup: autoload_default_model() → โหลด default เบื้องหลัง
+               ├─ _load_registry_and_videos() → ModelRegistry + โฟลเดอร์วิดีโอ  [vision_lab]
+               └─ create_app() → aiohttp Application (+ RenderManager, SourceFrames)
 
-[2] หน้าเว็บเปิด → GET /api/detection/models → เติม dropdown โมเดล
-     ผู้ใช้เลือกไฟล์วิดีโอ → เล่นใน <video> บนเครื่อง (ไฟล์ไม่ถูกอัปโหลด)
+[2] หน้าเว็บเปิด → GET /api/models · GET /api/videos · GET /api/renders
+     ผู้ใช้เลือกวิดีโอ → <video src=/api/videos/source?video=..> (Range)
 
-[3] ระหว่างวิดีโอเล่น (detection เท่านั้น ไม่มี OCR อัตโนมัติ)
-     requestVideoFrameCallback → ย่อเฟรม → POST /api/detection/frame
-          └─► DetectionWorker.submit() → โปรเซสลูก: YOLO + BoT-SORT
-     GET /api/detection/result (long-poll) → วาดกรอบบน canvas
+[3] ผู้ใช้กด "ประมวลผลด้วย AI"
+     │  POST /api/renders {video, model, confidence, image_size, stride}
+     └─► RenderManager.start() → spawn ลูก                   [render_job.py]
+          ├─ load_ultralytics_detector() · choose_encoder() → h264_nvenc
+          └─ run_render(): ทุกเฟรม → track (BoT-SORT) → annotate_frame → ffmpeg stdin
+                           → tracks.jsonl · annotated.mp4 · meta.json
+     หน้าเว็บ poll GET /api/renders/current ทุก 1 วิ → เสร็จแล้วเล่น /api/renders/video
 
 [4] ผู้ใช้กดปุ่ม Capture
-     │  POST /api/capture/shot   (body = JPEG เต็มเฟรมจาก <video>)
+     │  POST /api/capture/shot?video=..&source_time_ms=..&render=..   (ไม่มี body)
      └─► capture_shot()                                      [webapp.py]
+          ├─ SourceFrames.read(video, frame_index)  → เฟรมต้นฉบับ (ไม่มีกรอบ)
           ├─ TelemetryPipeline.process_frame()   ← ล็อก _RECOGNIZER_LOCK
           │    ├─ extract_roi() × 11 · apply_recipe() × 11
           │    ├─ recognize_grouped() → PaddleOCR
           │    └─ validate_text() → TemporalStabilizer.add()
-          ├─ detect_on_frame(frame)    → YOLO 960px conf .25
+          ├─ renders.detections_at(render, frame_index) → กรอบ + track_id
           ├─ session.save(...)         → JPEG + .boxes.jpg + manifest
           └─ verify_shot(image_path, live_records, pipeline ใหม่)
                ├─ process_frame() × 5   (ให้การโหวตมีองค์ประชุม)
@@ -559,7 +584,7 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 
 ```
 telemetry-ocr run --video flight.mp4 --config roi.yaml --jsonl out.jsonl --csv out.csv
-   └─ TelemetryPipeline.run()  → เหมือน [3] ข้างบน แต่เขียนไฟล์อย่างเดียว
+   └─ TelemetryPipeline.run()  → อ่านแบบเดียวกับ [4] ข้างบน ทุกเฟรมที่ตั้งเวลาไว้ และเขียนไฟล์อย่างเดียว
 
 telemetry-ocr capture --video flight.mp4 --session output/sessions/s1
    └─ capture_session()        [capture.py:185]   บันทึกเฟรม + manifest (ยังไม่ OCR)

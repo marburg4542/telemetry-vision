@@ -112,6 +112,10 @@ const state = {
   ffmpeg: null,
   renderJob: null,
   renderPollTimer: null,
+  // Frames a second this machine managed on its most recent finished render,
+  // which is what the time estimate is made from. null until there is one.
+  renderSpeed: null,
+  renderSpeedAt: "",
   // Capture: one session per page load unless the operator is holding the
   // button down, in which case shots keep appending to the same one.
   captureSession: null,
@@ -470,6 +474,7 @@ async function initializeLibrary() {
   }
   try {
     const payload = await jsonFetch("/api/renders");
+    rememberRenderSpeed(payload.renders);
     state.ffmpeg = Boolean(payload.ffmpeg);
     applyRenderJob(payload.job);
   } catch (error) {
@@ -526,6 +531,7 @@ async function refreshRenders({ autoplay = false } = {}) {
   // Another video may have been chosen while this was in flight.
   if (!state.video || state.video.id !== videoId) return;
   state.renders = Array.isArray(payload.renders) ? payload.renders : [];
+  rememberRenderSpeed(state.renders);
   state.ffmpeg = Boolean(payload.ffmpeg);
   applyRenderJob(payload.job);
   const stillThere = state.activeRender && state.renders.some(
@@ -545,6 +551,19 @@ async function refreshRenders({ autoplay = false } = {}) {
   renderRenderList();
   updateRenderControls();
   describeRenderChoice();
+}
+
+// The speed of the newest finished render. A guess from a real run on this
+// machine beats a constant, which would be wrong on every other one.
+function rememberRenderSpeed(renders) {
+  for (const render of renders || []) {
+    const fps = Number(render.frames_written) / Number(render.elapsed_s);
+    const created = String(render.created_at || "");
+    if (Number.isFinite(fps) && fps > 0 && (!state.renderSpeed || created > state.renderSpeedAt)) {
+      state.renderSpeed = fps;
+      state.renderSpeedAt = created;
+    }
+  }
 }
 
 // A render made from these files, with the model and settings chosen above.
@@ -774,9 +793,14 @@ function describeRenderChoice() {
   } else if (state.ffmpeg === false) {
     setRenderStatus("ไม่พบ ffmpeg บนเครื่องนี้ จึงประมวลผลวิดีโอใหม่ไม่ได้ (ยังเล่นผลที่มีอยู่ได้)", true);
   } else {
+    const frames = Number(state.video.frames) / renderSettings().stride;
+    const estimate = state.renderSpeed && frames
+      ? `ใช้เวลาประมาณ ${formatDuration(frames / state.renderSpeed)}`
+        + ` (จากความเร็วครั้งล่าสุด ${state.renderSpeed.toFixed(1)} เฟรม/วินาที)`
+      : "ใช้เวลานานกว่าความยาววิดีโอ";
     setRenderStatus(
-      `ยังไม่ได้ประมวลผล ${state.video.name} ด้วย ${model.name} ที่ค่านี้ · `
-      + "ใช้เวลาใกล้เคียงหรือนานกว่าความยาววิดีโอ ระหว่างรอดูต้นฉบับได้",
+      `ยังไม่ได้ประมวลผล ${state.video.name} ด้วย ${model.name} ที่ค่านี้ · ${estimate}`
+      + " ระหว่างรอดูต้นฉบับได้",
     );
   }
 }
