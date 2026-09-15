@@ -1,0 +1,1646 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>คู่มือการใช้งาน Telemetry Vision</title>
+<style>
+:root {
+  --blue-900: #073b73;
+  --blue-800: #0a4f96;
+  --blue-700: #0b63c9;
+  --blue-600: #1677d9;
+  --blue-400: #4fb3f0;
+  --cyan: #5cc8f6;
+  --blue-100: #e3f0fc;
+  --blue-50: #f3f8fe;
+  --ink: #15202e;
+  --muted: #56667a;
+  --line: #d6e3f1;
+  --amber-bg: #fff6e2;
+  --amber: #9a6200;
+  --red-bg: #fdeceb;
+  --red: #b3261e;
+}
+@page {
+  size: A4;
+  margin: 20mm 17mm 22mm;
+  @bottom-left {
+    content: "Telemetry Vision · คู่มือการใช้งาน";
+    font: 8pt "Leelawadee UI", Tahoma, sans-serif;
+    color: #7890aa;
+    vertical-align: top;
+    padding-top: 6mm;
+  }
+  @bottom-right {
+    content: counter(page);
+    font: bold 9pt "Leelawadee UI", Tahoma, sans-serif;
+    color: var(--blue-700);
+    vertical-align: top;
+    padding-top: 6mm;
+  }
+  @top-right {
+    content: "iCreativeSystems Co.,Ltd.";
+    font: 7.5pt "Leelawadee UI", Tahoma, sans-serif;
+    color: #9fb2c6;
+    vertical-align: bottom;
+    padding-bottom: 5mm;
+  }
+}
+@page cover {
+  margin: 0;
+  @bottom-left { content: none; }
+  @bottom-right { content: none; }
+  @top-right { content: none; }
+}
+@page divider {
+  margin: 0;
+  @bottom-left { content: none; }
+  @bottom-right { content: none; }
+  @top-right { content: none; }
+}
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0;
+  font-family: "Leelawadee UI", "Noto Sans Thai", Tahoma, sans-serif;
+  font-size: 10.2pt;
+  line-height: 1.68;
+  color: var(--ink);
+}
+code, pre, kbd { font-family: "Cascadia Mono", Consolas, monospace; }
+code {
+  font-size: 0.86em;
+  background: var(--blue-50);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 0.3em;
+  color: var(--blue-900);
+}
+kbd {
+  font-size: 0.82em;
+  border: 1px solid #b9c9da;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 0.35em;
+  background: #fff;
+}
+pre {
+  background: #f4f8fc;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue-600);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 8.3pt;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  break-inside: avoid;
+  margin: 8px 0 12px;
+}
+pre code { background: none; border: 0; padding: 0; color: inherit; font-size: inherit; }
+a { color: var(--blue-700); text-decoration: none; }
+p { margin: 0 0 8px; }
+ul, ol { margin: 4px 0 10px; padding-left: 20px; }
+li { margin: 2px 0; }
+strong { color: #0c2d52; }
+
+/* ---------------- Cover ---------------- */
+.cover {
+  page: cover;
+  position: relative;
+  width: 210mm;
+  height: 297mm;
+  overflow: hidden;
+  background: #fff;
+}
+.cover-top {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 128mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cover-top img { width: 78mm; }
+.cover-band {
+  position: absolute;
+  inset: 128mm 0 0 0;
+  background:
+    radial-gradient(120mm 90mm at 92% 8%, rgba(92, 200, 246, 0.35), transparent 70%),
+    linear-gradient(155deg, #0b63c9 0%, #0a4f96 55%, #073b73 100%);
+  color: #fff;
+  padding: 26mm 22mm 0;
+}
+.cover-band svg.arcs { position: absolute; right: -30mm; top: -40mm; width: 150mm; opacity: 0.55; }
+.cover-kicker {
+  display: inline-block;
+  font-size: 10pt;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #bfe6ff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 99px;
+  padding: 1mm 4mm;
+}
+.cover h1 {
+  font-size: 34pt;
+  line-height: 1.25;
+  margin: 7mm 0 1mm;
+  font-weight: 700;
+  color: #fff;
+}
+.cover .product { font-size: 21pt; font-weight: 600; color: #d8f0ff; margin: 0; }
+.cover .lead { font-size: 11.5pt; color: #e3f2ff; max-width: 135mm; margin-top: 6mm; line-height: 1.7; }
+.cover-app {
+  position: absolute;
+  right: 22mm;
+  bottom: 44mm;
+  width: 30mm;
+  border-radius: 7mm;
+  box-shadow: 0 6mm 14mm rgba(0, 20, 50, 0.35);
+}
+.cover-meta {
+  position: absolute;
+  left: 22mm;
+  right: 22mm;
+  bottom: 18mm;
+  display: flex;
+  gap: 10mm;
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
+  padding-top: 5mm;
+  font-size: 9pt;
+  color: #cfe8fb;
+}
+.cover-meta b { display: block; color: #fff; font-size: 10.5pt; }
+
+/* ---------------- Dividers ---------------- */
+.divider {
+  page: divider;
+  break-before: page;
+  break-after: page;
+  width: 210mm;
+  height: 296mm;
+  position: relative;
+  background: linear-gradient(160deg, #f3f8fe 0%, #e3f0fc 100%);
+  overflow: hidden;
+}
+.divider .num {
+  position: absolute;
+  left: 22mm;
+  top: 70mm;
+  font-size: 120pt;
+  font-weight: 700;
+  color: var(--blue-700);
+  line-height: 1;
+  opacity: 0.12;
+}
+.divider .inner { position: absolute; left: 22mm; right: 22mm; top: 108mm; }
+.divider h1 { font-size: 30pt; color: var(--blue-800); margin: 0 0 4mm; }
+.divider p { font-size: 12pt; color: var(--muted); max-width: 140mm; }
+.divider ul { font-size: 11pt; color: var(--blue-900); margin-top: 8mm; columns: 2; column-gap: 12mm; }
+.divider svg { position: absolute; right: -40mm; bottom: -40mm; width: 160mm; opacity: 0.8; }
+
+/* ---------------- Contents ---------------- */
+.toc { break-before: page; }
+.toc + .divider { break-before: page; }
+.toc h2 { border: 0; }
+.toc .part {
+  margin: 12px 0 4px;
+  font-weight: 700;
+  color: var(--blue-700);
+  font-size: 10pt;
+  letter-spacing: 0.06em;
+}
+.toc ol { list-style: none; padding: 0; margin: 0; }
+.toc li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px dotted #c9d8e8;
+}
+.toc .n {
+  width: 26px;
+  flex: none;
+  color: #fff;
+  background: var(--blue-700);
+  border-radius: 5px;
+  font-size: 8.5pt;
+  text-align: center;
+  font-weight: 700;
+}
+.toc .t { flex: 1; }
+.toc .toc-page { color: var(--blue-700); font-weight: 700; min-width: 20px; text-align: right; }
+
+/* ---------------- Chapters ---------------- */
+.chapter { margin-top: 14mm; }
+.divider + .chapter { margin-top: 0; }
+.chapter-head { break-after: avoid; break-inside: avoid; }
+.chapter-head + p, .chapter-head + figure { break-before: avoid; }
+.chapter-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid var(--blue-100);
+  padding-bottom: 8px;
+  margin-bottom: 14px;
+}
+.chapter-head .badge {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(150deg, var(--blue-600), var(--blue-800));
+  color: #fff;
+  font-size: 17pt;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.chapter-head h2 { margin: 0; font-size: 19pt; color: var(--blue-900); line-height: 1.3; }
+.chapter-head .sub { margin: 0; color: var(--muted); font-size: 9.5pt; }
+.anchor { font-size: 1px; color: #fff; line-height: 0; }
+h3 {
+  font-size: 12.5pt;
+  color: var(--blue-800);
+  margin: 16px 0 6px;
+  break-after: avoid;
+}
+h3::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 0.95em;
+  background: var(--cyan);
+  border-radius: 2px;
+  margin-right: 7px;
+  vertical-align: -0.1em;
+}
+h4 { font-size: 10.5pt; color: var(--blue-900); margin: 10px 0 4px; break-after: avoid; }
+
+/* ---------------- Figures ---------------- */
+figure { margin: 10px 0 14px; break-inside: avoid; }
+.frame {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(11, 79, 150, 0.08);
+  line-height: 0;
+}
+.frame img { width: 100%; display: block; }
+figure.narrow .frame { width: 62%; margin: 0 auto; }
+figure.narrow85 .frame { width: 56%; margin: 0 auto; }
+figure.phone { display: inline-block; width: 31%; vertical-align: top; margin: 4px 1.5% 10px; }
+figure.phone .frame { height: 82mm; }
+figure.phone .frame img { height: 100%; object-fit: cover; object-position: top; }
+.phones { text-align: center; }
+figure.phone .frame { border-radius: 14px; }
+figcaption { font-size: 8.6pt; color: var(--muted); margin-top: 5px; text-align: center; line-height: 1.5; }
+figcaption b { color: var(--blue-700); }
+.hot {
+  position: absolute;
+  border: 1.5px solid var(--cyan);
+  border-radius: 5px;
+}
+.pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--blue-700);
+  color: #fff;
+  font: bold 7.8pt/17px "Leelawadee UI", Tahoma, sans-serif;
+  text-align: center;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.legend { list-style: none; padding: 0; margin: 4px 0 12px; columns: 2; column-gap: 18px; }
+.legend li { break-inside: avoid; display: flex; gap: 8px; margin: 0 0 5px; font-size: 9.3pt; line-height: 1.5; }
+.legend li::before {
+  content: attr(data-n);
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--blue-700);
+  color: #fff;
+  font-size: 8pt;
+  font-weight: 700;
+  text-align: center;
+  line-height: 18px;
+  margin-top: 1px;
+}
+.legend.one { columns: 1; }
+
+/* ---------------- Blocks ---------------- */
+.note, .tip, .warn, .danger {
+  border-radius: 8px;
+  padding: 8px 12px 8px 40px;
+  margin: 10px 0 12px;
+  position: relative;
+  break-inside: avoid;
+  font-size: 9.5pt;
+}
+.note::before, .tip::before, .warn::before, .danger::before {
+  position: absolute;
+  left: 11px;
+  top: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  font-size: 10pt;
+  text-align: center;
+  line-height: 20px;
+}
+.note { background: var(--blue-50); border: 1px solid #cfe2f6; }
+.note::before { content: "i"; background: var(--blue-600); font-family: Georgia, serif; }
+.tip { background: #eefaf6; border: 1px solid #c4eadb; }
+.tip::before { content: "✓"; background: #1b8a63; }
+.warn { background: var(--amber-bg); border: 1px solid #f1d9a4; }
+.warn::before { content: "!"; background: #d18b00; }
+.danger { background: var(--red-bg); border: 1px solid #f2c4c0; }
+.danger::before { content: "!"; background: var(--red); }
+.note b:first-child, .tip b:first-child, .warn b:first-child, .danger b:first-child { display: block; }
+
+.steps { list-style: none; counter-reset: step; padding: 0; margin: 6px 0 12px; }
+.steps > li {
+  counter-increment: step;
+  position: relative;
+  padding: 0 0 8px 34px;
+  break-inside: avoid;
+}
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--blue-100);
+  color: var(--blue-800);
+  border: 1.5px solid var(--blue-600);
+  font-weight: 700;
+  font-size: 9pt;
+  text-align: center;
+  line-height: 20px;
+}
+.steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 25px;
+  bottom: 2px;
+  width: 1.5px;
+  background: var(--line);
+}
+
+table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 9pt; line-height: 1.5; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th {
+  background: var(--blue-700);
+  color: #fff;
+  text-align: left;
+  font-weight: 600;
+  padding: 5px 8px;
+}
+th:first-child { border-top-left-radius: 6px; }
+th:last-child { border-top-right-radius: 6px; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:nth-child(even) td { background: #f7fbff; }
+td code { white-space: nowrap; }
+td.k { white-space: nowrap; font-weight: 600; color: var(--blue-900); }
+
+.flow { display: flex; align-items: stretch; gap: 0; margin: 10px 0 14px; break-inside: avoid; }
+.flow .box {
+  flex: 1;
+  background: var(--blue-50);
+  border: 1px solid #cfe2f6;
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 8.6pt;
+  line-height: 1.45;
+  text-align: center;
+}
+.flow .box b { display: block; color: var(--blue-800); font-size: 9.5pt; margin-bottom: 2px; }
+.flow .box.dark { background: var(--blue-700); border-color: var(--blue-700); color: #e6f3ff; }
+.flow .box.dark b { color: #fff; }
+.flow .arrow { flex: none; width: 18px; display: grid; place-items: center; color: var(--blue-600); font-weight: 700; }
+
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 14px; }
+.card {
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--blue-600);
+  border-radius: 8px;
+  padding: 8px 11px;
+  break-inside: avoid;
+  font-size: 9.3pt;
+}
+.card h4 { margin: 0 0 3px; }
+.card p { margin: 0; }
+
+.chips span {
+  display: inline-block;
+  border-radius: 99px;
+  padding: 0 8px;
+  font-size: 8.6pt;
+  margin: 0 3px 3px 0;
+  border: 1px solid;
+}
+.chip-blue { color: var(--blue-700); border-color: #9cc8f0; background: #eef6fe; }
+.chip-amber { color: var(--amber); border-color: #eccb85; background: var(--amber-bg); }
+.chip-red { color: var(--red); border-color: #eaa9a3; background: var(--red-bg); }
+.chip-grey { color: #5c6b7c; border-color: #cfd8e2; background: #f5f7fa; }
+
+.msg {
+  background: #eaf6ea;
+  border-radius: 12px;
+  padding: 9px 13px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8.1pt;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  border: 1px solid #cde5cd;
+  max-width: 128mm;
+  margin: 8px auto 12px;
+  break-inside: avoid;
+}
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.msg-pair { grid-template-columns: 1.05fr 1fr; break-inside: avoid; }
+.msg-pair .msg { margin: 0; max-width: none; font-size: 7.6pt; }
+.msg-pair table { margin-top: 0; }
+.keep { break-inside: avoid; }
+.small { font-size: 8.8pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- ======================================================= COVER -->
+<section class="cover">
+  <div class="cover-top"><img src="assets/ics.png" alt="iCreativeSystems Co.,Ltd."></div>
+  <div class="cover-band">
+    <svg class="arcs" viewBox="0 0 200 200" fill="none" stroke="#9fdcff" stroke-width="0.8">
+      <circle cx="100" cy="100" r="96"/>
+      <circle cx="100" cy="100" r="78" stroke-dasharray="3 4"/>
+      <circle cx="100" cy="100" r="60"/>
+      <circle cx="100" cy="100" r="42" stroke-opacity="0.6"/>
+      <path d="M100 0v36M100 164v36M0 100h36M164 100h36" stroke-width="1.4"/>
+    </svg>
+    <span class="cover-kicker">User Guide</span>
+    <h1>คู่มือการใช้งาน</h1>
+    <p class="product">Telemetry Vision · Telemetry OCR</p>
+    <p class="lead">ระบบอ่านค่า telemetry จากวิดีโอโดรนด้วย OCR พร้อมตรวจจับวัตถุด้วย YOLO
+      เก็บภาพหลักฐาน และส่งรายงานเข้า LINE</p>
+    <img class="cover-app" src="assets/app-icon.png" alt="">
+    <div class="cover-meta">
+      <div><b>เวอร์ชัน 0.5.0</b>ซอฟต์แวร์ที่อ้างอิง</div>
+      <div><b>กันยายน 2569</b>วันที่จัดทำ</div>
+      <div><b>ผู้ใช้งาน · ผู้ดูแลระบบ</b>กลุ่มผู้อ่าน</div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= CONTENTS -->
+<section class="toc">
+  <div class="chapter-head">
+    <div class="badge">≡</div>
+    <div><h2>สารบัญ</h2><p class="sub">เลขหน้าอยู่ด้านขวาของแต่ละหัวข้อ</p></div>
+  </div>
+
+  <div class="part">ส่วนที่ 1 · สำหรับผู้ใช้งาน</div>
+  <ol>
+    <li><span class="n">1</span><span class="t">รู้จัก Telemetry Vision</span><span class="toc-page" data-toc="c01"></span></li>
+    <li><span class="n">2</span><span class="t">เปิดใช้งานและติดตั้งเป็นแอป</span><span class="toc-page" data-toc="c02"></span></li>
+    <li><span class="n">3</span><span class="t">ส่วนประกอบของหน้าจอ</span><span class="toc-page" data-toc="c03"></span></li>
+    <li><span class="n">4</span><span class="t">เลือกวิดีโอ</span><span class="toc-page" data-toc="c04"></span></li>
+    <li><span class="n">5</span><span class="t">ประมวลผลวิดีโอด้วย AI และจัดการโมเดล</span><span class="toc-page" data-toc="c05"></span></li>
+    <li><span class="n">6</span><span class="t">เก็บภาพด้วยปุ่ม Capture</span><span class="toc-page" data-toc="c06"></span></li>
+    <li><span class="n">7</span><span class="t">ตรวจภาพและค่า telemetry</span><span class="toc-page" data-toc="c07"></span></li>
+    <li><span class="n">8</span><span class="t">ส่งผลเข้า LINE</span><span class="toc-page" data-toc="c08"></span></li>
+    <li><span class="n">9</span><span class="t">จัดการภาพ ส่งออกข้อมูล และหน้าต่างแคบ</span><span class="toc-page" data-toc="c09"></span></li>
+    <li><span class="n">10</span><span class="t">ปัญหาที่พบบ่อยของผู้ใช้งาน</span><span class="toc-page" data-toc="c10"></span></li>
+  </ol>
+
+  <div class="part">ส่วนที่ 2 · สำหรับผู้ดูแลระบบ</div>
+  <ol>
+    <li><span class="n">11</span><span class="t">ความต้องการระบบและการติดตั้ง</span><span class="toc-page" data-toc="c11"></span></li>
+    <li><span class="n">12</span><span class="t">เปิด server อัตโนมัติ และไฟล์ log</span><span class="toc-page" data-toc="c12"></span></li>
+    <li><span class="n">13</span><span class="t">ตั้งค่า LINE Official Account</span><span class="toc-page" data-toc="c13"></span></li>
+    <li><span class="n">14</span><span class="t">ส่งรูปผ่าน Cloudflare Tunnel</span><span class="toc-page" data-toc="c14"></span></li>
+    <li><span class="n">15</span><span class="t">จัดการโมเดลและการประมวลผลวิดีโอ</span><span class="toc-page" data-toc="c15"></span></li>
+    <li><span class="n">16</span><span class="t">ตั้งค่า ROI และ Calibration</span><span class="toc-page" data-toc="c16"></span></li>
+    <li><span class="n">17</span><span class="t">คำสั่ง CLI อ้างอิง</span><span class="toc-page" data-toc="c17"></span></li>
+    <li><span class="n">18</span><span class="t">ความปลอดภัยและข้อควรระวัง</span><span class="toc-page" data-toc="c18"></span></li>
+    <li><span class="n">19</span><span class="t">แก้ปัญหาสำหรับผู้ดูแลระบบ</span><span class="toc-page" data-toc="c19"></span></li>
+  </ol>
+
+  <div class="part">ภาคผนวก</div>
+  <ol>
+    <li><span class="n">ก</span><span class="t">โครงสร้างไฟล์ · รายการ API · อภิธานศัพท์</span><span class="toc-page" data-toc="c20"></span></li>
+  </ol>
+</section>
+
+<!-- ======================================================= PART 1 -->
+<section class="divider">
+  <div class="num">01</div>
+  <div class="inner">
+    <h1>ส่วนที่ 1<br>สำหรับผู้ใช้งาน</h1>
+    <p>ใช้งานหน้าเว็บ Telemetry OCR ตั้งแต่เลือกวิดีโอ ประมวลผลด้วย AI เก็บภาพ ตรวจค่า
+      ไปจนถึงส่งรายงานเข้า LINE — ไม่ต้องพิมพ์คำสั่งใดๆ</p>
+    <ul>
+      <li>เปิดแอปและอ่านสถานะ</li>
+      <li>เลือกวิดีโอเที่ยวบิน</li>
+      <li>ประมวลผลด้วย AI</li>
+      <li>Capture และตรวจค่า</li>
+      <li>ส่งเข้า LINE</li>
+      <li>ส่งออก JSONL / CSV</li>
+    </ul>
+  </div>
+  <svg viewBox="0 0 200 200" fill="none" stroke="#0b63c9" stroke-opacity="0.18" stroke-width="1.2">
+    <circle cx="100" cy="100" r="96"/><circle cx="100" cy="100" r="70"/><circle cx="100" cy="100" r="44"/>
+  </svg>
+</section>
+
+<!-- ------------------------------------------------------- 1 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">1</div>
+    <div><h2>รู้จัก Telemetry Vision<span class="anchor">ZZc01ZZ</span></h2>
+      <p class="sub">ระบบนี้ทำอะไร และข้อมูลเดินทางอย่างไร</p></div>
+  </div>
+
+  <p>วิดีโอจากกล้องโดรนมีตัวเลขซ้อนอยู่บนภาพ (OSD) เช่น พิกัดอากาศยาน พิกัดเป้า (TAG)
+    ความสูง มุมกล้อง ระยะ LRF และค่าซูมของกล้อง EO/IR <strong>Telemetry OCR</strong>
+    อ่านตัวเลขเหล่านี้ออกมาเป็นข้อมูล พร้อมใช้โมเดล <strong>YOLO</strong> วาดกรอบรอบวัตถุ
+    (เช่น รถยนต์ รถจักรยานยนต์ รถบรรทุก) ทับบนวิดีโอ ผู้ใช้เลือกเก็บเฟรมที่สำคัญ
+    ตรวจค่าที่อ่านได้ แล้วส่งสรุปพร้อมรูปเข้า LINE ได้ในไม่กี่คลิก</p>
+
+  <div class="flow">
+    <div class="box"><b>วิดีโอ</b>ในโฟลเดอร์<br>ของโปรเจกต์</div>
+    <div class="arrow">›</div>
+    <div class="box dark"><b>ประมวลผลด้วย AI</b>YOLO ทุกเฟรม<br>→ วิดีโอ AI</div>
+    <div class="arrow">›</div>
+    <div class="box"><b>Capture</b>เฟรมต้นฉบับ<br>+ telemetry + กรอบ</div>
+    <div class="arrow">›</div>
+    <div class="box"><b>ตรวจซ้ำ</b>อ่านค่าจากไฟล์ภาพ<br>อีกรอบ</div>
+    <div class="arrow">›</div>
+    <div class="box dark"><b>LINE</b>ข้อความสรุป<br>+ รูปที่มีกรอบ</div>
+  </div>
+
+  <h3>หลักการสำคัญที่ควรรู้</h3>
+  <div class="cards">
+    <div class="card"><h4>ทุกอย่างประมวลผลบนเครื่อง</h4>
+      <p>วิดีโออยู่ในโฟลเดอร์ของโปรเจกต์ server บนเครื่องเดียวกัน (<code>127.0.0.1</code>)
+        อ่านไฟล์เองทั้งตอนเล่น ตอนประมวลผลด้วย AI และตอน Capture ไม่มีการอัปโหลดออกไปภายนอก</p></div>
+    <div class="card"><h4>กรอบตรวจจับฝังอยู่ในวิดีโอ AI</h4>
+      <p>โมเดลอ่านวิดีโอทุกเฟรมล่วงหน้าครั้งเดียว กรอบจึงตรงวัตถุทุกเฟรมและ Track ID ต่อเนื่อง
+        ค่า telemetry อ่านเมื่อกด Capture จากเฟรมต้นฉบับที่ไม่มีกรอบ</p></div>
+    <div class="card"><h4>ภาพต้นฉบับไม่ถูกแก้ไข</h4>
+      <p>กรอบตรวจจับถูกวาดลง<em>สำเนา</em>ของภาพ ต้นฉบับเก็บไว้เป็นหลักฐานและใช้อ่าน OCR ซ้ำ</p></div>
+    <div class="card"><h4>หน้าเว็บเปิดได้จากเครื่องนี้เท่านั้น</h4>
+      <p>server รับเฉพาะการเชื่อมต่อจากเครื่องตัวเอง โทรศัพท์หรือเครื่องอื่นจะเห็นผลผ่านข้อความ LINE</p></div>
+  </div>
+
+  <h3>ค่า telemetry ที่ระบบอ่าน</h3>
+  <table>
+    <thead><tr><th style="width:22%">กลุ่มบนหน้าจอ</th><th style="width:30%">รายการ</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td class="k">EO / IR</td><td>EO, IR, LRF</td><td>ค่าซูมและมุมมอง (FOV) ของกล้อง EO และ IR, ระยะจากเลเซอร์วัดระยะ (เมตร)</td></tr>
+      <tr><td class="k">CAMERA</td><td>Camera yaw left/right, Camera pitch up/down</td><td>มุมกล้องแนวซ้าย-ขวา และแนวก้ม-เงย (องศา)</td></tr>
+      <tr><td class="k">TAG</td><td>N, E, ALT</td><td>พิกัดละติจูด/ลองจิจูดของเป้าที่กล้องเล็ง และความสูง (เมตร)</td></tr>
+      <tr><td class="k">ACFT</td><td>N, E, ALT</td><td>พิกัดและความสูงของอากาศยาน</td></tr>
+    </tbody>
+  </table>
+  <p class="small">นอกจากนี้ระบบอ่านวันเวลาบน OSD ไว้ในไฟล์ข้อมูลด้วย รายการฟิลด์ทั้งหมดกำหนดในไฟล์ config ของ ROI (ดูบทที่ 16)</p>
+
+  <h3>คำศัพท์ที่ใช้ในคู่มือ</h3>
+  <table>
+    <thead><tr><th style="width:24%">คำ</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Capture / ภาพที่เก็บไว้</td><td>เฟรมที่ผู้ใช้กดเก็บ บันทึกเป็นไฟล์ภาพความละเอียดเต็มพร้อมค่าที่อ่านได้</td></tr>
+      <tr><td class="k">ยืนยันแล้ว (confirmed)</td><td>ค่าที่ผ่านการตรวจรูปแบบ/ช่วงค่า และได้รับการยืนยันจากการอ่านหลายครั้ง</td></tr>
+      <tr><td class="k">conf</td><td>ความมั่นใจของโมเดล (0–100%) ยิ่งสูงยิ่งน่าเชื่อถือ</td></tr>
+      <tr><td class="k">raw</td><td>ข้อความดิบที่ OCR อ่านได้ ก่อนจัดรูปแบบเป็นค่า</td></tr>
+      <tr><td class="k">โมเดล / checkpoint</td><td>ไฟล์ <code>.pt</code> ของ YOLO ที่ใช้ตรวจจับวัตถุ เช่น <code>best50</code></td></tr>
+      <tr><td class="k">วิดีโอ AI</td><td>ผลการประมวลผลวิดีโอด้วยโมเดล — วิดีโอเดิมที่มีกรอบตรวจจับวาดอยู่ในภาพแล้ว</td></tr>
+      <tr><td class="k">Track ID</td><td>หมายเลขที่ตัวติดตาม (BoT-SORT) ใช้ระบุวัตถุชิ้นเดิมข้ามเฟรม</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 2 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">2</div>
+    <div><h2>เปิดใช้งานและติดตั้งเป็นแอป<span class="anchor">ZZc02ZZ</span></h2>
+      <p class="sub">เริ่มต้นครั้งแรก และวิธีอ่านสถานะของระบบ</p></div>
+  </div>
+
+  <p>บนเครื่องที่ผู้ดูแลระบบติดตั้งไว้แล้ว server จะเปิดเองแบบซ่อนทุกครั้งที่ login Windows
+    ผู้ใช้จึงเปิดหน้าเว็บได้ทันที (ถ้ายังไม่ได้ติดตั้ง ดูบทที่ 11–12)</p>
+
+  <h3>เปิดครั้งแรกด้วยเบราว์เซอร์</h3>
+  <ol class="steps">
+    <li>เปิด <strong>Google Chrome</strong> หรือ <strong>Microsoft Edge</strong></li>
+    <li>ไปที่ <code>http://127.0.0.1:8765</code></li>
+    <li>รอจนป้ายสถานะมุมขวาบนขึ้นว่า <span class="chips"><span class="chip-blue">● PP-OCRv6_tiny_rec พร้อมใช้งาน</span></span>
+      ครั้งแรกหลังเปิดเครื่องอาจใช้เวลาครู่หนึ่งระหว่างโหลดโมเดล OCR</li>
+  </ol>
+
+  <h3>ติดตั้งเป็นแอป (PWA)</h3>
+  <ol class="steps">
+    <li>กดปุ่ม <strong>ติดตั้งแอป</strong> ที่มุมขวาบน หรือไอคอน Install ในแถบที่อยู่ของเบราว์เซอร์</li>
+    <li>ยืนยันการติดตั้ง ไอคอน <strong>Telemetry OCR</strong> (ช่องมองภาพสีขาวบนพื้นฟ้า) จะอยู่ใน Start Menu และ Desktop</li>
+    <li>ครั้งต่อไปเปิดจากไอคอนได้เหมือนโปรแกรมทั่วไป</li>
+  </ol>
+  <div class="note"><b>แอปยังต้องมี server ทำงานอยู่เบื้องหลัง</b>
+    แอปจำหน้าจอไว้เพื่อเปิดได้เร็ว แต่การอ่าน OCR และการตรวจจับวัตถุทำใน server บนเครื่อง
+    ถ้าป้ายสถานะไม่ขึ้นว่าพร้อมใช้งาน ให้แจ้งผู้ดูแลระบบหรือดูบทที่ 10</div>
+
+  <h3>สถานะที่ต้องสังเกต</h3>
+  <table>
+    <thead><tr><th style="width:30%">จุดที่ดู</th><th style="width:32%">ข้อความ</th><th>ความหมาย / สิ่งที่ควรทำ</th></tr></thead>
+    <tbody>
+      <tr><td class="k">ป้ายสถานะ (มุมขวาบน)</td><td><span class="chips"><span class="chip-grey">กำลังโหลด OCR</span></span></td><td>server กำลังเตรียมโมเดล รอสักครู่</td></tr>
+      <tr><td></td><td><span class="chips"><span class="chip-blue">… พร้อมใช้งาน</span></span></td><td>ใช้งานได้ตามปกติ</td></tr>
+      <tr><td></td><td><span class="chips"><span class="chip-red">ข้อความสีแดง</span></span></td><td>เชื่อมต่อ server ไม่ได้ — ดูบทที่ 10</td></tr>
+      <tr><td class="k">แผงประมวลผลด้วย AI</td><td>ยังไม่ได้ประมวลผล … ด้วย best50</td><td>วิดีโอนี้ยังไม่มีวิดีโอ AI สำหรับโมเดลและค่าที่เลือก (ดูบทที่ 5)</td></tr>
+      <tr><td></td><td>กำลังแสดงวิดีโอ AI จาก best50</td><td>ภาพที่เล่นอยู่คือวิดีโอที่มีกรอบตรวจจับฝังอยู่แล้ว</td></tr>
+      <tr><td class="k">ข้างปุ่มส่งเข้า LINE</td><td>เดือนนี้เหลือ 298/300</td><td>โควต้าข้อความ LINE ที่เหลือของเดือนนี้ (ดูบทที่ 8)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 3 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">3</div>
+    <div><h2>ส่วนประกอบของหน้าจอ<span class="anchor">ZZc03ZZ</span></h2>
+      <p class="sub">หน้าจอหลักเมื่อเปิดแอปครั้งแรก ก่อนเลือกวิดีโอ</p></div>
+  </div>
+
+  <figure data-screen="01-start" data-marks="engine:1,video_select:2,stage:3,capture:4,line:5,quota:6,time:7,reset:8,source_line:9,ai_panel:10,telemetry:11,downloads:12">
+    <figcaption><b>ภาพที่ 3.1</b> หน้าจอหลักของ Telemetry OCR</figcaption>
+  </figure>
+
+  <ul class="legend">
+    <li data-n="1"><span><strong>ป้ายสถานะ OCR</strong> — บอกว่า server พร้อมอ่านค่าหรือไม่ ข้างกันคือปุ่ม <strong>ติดตั้งแอป</strong></span></li>
+    <li data-n="2"><span><strong>วิดีโอ</strong> — เลือกวิดีโอจากโฟลเดอร์ของโปรเจกต์</span></li>
+    <li data-n="3"><span><strong>พื้นที่วิดีโอ</strong> — เล่นต้นฉบับหรือวิดีโอ AI</span></li>
+    <li data-n="4"><span><strong>Capture</strong> — เก็บเฟรมปัจจุบัน (กดค้างเพื่อเก็บต่อเนื่อง)</span></li>
+    <li data-n="5"><span><strong>ส่งเข้า LINE</strong> — ส่งภาพที่เลือกพร้อมค่า telemetry</span></li>
+    <li data-n="6"><span><strong>โควต้า LINE</strong> — จำนวนข้อความที่ยังส่งได้ในเดือนนี้</span></li>
+    <li data-n="7"><span><strong>เวลาเล่น</strong> — ตำแหน่งปัจจุบัน / ความยาววิดีโอ (นาที:วินาที.มิลลิวินาที)</span></li>
+    <li data-n="8"><span><strong>Reset</strong> — ล้างค่าที่แสดงและเริ่มการอ่านของวิดีโอนี้ใหม่</span></li>
+    <li data-n="9"><span><strong>ข้อมูลไฟล์</strong> — ชื่อ ขนาด ความละเอียด ความยาว และ fps</span></li>
+    <li data-n="10"><span><strong>แผงประมวลผลด้วย AI</strong> — เลือกโมเดล ตั้งค่า สั่งประมวลผล และจัดการโมเดล</span></li>
+    <li data-n="11"><span><strong>ภาพที่เก็บไว้ และค่า telemetry</strong> — ภาพย่อ ภาพตัวอย่าง และค่าของภาพที่เลือก</span></li>
+    <li data-n="12"><span><strong>JSONL / CSV / ล้าง log</strong> — ส่งออกค่าของภาพที่เก็บไว้ หรือล้างค่าบนจอ</span></li>
+  </ul>
+
+  <div class="tip"><b>ปุ่มที่เป็นสีจาง = ยังกดไม่ได้</b>
+    เช่น Capture จะกดได้เมื่อเลือกวิดีโอแล้ว และส่งเข้า LINE จะกดได้เมื่อมีภาพที่เลือกไว้
+    วางเมาส์ค้างบนปุ่มส่งเข้า LINE เพื่อดูเหตุผลที่ยังกดไม่ได้</div>
+</section>
+
+<!-- ------------------------------------------------------- 4 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">4</div>
+    <div><h2>เลือกวิดีโอ<span class="anchor">ZZc04ZZ</span></h2>
+      <p class="sub">เลือกวิดีโอเที่ยวบิน เล่น หยุด และเลื่อนตำแหน่ง</p></div>
+  </div>
+
+  <h3>วิธีเลือกวิดีโอ</h3>
+  <ol class="steps">
+    <li>เปิดรายการ <strong>วิดีโอ</strong> ด้านบนพื้นที่วิดีโอ แต่ละรายการแสดง <code>ชื่อไฟล์ · ความยาว · ขนาด</code></li>
+    <li>เลือกวิดีโอ ต้นฉบับเริ่มเล่นได้ทันที ถ้าวิดีโอนั้นเคยประมวลผลด้วย AI ด้วยโมเดลและค่าที่เลือกไว้แล้ว
+      ระบบจะเล่น<strong>วิดีโอ AI</strong>ให้เอง (บทที่ 5)</li>
+    <li>ตรวจแถวข้อมูลใต้ปุ่ม Capture ว่าเป็นไฟล์ที่ถูกต้อง เช่น
+      <code>clip-60s.mp4 · 15.2 MB · 1920×1080 · 01:00.335 · 30.02 fps</code></li>
+  </ol>
+
+  <figure data-screen="02-original" data-marks="video_select:1,view_switch:2,stage:3,source_line:4">
+    <figcaption><b>ภาพที่ 4.1</b> วิดีโอต้นฉบับกำลังแสดง ตัวเลข OSD อยู่มุมซ้ายบนและมุมขวาล่างของภาพ</figcaption>
+  </figure>
+  <ul class="legend">
+    <li data-n="1"><span>รายการวิดีโอจากโฟลเดอร์ของโปรเจกต์</span></li>
+    <li data-n="2"><span>ปุ่มสลับ <strong>ต้นฉบับ / วิดีโอ AI</strong> ปรากฏเมื่อวิดีโอมีผลการประมวลผลแล้ว</span></li>
+    <li data-n="3"><span>พื้นที่วิดีโอ ใช้ปุ่มควบคุมของวิดีโอเพื่อเล่น หยุด เลื่อนเวลา หรือเต็มจอ</span></li>
+    <li data-n="4"><span>ชื่อไฟล์และรายละเอียดของวิดีโอที่เปิดอยู่</span></li>
+  </ul>
+
+  <h3>เพิ่มวิดีโอใหม่</h3>
+  <p>หน้าเว็บไม่มีปุ่มเปิดไฟล์จากเครื่อง เพราะ server ต้องอ่านไฟล์เองทั้งตอนประมวลผลด้วย AI และตอน Capture
+    ให้คัดลอกวิดีโอไปไว้ในโฟลเดอร์วิดีโอของโปรเจกต์ (ค่าเริ่มต้น <code>..\object_detection\data</code>)
+    แล้วโหลดหน้าเว็บใหม่ (<kbd>F5</kbd>) รองรับ MP4, MOV, MKV, AVI และ WebM</p>
+  <div class="note"><b>ต้นฉบับที่เบราว์เซอร์เล่นไม่ได้</b>
+    ถ้า codec ของไฟล์ไม่รองรับในเบราว์เซอร์ ต้นฉบับจะเล่นไม่ได้ แต่ยังประมวลผลด้วย AI ได้ แล้วเล่นวิดีโอ AI
+    ซึ่งเข้ารหัสเป็น H.264 เสมอ</div>
+  <div class="warn"><b>วิดีโอต้องมี layout ตัวเลขตรงกับที่ตั้งค่าไว้</b>
+    ระบบอ่านตัวเลขจากตำแหน่งคงที่บนภาพ (ROI) ถ้าวิดีโอมาจากกล้องหรือโปรแกรมที่วาง OSD ต่างตำแหน่ง
+    ค่าที่อ่านจะผิด ต้องให้ผู้ดูแลระบบตั้งค่า ROI ใหม่ (บทที่ 16)</div>
+</section>
+
+<!-- ------------------------------------------------------- 5 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">5</div>
+    <div><h2>ประมวลผลวิดีโอด้วย AI และจัดการโมเดล<span class="anchor">ZZc05ZZ</span></h2>
+      <p class="sub">ให้โมเดล YOLO อ่านวิดีโอทุกเฟรม แล้วเล่นวิดีโอที่มีกรอบตรวจจับฝังอยู่</p></div>
+  </div>
+
+  <p>ระบบไม่วาดกรอบทับวิดีโอแบบสดแล้ว แต่ให้โมเดลอ่านวิดีโอ<strong>ทุกเฟรมตามลำดับครั้งเดียว</strong>
+    วาดกรอบลงในภาพ แล้วเก็บเป็น<strong>วิดีโอ AI</strong> ผลคือกรอบตรงวัตถุทุกเฟรม และ Track ID ต่อเนื่อง
+    กว่าการวาดสด แลกกับการต้องรอก่อนดู ระหว่างรอดูต้นฉบับได้ตามปกติ</p>
+
+  <figure>
+    <div class="frame"><img src="assets/screens/04-ai-panel.png" alt=""></div>
+    <figcaption><b>ภาพที่ 5.1</b> แผงประมวลผลด้วย AI</figcaption>
+  </figure>
+
+  <h3>ขั้นตอน</h3>
+  <ol class="steps">
+    <li>เลือกวิดีโอ (บทที่ 4)</li>
+    <li>เลือก <strong>โมเดล</strong> และตั้ง <strong>Confidence</strong>, <strong>Image size</strong>, <strong>ประมวลผล</strong> ตามตารางด้านล่าง
+      บรรทัดสถานะบอกว่าเคยประมวลผลที่ค่านี้แล้วหรือยัง พร้อมเวลาโดยประมาณจากความเร็วครั้งล่าสุด</li>
+    <li>กด <strong>ประมวลผลด้วย AI</strong> แถบความคืบหน้าแสดง %, เฟรม/วินาที และเวลาที่เหลือ กด <strong>ยกเลิก</strong> ได้ทุกเมื่อ</li>
+    <li>เมื่อเสร็จ หน้าเว็บสลับไปเล่นวิดีโอ AI ให้เองและแจ้งเตือนมุมล่าง</li>
+  </ol>
+  <figure>
+    <div class="frame"><img src="assets/screens/05-render-progress.png" alt=""></div>
+    <figcaption><b>ภาพที่ 5.2</b> ระหว่างประมวลผล — ความคืบหน้า ความเร็ว และเวลาที่เหลือ</figcaption>
+  </figure>
+
+  <table>
+    <thead><tr><th style="width:22%">ตัวควบคุม</th><th style="width:18%">ค่าเริ่มต้น</th><th>ผลของการปรับ</th></tr></thead>
+    <tbody>
+      <tr><td class="k">โมเดล</td><td>ค่าเริ่มต้นในรายการ</td><td>checkpoint ที่ใช้ตรวจจับ รายการที่ขึ้นว่า <strong>ไม่พบไฟล์</strong> เลือกไม่ได้</td></tr>
+      <tr><td class="k">Confidence</td><td>0.45</td><td>เกณฑ์ความมั่นใจขั้นต่ำ (0.05–1.00) ต่ำลงเจอวัตถุมากขึ้นแต่อาจมีกรอบผิด สูงขึ้นลดกรอบผิด</td></tr>
+      <tr><td class="k">Image size</td><td>640 px</td><td>ขนาดภาพที่ส่งให้โมเดล ควรตรงกับขนาดตอนเทรน (best50 = 640) ไม่เช่นนั้นตำแหน่งกรอบคลาด</td></tr>
+      <tr><td class="k">ประมวลผล</td><td>ทุกเฟรม</td><td><strong>ทุก 2 เฟรม</strong> หรือ <strong>ทุก 3 เฟรม</strong> ลดเวลาลงราว 1/2 หรือ 1/3 วิดีโอ AI จะกระตุกขึ้นตามไปด้วย</td></tr>
+      <tr><td class="k">ปุ่มหลัก</td><td>ประมวลผลด้วย AI</td><td>ถ้ามีผลที่ค่านี้อยู่แล้ว ปุ่มจะเปลี่ยนเป็น <strong>เล่นวิดีโอ AI</strong> โดยไม่ประมวลผลซ้ำ</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>ใช้เวลาเท่าไร</b>
+    บน GTX 1650 ประมวลผลได้ราว 16 เฟรม/วินาที วิดีโอ 30 fps จึงใช้เวลาราว <strong>2 เท่าของความยาววิดีโอ</strong>
+    (วิดีโอ 25 นาทีราว 47 นาที) ประมวลผลได้ทีละวิดีโอ วิดีโอ AI ใช้พื้นที่ราว 55 MB ต่อนาทีที่ 1080p</div>
+
+  <h3>ดูและสลับวิดีโอ AI</h3>
+  <figure data-screen="03-ai-video" data-marks="view_switch:1,stage:2,render_status:3,render_list:4">
+    <figcaption><b>ภาพที่ 5.3</b> วิดีโอ AI กำลังเล่น พร้อมรายการผลการประมวลผลของวิดีโอนี้</figcaption>
+  </figure>
+  <ul class="legend">
+    <li data-n="1"><span><strong>ต้นฉบับ / วิดีโอ AI</strong> — สลับได้ทุกเมื่อ เวลาที่เล่นอยู่ไม่เปลี่ยน</span></li>
+    <li data-n="2"><span>วิดีโอ AI — กรอบ ชื่อ class ความมั่นใจ และ <code>#Track ID</code> อยู่ในภาพ</span></li>
+    <li data-n="3"><span>บรรทัดสถานะ — บอกว่ากำลังแสดงอะไร และค่าตรงกับที่ตั้งไว้หรือไม่</span></li>
+    <li data-n="4"><span>ผลการประมวลผลของวิดีโอนี้ — <strong>เล่น</strong> ผลอื่น หรือ <strong>ลบ</strong> ผลที่ไม่ใช้</span></li>
+  </ul>
+  <div class="warn"><b>ผลที่ขึ้นว่า “ควรประมวลผลใหม่”</b>
+    แปลว่าไฟล์วิดีโอหรือไฟล์โมเดลถูกแก้ไขหลังประมวลผล ผลนั้นยังเล่นได้แต่อาจไม่ตรงกับไฟล์ปัจจุบัน</div>
+
+  <h3>จัดการโมเดล</h3>
+  <p>กด <strong>จัดการโมเดล</strong> ข้างรายการโมเดล เพื่อเพิ่ม เอาออก หรือตั้งโมเดลค่าเริ่มต้น</p>
+  <figure data-screen="06-model-dialog" data-marks="dialog_registered:1,dialog_candidates:2">
+    <figcaption><b>ภาพที่ 5.4</b> หน้าต่างจัดการโมเดล</figcaption>
+  </figure>
+  <ul class="legend">
+    <li data-n="1"><span><strong>โมเดลในรายการ</strong> — <strong>ตั้งเป็นค่าเริ่มต้น</strong> หรือ <strong>เอาออกจากรายการ</strong> (ไฟล์ .pt ยังอยู่บนเครื่องเสมอ)</span></li>
+    <li data-n="2"><span><strong>เพิ่มโมเดลจากไฟล์บนเครื่อง</strong> — ไฟล์ .pt ใหม่ในโฟลเดอร์โมเดล แก้ชื่อย่อได้ก่อนกด <strong>เพิ่ม</strong></span></li>
+  </ul>
+  <div class="note"><b>เพิ่มได้เฉพาะไฟล์ที่อยู่บนเครื่องแล้ว</b>
+    หน้าเว็บไม่มีการอัปโหลดไฟล์ .pt เพื่อความปลอดภัย ให้ผู้ดูแลคัดลอกไฟล์ไปไว้ใน <code>models\</code> หรือ
+    <code>runs\ชื่อรอบ\weights\</code> ก่อน แล้วจึงเพิ่มจากหน้าต่างนี้ (บทที่ 15)</div>
+  <table>
+    <thead><tr><th style="width:18%">ชื่อย่อ</th><th style="width:36%">ไฟล์</th><th>หมายเหตุ</th></tr></thead>
+    <tbody>
+      <tr><td class="k">best50</td><td><code>models/yolo/best.pt</code></td><td><strong>ค่าเริ่มต้น</strong> · 50 epochs · ตรวจพบวัตถุบนวิดีโอเป้าหมายได้ดีที่สุด</td></tr>
+      <tr><td class="k">best01</td><td><code>models/yolo/best01.pt</code></td><td>checkpoint สำรอง</td></tr>
+      <tr><td class="k">yolov8n</td><td><code>models/yolo/yolov8n.pt</code></td><td>โมเดล pretrained พื้นฐาน ใช้เปรียบเทียบ</td></tr>
+      <tr><td class="k">run4 / run6 / run7</td><td><code>runs/visdrone_custom_*/weights/best.pt</code></td><td>ผลจากการเทรนแต่ละรอบ (run6 ไม่พบวัตถุบนวิดีโอเป้าหมาย จึงไม่แนะนำ)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 6 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">6</div>
+    <div><h2>เก็บภาพด้วยปุ่ม Capture<span class="anchor">ZZc06ZZ</span></h2>
+      <p class="sub">ปุ่มเดียวในหน้าที่บันทึกข้อมูลลงดิสก์</p></div>
+  </div>
+
+  <figure>
+    <div class="frame"><img src="assets/screens/10-action-bar.png" alt=""></div>
+    <figcaption><b>ภาพที่ 6.1</b> แถบคำสั่งใต้วิดีโอ — Capture, ส่งเข้า LINE, โควต้า, เวลา และ Reset</figcaption>
+  </figure>
+
+  <h3>วิธีเก็บภาพ</h3>
+  <table>
+    <thead><tr><th style="width:28%">การกด</th><th>ผลลัพธ์</th></tr></thead>
+    <tbody>
+      <tr><td class="k">คลิกหนึ่งครั้ง</td><td>เก็บ 1 เฟรม ณ ตำแหน่งที่กำลังเล่นหรือหยุดอยู่</td></tr>
+      <tr><td class="k">กดค้าง</td><td>เก็บต่อเนื่องทุก 0.4 วินาทีจนกว่าจะปล่อย — เหมาะกับช่วงที่ค่ากำลังเปลี่ยน</td></tr>
+      <tr><td class="k">แป้นพิมพ์</td><td>เลือกปุ่ม Capture (กด <kbd>Tab</kbd> จนถึงปุ่ม) แล้วกด <kbd>Enter</kbd> หรือ <kbd>Space</kbd></td></tr>
+    </tbody>
+  </table>
+  <div class="tip"><b>เก็บภาพจากวิดีโอ AI เพื่อให้ได้กรอบ</b>
+    Capture ได้ทั้งตอนดูต้นฉบับและวิดีโอ AI ถ้าวิดีโอนั้นประมวลผลด้วย AI แล้ว ภาพที่เก็บจะมีกรอบของเฟรมนั้นเสมอ
+    หยุดวิดีโอที่ภาพที่ต้องการก่อนกด จะได้เฟรมที่ตรงเวลาที่สุด</div>
+
+  <h3>หลังกด Capture ระบบทำอะไร</h3>
+  <ol class="steps">
+    <li>หน้าจอกะพริบเบาๆ และมีการ์ด <strong>กำลังอ่านค่า</strong> (หรือ <strong>รอคิว</strong> ถ้ากดหลายภาพติดกัน) ในแถบภาพที่เก็บไว้</li>
+    <li>server อ่าน<strong>เฟรมต้นฉบับ</strong>จากไฟล์วิดีโอ ณ เวลาที่เห็นบนจอ — ไม่ใช้ภาพจากวิดีโอ AI เพราะกรอบอาจทับตัวเลข OSD</li>
+    <li>อ่านค่า telemetry และถ้าวิดีโอมีผลการประมวลผลด้วย AI จะใช้กรอบของเฟรมนั้น (พร้อม Track ID) สร้างสำเนาภาพที่มีกรอบ</li>
+    <li>ระบบ<strong>อ่านค่าซ้ำจากไฟล์ภาพ</strong>ด้วยหลายวิธีแล้วโหวต เพื่อให้ค่าที่จะส่ง LINE ถูกต้องที่สุด</li>
+    <li>ภาพย่อปรากฏในแถบ ตัวนับ <span class="chips"><span class="chip-blue">พร้อมส่ง N</span></span> เพิ่มขึ้น</li>
+  </ol>
+
+  <h3>ป้ายบนภาพย่อและตัวนับ</h3>
+  <table>
+    <thead><tr><th style="width:30%">ป้าย</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td class="k">ไม่มี AI</td><td>ตอนเก็บภาพ วิดีโอยังไม่มีผลการประมวลผลด้วย AI ภาพจึงไม่มีกรอบ (ค่า telemetry ยังอ่านตามปกติ) ตัวนับขึ้นว่า <span class="chips"><span class="chip-amber">ไม่มีกรอบ AI N</span></span></td></tr>
+      <tr><td class="k">ไม่มีโมเดล</td><td>ภาพจาก session รุ่นก่อนที่ยังใช้การวาดกรอบสด</td></tr>
+      <tr><td class="k">ผ่านโมเดลแล้ว · ไม่พบวัตถุ</td><td>โมเดลตรวจเฟรมนี้แล้ว และไม่พบวัตถุ</td></tr>
+      <tr><td class="k">car 1 (0.54)</td><td>พบรถยนต์ 1 คัน ความมั่นใจเฉลี่ย 0.54</td></tr>
+      <tr><td class="k">ตัวนับสีแดง</td><td>มีภาพที่เก็บไม่สำเร็จ ดูข้อความใต้รายการค่า</td></tr>
+    </tbody>
+  </table>
+
+  <h3>ภาพถูกเก็บไว้ที่ไหน</h3>
+  <p>ทุกครั้งที่เปิดหน้าเว็บจะได้ session ใหม่ในโฟลเดอร์
+    <code>output\sessions\session-ปีเดือนวัน-ชั่วโมงนาทีวินาที\</code> ภายในมี</p>
+  <table>
+    <thead><tr><th style="width:36%">ไฟล์</th><th>เนื้อหา</th></tr></thead>
+    <tbody>
+      <tr><td><code>frames\00000000.jpg</code></td><td>ภาพต้นฉบับเต็มเฟรม 1920×1080 ไม่มีอะไรวาดทับ</td></tr>
+      <tr><td><code>frames\00000000.boxes.jpg</code></td><td>สำเนาที่วาดกรอบตรวจจับและ Track ID (มีเฉพาะเมื่อพบวัตถุ)</td></tr>
+      <tr><td><code>telemetry.jsonl</code></td><td>ค่าที่อ่านได้ตอนกด Capture</td></tr>
+      <tr><td><code>telemetry-verified.jsonl</code></td><td>ค่าที่อ่านซ้ำจากไฟล์ภาพ</td></tr>
+      <tr><td><code>frames.jsonl</code>, <code>session.json</code></td><td>รายการภาพ เวลาในวิดีโอ ผลตรวจจับ และข้อมูล session</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 7 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">7</div>
+    <div><h2>ตรวจภาพและค่า telemetry<span class="anchor">ZZc07ZZ</span></h2>
+      <p class="sub">เปิดภาพที่เก็บไว้ ขยายดู และอ่านสถานะของแต่ละค่า</p></div>
+  </div>
+
+  <figure data-screen="07-captured" data-marks="shot_progress:1,shot_strip:2,preview:3,telemetry:4,capture_status:5">
+    <figcaption><b>ภาพที่ 7.1</b> หลัง Capture 3 ภาพ — เลือกภาพย่อเพื่อดูภาพและค่าที่อ่านได้</figcaption>
+  </figure>
+  <ul class="legend">
+    <li data-n="1"><span><strong>ตัวนับ</strong> — จำนวนภาพทั้งหมด และจำนวนที่พร้อมส่ง</span></li>
+    <li data-n="2"><span><strong>ภาพย่อ</strong> — ภาพใหม่สุดอยู่ซ้ายสุด คลิกภาพเพื่อดู ช่องสี่เหลี่ยมมุมบนใช้ติ๊กเลือกส่ง</span></li>
+    <li data-n="3"><span><strong>ภาพตัวอย่าง</strong> — คลิกเพื่อขยายเต็มพื้นที่วิดีโอ ช่อง <strong>แสดงกรอบ</strong> สลับระหว่างภาพมีกรอบกับต้นฉบับ</span></li>
+    <li data-n="4"><span><strong>ค่า telemetry ของภาพที่เลือก</strong> — แบ่งกลุ่ม EO/IR, CAMERA, TAG, ACFT</span></li>
+    <li data-n="5"><span><strong>บรรทัดสถานะ</strong> — ผลการทำงานล่าสุด เช่น การเก็บ การส่ง หรือข้อผิดพลาด</span></li>
+  </ul>
+
+  <h3>ขยายภาพเพื่อเทียบกับตัวเลขบนจอ</h3>
+  <p>คลิกภาพตัวอย่าง ภาพจะขยายทับพื้นที่วิดีโอพอให้อ่านตัวเลข OSD ได้ชัด ใช้เทียบกับค่าในรายการด้านขวา
+    ปิดด้วยปุ่ม <strong>ปิด (Esc)</strong>, กด <kbd>Esc</kbd> หรือคลิกพื้นหลังรอบภาพ
+    ระหว่างที่ขยายอยู่ คลิกภาพย่ออื่นเพื่อสลับภาพได้ทันที</p>
+  <figure class="narrow85" data-screen="09-overlay" data-marks="">
+    <figcaption><b>ภาพที่ 7.2</b> ภาพที่ขยาย พร้อมหมายเลขเฟรมและผลตรวจจับที่แถบด้านล่าง</figcaption>
+  </figure>
+
+  <h3>อ่านแต่ละแถวของค่า</h3>
+  <div class="two">
+    <figure class="keep" style="margin:0">
+      <div class="frame"><img src="assets/screens/11-telemetry-panel.png" alt="" style="height:118mm;object-fit:cover;object-position:top"></div>
+      <figcaption><b>ภาพที่ 7.3</b> แผงภาพที่เก็บไว้</figcaption>
+    </figure>
+    <div>
+      <table style="margin-top:0">
+        <thead><tr><th style="width:36%">ส่วนของแถว</th><th>ความหมาย</th></tr></thead>
+        <tbody>
+          <tr><td class="k">จุดสีน้ำเงิน ●</td><td>ค่ายืนยันแล้ว ผ่านรูปแบบและช่วงค่าที่กำหนด</td></tr>
+          <tr><td class="k">จุดสีเทาจาง ●</td><td>ยังไม่ยืนยัน ค่าอาจไม่ถูกต้อง ควรเทียบกับภาพ</td></tr>
+          <tr><td class="k">ค่าตัวใหญ่</td><td>ค่าที่จัดรูปแบบแล้ว เช่น <code>-24.90°</code>, <code>14°52'05.08"</code></td></tr>
+          <tr><td class="k">raw: …</td><td>ข้อความดิบจาก OCR (พิกัดไม่แสดงส่วนนี้)</td></tr>
+          <tr><td class="k">conf NN%</td><td>ความมั่นใจของการอ่าน</td></tr>
+          <tr><td class="k">—</td><td>ยังไม่มีข้อมูล หรืออ่านค่าไม่ได้</td></tr>
+          <tr><td class="k">รอข้อมูล OCR</td><td>ยังไม่ได้เลือกภาพ หรือเพิ่งเปิดวิดีโอ</td></tr>
+        </tbody>
+      </table>
+      <div class="warn" style="margin-top:6px"><b>ตรวจค่าที่ยังไม่ยืนยันทุกครั้ง</b>
+        ฟิลด์ EO/IR และมุมกล้องมีตัวอักษรที่ OCR สับสนได้ง่ายกว่าฟิลด์อื่น
+        ถ้าจุดเป็นสีเทา ให้ขยายภาพเทียบก่อนส่ง</div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------- 8 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">8</div>
+    <div><h2>ส่งผลเข้า LINE<span class="anchor">ZZc08ZZ</span></h2>
+      <p class="sub">เลือกภาพ ส่งรายงาน และติดตามโควต้ารายเดือน</p></div>
+  </div>
+
+  <h3>ขั้นตอนการส่ง</h3>
+  <ol class="steps">
+    <li>ตรวจค่าของภาพที่จะส่งตามบทที่ 7</li>
+    <li><strong>ติ๊กเลือก 1–4 ภาพ</strong> — ถ้าไม่ติ๊กเลย ระบบจะส่ง<em>ภาพที่กำลังเปิดดูอยู่</em> 1 ภาพ</li>
+    <li>กด <strong>ส่งเข้า LINE</strong> ปุ่มขึ้นว่า “กำลังส่ง...”</li>
+    <li>ดูผลที่บรรทัดสถานะ เช่น <code>ส่งเข้า LINE แล้ว พร้อมรูป 2 รูป · เฟรม #1, #2 · 412 ตัวอักษร</code></li>
+  </ol>
+
+  <figure data-screen="08-selected" data-marks="shot_strip:1,select_bar:2,line:3,quota:4">
+    <figcaption><b>ภาพที่ 8.1</b> ติ๊กเลือก 2 ภาพ — ปุ่มเปลี่ยนเป็น “ส่ง 2 รูปเข้า LINE”</figcaption>
+  </figure>
+  <ul class="legend">
+    <li data-n="1"><span>ติ๊กช่องมุมบนของภาพย่อที่ต้องการส่ง ภาพที่เลือกมีกรอบสีน้ำเงิน</span></li>
+    <li data-n="2"><span>แถบการเลือก — จำนวนที่เลือก (สูงสุด 4), <strong>ล้างที่เลือก</strong>, <strong>ลบรูปที่เลือก</strong></span></li>
+    <li data-n="3"><span>ปุ่มส่ง ข้อความบนปุ่มบอกจำนวนรูปที่จะส่ง</span></li>
+    <li data-n="4"><span>โควต้าที่เหลือของเดือนนี้</span></li>
+  </ul>
+
+  <h3>ตัวอย่างข้อความที่ได้รับใน LINE</h3>
+  <div class="two msg-pair">
+  <div class="msg">[Capture] 2026-08-22T00:50:22.930+00:00
+final3 · frames/00000000.jpg
+
+ACFT  14°52'00.7"N   102°01'08.0"E   ALT 388 m
+TAG   14°51'53.1"N   102°01'15.0"E?   ALT 237 m
+CAM   yaw 7.91°   pitch -24.96°
+LRF   35.8 m
+SENS  EO 1.0xFOV66.4°?   IR 1.0x?
+      TAG on map: https://www.google.com/maps?q=14.864750,102.020833
+
+ตรวจจับได้: car 3 (conf 0.75, ต่ำสุด 0.67) (รวม 3)
+ตรวจซ้ำจากไฟล์ภาพ: ข้อความตรงกัน 3/11</div>
+  <table>
+    <thead><tr><th style="width:26%">สิ่งที่เห็น</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td class="k"><code>?</code> ต่อท้ายค่า</td><td>ค่านั้นยังไม่ยืนยัน ระบบไม่ตัดทิ้งเพื่อให้รายงานตรงกับที่อยู่บนจอ</td></tr>
+      <tr><td class="k">พิกัดแบบ DMS</td><td>แสดงแบบองศา-ลิปดา-ฟิลิปดาเหมือน OSD เพื่อเทียบได้ตรงๆ</td></tr>
+      <tr><td class="k">TAG on map</td><td>ลิงก์ Google Maps ใช้ทศนิยมเต็มความละเอียด จะไม่แสดงถ้าอ่านพิกัดได้ไม่ครบทั้งสองค่า</td></tr>
+      <tr><td class="k">รูปที่แนบ</td><td>ส่งเฉพาะรูปที่มีกรอบ (ถ้ามี) หากระบบยังไม่ได้เปิดช่องทางส่งรูป จะส่งเป็นข้อความอย่างเดียว</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>โควต้ารายเดือน</h3>
+  <p>LINE Official Account มีโควต้า<strong>ต่อเดือน</strong> (ไม่ใช่ต่อวัน) และรีเซ็ตเมื่อขึ้นเดือนใหม่
+    <strong>การกดส่ง 1 ครั้งนับเป็น 1 ข้อความ ไม่ว่าจะแนบกี่รูป</strong></p>
+  <table>
+    <thead><tr><th style="width:36%">ป้ายข้างปุ่ม</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chips"><span class="chip-grey">เดือนนี้เหลือ 298/300</span></span></td><td>ปกติ</td></tr>
+      <tr><td><span class="chips"><span class="chip-amber">เดือนนี้เหลือ 25/300</span></span></td><td>เหลือน้อยกว่า 1 ใน 10 ของแพ็กเกจ (ขั้นต่ำ 10 ข้อความ) — ส่งเท่าที่จำเป็น</td></tr>
+      <tr><td><span class="chips"><span class="chip-red">เดือนนี้เหลือ 0/300</span></span></td><td>หมดโควต้า ปุ่มส่งกดไม่ได้จนถึงเดือนถัดไป</td></tr>
+      <tr><td>ไม่มีป้าย</td><td>อ่านโควต้าไม่ได้ในขณะนั้น (วางเมาส์บนปุ่มเพื่อดูเหตุผล) ยังส่งได้ตามปกติ</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note"><b>ทำไมปุ่มส่งเข้า LINE จึงแยกจาก Capture</b>
+    การกด Capture ค้างเก็บภาพหลายภาพต่อวินาที ถ้าส่งอัตโนมัติจะใช้โควต้าหมดเร็ว
+    ระบบจึงให้เลือกภาพเองก่อนส่ง และจำกัดการส่งห่างกันอย่างน้อย 3 วินาที</div>
+
+  <h3>เมื่อส่งไม่สำเร็จ</h3>
+  <table>
+    <thead><tr><th style="width:36%">ข้อความ</th><th>สาเหตุ / สิ่งที่ควรทำ</th></tr></thead>
+    <tbody>
+      <tr><td>ปุ่มกดไม่ได้ ทั้งที่เลือกภาพแล้ว</td><td>ยังไม่ได้ตั้งค่า LINE หรือโควต้าหมด — วางเมาส์บนปุ่มเพื่อดูเหตุผล</td></tr>
+      <tr><td>ส่งเข้า LINE ไม่สำเร็จ: … 401</td><td>token ไม่ถูกต้องหรือถูกยกเลิก — แจ้งผู้ดูแลระบบ</td></tr>
+      <tr><td>ส่งเข้า LINE ไม่สำเร็จ: … 400</td><td>มักเป็นปลายทาง (<code>to</code>) ผิด หรือผู้รับยังไม่ได้เพิ่ม Official Account เป็นเพื่อน</td></tr>
+      <tr><td>ส่งเข้า LINE ไม่สำเร็จ: … 429</td><td>เกินโควต้าหรือส่งถี่เกินไป — รอแล้วลองใหม่</td></tr>
+      <tr><td>ส่งแล้ว แต่: …</td><td>ข้อความไปถึงแล้ว แต่รูปบางรูปส่งไม่ได้ ข้อความต่อท้ายบอกเหตุผล</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 9 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">9</div>
+    <div><h2>จัดการภาพ ส่งออกข้อมูล และหน้าต่างแคบ<span class="anchor">ZZc09ZZ</span></h2>
+      <p class="sub">ลบภาพ ล้างค่า ดาวน์โหลด และการใช้งานบนจอขนาดเล็ก</p></div>
+  </div>
+
+  <h3>คำสั่งจัดการ</h3>
+  <table>
+    <thead><tr><th style="width:20%">ปุ่ม</th><th style="width:22%">อยู่ที่</th><th>ผลลัพธ์</th></tr></thead>
+    <tbody>
+      <tr><td class="k">ล้างที่เลือก</td><td>แถบการเลือก</td><td>ยกเลิกการติ๊กทั้งหมด ภาพยังอยู่ครบ</td></tr>
+      <tr><td class="k">ลบรูปที่เลือก</td><td>แถบการเลือก</td><td>ลบภาพที่ติ๊ก<strong>ถาวร</strong> ทั้งภาพต้นฉบับ ภาพมีกรอบ และค่าของภาพนั้น ระบบถามยืนยันก่อนเสมอ</td></tr>
+      <tr><td class="k">JSONL</td><td>ท้ายแผงขวา</td><td>ดาวน์โหลดค่าของทุกภาพใน session เป็น JSON Lines (บรรทัดละหนึ่งค่า) สำหรับโปรแกรมวิเคราะห์ (ถ้ายังไม่มีภาพ ระบบแจ้งเตือนแทนการให้ไฟล์ว่าง)</td></tr>
+      <tr><td class="k">CSV</td><td>ท้ายแผงขวา</td><td>ดาวน์โหลดค่าเดียวกันเป็นตาราง เปิดใน Excel ได้</td></tr>
+      <tr><td class="k">ล้าง log</td><td>ท้ายแผงขวา</td><td>ล้างเฉพาะค่าที่แสดงบนจอ ไฟล์และภาพบนดิสก์ไม่หาย</td></tr>
+      <tr><td class="k">Reset</td><td>แถบคำสั่งใต้วิดีโอ</td><td>ล้างค่าที่แสดงและรีเซ็ตสถานะการอ่านของวิดีโอนี้ ภาพที่ Capture ไว้ไม่ถูกลบ</td></tr>
+    </tbody>
+  </table>
+  <div class="danger"><b>การลบกู้คืนไม่ได้</b>
+    ก่อนกดยืนยัน ให้ตรวจว่าไม่ได้ติ๊กภาพที่ต้องการเก็บไว้ ถ้าต้องการเพียงยกเลิกการเลือก ให้ใช้ <strong>ล้างที่เลือก</strong></div>
+
+  <h3>หน้าต่างแคบ</h3>
+  <p>เมื่อย่อหน้าต่างแอปให้แคบ (เช่น วางคู่กับโปรแกรมอื่น) หน้าจอจะเรียงเป็นคอลัมน์เดียว
+    วิดีโอและปุ่มคำสั่งอยู่ด้านบน เลื่อนลงเพื่อดูภาพที่เก็บไว้และค่า telemetry การทำงานทุกอย่างเหมือนเดิม</p>
+  <div class="phones">
+    <figure class="phone" data-screen="12-mobile-top" data-marks="">
+      <figcaption><b>ภาพที่ 9.1</b> ส่วนบน — วิดีโอและคำสั่ง</figcaption>
+    </figure>
+    <figure class="phone" data-screen="13-mobile-panel" data-marks="">
+      <figcaption><b>ภาพที่ 9.2</b> เลื่อนลง — ภาพที่เก็บไว้และค่า</figcaption>
+    </figure>
+  </div>
+  <div class="note"><b>โทรศัพท์เปิดหน้าเว็บนี้ไม่ได้</b>
+    server รับเฉพาะการเชื่อมต่อจากเครื่องที่รันอยู่ ผู้รับที่อยู่บนโทรศัพท์จะเห็นผลผ่านข้อความและรูปใน LINE</div>
+</section>
+
+<!-- ------------------------------------------------------- 10 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">10</div>
+    <div><h2>ปัญหาที่พบบ่อยของผู้ใช้งาน<span class="anchor">ZZc10ZZ</span></h2>
+      <p class="sub">อาการ สาเหตุที่เป็นไปได้ และวิธีแก้เบื้องต้น</p></div>
+  </div>
+  <table>
+    <thead><tr><th style="width:27%">อาการ</th><th style="width:31%">สาเหตุที่เป็นไปได้</th><th>วิธีแก้</th></tr></thead>
+    <tbody>
+      <tr><td class="k">เปิดแอปได้ แต่ป้ายสถานะเป็นสีแดง หรือหน้าเว็บไม่ขึ้น</td><td>server ไม่ได้ทำงาน</td><td>ปิด-เปิดแอปใหม่ ถ้ายังไม่หายให้ log out/log in Windows หรือแจ้งผู้ดูแล (บทที่ 19)</td></tr>
+      <tr><td class="k">ป้ายค้างที่ “กำลังโหลด OCR” นาน</td><td>เพิ่งเปิดเครื่อง server กำลังโหลดโมเดล</td><td>รอ 1–2 นาทีแล้วรีเฟรชหน้า (<kbd>F5</kbd>)</td></tr>
+      <tr><td class="k">ไม่พบวิดีโอในรายการ</td><td>ไฟล์ไม่ได้อยู่ในโฟลเดอร์วิดีโอของโปรเจกต์</td><td>คัดลอกไฟล์ไปที่โฟลเดอร์วิดีโอ แล้วกด <kbd>F5</kbd> (บทที่ 4)</td></tr>
+      <tr><td class="k">ต้นฉบับเล่นไม่ได้</td><td>codec ของไฟล์ไม่รองรับในเบราว์เซอร์</td><td>ประมวลผลด้วย AI แล้วเล่นวิดีโอ AI ซึ่งเป็น H.264 เสมอ</td></tr>
+      <tr><td class="k">ปุ่ม ประมวลผลด้วย AI กดไม่ได้</td><td>ยังไม่เลือกวิดีโอหรือโมเดล · มีงานประมวลผลอื่นอยู่ · ไม่พบ ffmpeg</td><td>ดูบรรทัดสถานะในแผง รองานเดิมเสร็จหรือกดยกเลิก ถ้าแจ้งว่าไม่พบ ffmpeg ให้แจ้งผู้ดูแล</td></tr>
+      <tr><td class="k">ประมวลผลนาน</td><td>ปกติใช้ราว 2 เท่าของความยาววิดีโอ</td><td>เลือก <strong>ประมวลผล: ทุก 2 เฟรม</strong> หรือเปิดวิดีโอต้นฉบับดูระหว่างรอ</td></tr>
+      <tr><td class="k">วิดีโอ AI ไม่มีกรอบบางช่วง</td><td>โมเดลไม่พบวัตถุในช่วงนั้น (วัตถุเล็กหรือไม่ชัดจากมุมสูง)</td><td>ลด Confidence (เช่น 0.30) หรือลองโมเดลอื่น แล้วประมวลผลใหม่</td></tr>
+      <tr><td class="k">ผลการประมวลผลขึ้นว่า “ควรประมวลผลใหม่”</td><td>ไฟล์วิดีโอหรือไฟล์โมเดลถูกแก้ไขหลังประมวลผล</td><td>กด ประมวลผลด้วย AI อีกครั้ง แล้วลบผลเก่า</td></tr>
+      <tr><td class="k">Capture กดไม่ได้</td><td>ยังไม่ได้เลือกวิดีโอ หรือ OCR ยังไม่พร้อม</td><td>เลือกวิดีโอและรอป้ายสถานะพร้อมใช้งาน</td></tr>
+      <tr><td class="k">ภาพย่อมีป้าย “ไม่มี AI”</td><td>เก็บภาพก่อนวิดีโอประมวลผลด้วย AI เสร็จ</td><td>ประมวลผลให้เสร็จ แล้ว Capture ใหม่</td></tr>
+      <tr><td class="k">ค่าที่อ่านผิดทุกภาพ</td><td>วิดีโอมี layout OSD ต่างจากที่ตั้งค่าไว้</td><td>แจ้งผู้ดูแลให้ตั้งค่า ROI ใหม่ (บทที่ 16)</td></tr>
+      <tr><td class="k">ค่าบางฟิลด์เป็นจุดสีเทา / มี ?</td><td>ตัวเลขบนภาพไม่ชัด หรือตัวอักษรกำกวม</td><td>Capture เฟรมข้างเคียงเพิ่ม แล้วเลือกภาพที่ค่ายืนยันแล้ว</td></tr>
+      <tr><td class="k">LINE ได้ข้อความแต่ไม่มีรูป</td><td>ยังไม่ได้เปิดช่องทางส่งรูป หรือรูปใหญ่เกินกำหนด</td><td>ดูข้อความ “ส่งแล้ว แต่: …” และแจ้งผู้ดูแล (บทที่ 14)</td></tr>
+      <tr><td class="k">ปุ่มส่งเข้า LINE กดไม่ได้</td><td>ไม่ได้เลือกภาพ · ยังไม่ตั้งค่า LINE · โควต้าหมด</td><td>วางเมาส์บนปุ่มเพื่อดูเหตุผล</td></tr>
+      <tr><td class="k">หน้าจอไม่อัปเดตหลังผู้ดูแลแก้ระบบ</td><td>แอปยังใช้หน้าจอที่จำไว้</td><td>ปิดแอปทุกหน้าต่างแล้วเปิดใหม่ หรือกด <kbd>Ctrl</kbd>+<kbd>F5</kbd></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ======================================================= PART 2 -->
+<section class="divider">
+  <div class="num">02</div>
+  <div class="inner">
+    <h1>ส่วนที่ 2<br>สำหรับผู้ดูแลระบบ</h1>
+    <p>ติดตั้ง ตั้งค่าให้ server เปิดเอง เชื่อม LINE และ Cloudflare Tunnel จัดการโมเดล
+      ปรับตำแหน่ง ROI และแก้ปัญหาจาก log</p>
+    <ul>
+      <li>ติดตั้ง CUDA / CPU</li>
+      <li>Scheduled Task และ log</li>
+      <li>LINE Messaging API</li>
+      <li>Cloudflare Tunnel</li>
+      <li>ทะเบียนโมเดล</li>
+      <li>ROI และ Calibration</li>
+    </ul>
+  </div>
+  <svg viewBox="0 0 200 200" fill="none" stroke="#0b63c9" stroke-opacity="0.18" stroke-width="1.2">
+    <circle cx="100" cy="100" r="96"/><circle cx="100" cy="100" r="70"/><circle cx="100" cy="100" r="44"/>
+  </svg>
+</section>
+
+<!-- ------------------------------------------------------- 11 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">11</div>
+    <div><h2>ความต้องการระบบและการติดตั้ง<span class="anchor">ZZc11ZZ</span></h2>
+      <p class="sub">คำสั่งทั้งหมดรันใน PowerShell จากโฟลเดอร์รากของโปรเจกต์</p></div>
+  </div>
+
+  <h3>ความต้องการระบบ</h3>
+  <table>
+    <thead><tr><th style="width:26%">รายการ</th><th>ข้อกำหนด</th></tr></thead>
+    <tbody>
+      <tr><td class="k">ระบบปฏิบัติการ</td><td>Windows 10/11 (64-bit)</td></tr>
+      <tr><td class="k">Python</td><td>3.12 (รองรับ 3.10–3.12)</td></tr>
+      <tr><td class="k">GPU (แนะนำ)</td><td>NVIDIA ที่รองรับ CUDA 12.6 VRAM ≥ 4 GB — ทดสอบบน GTX 1650 4 GB</td></tr>
+      <tr><td class="k">ffmpeg</td><td>สำหรับประมวลผลวิดีโอด้วย AI ติดตั้งด้วย <code>winget install Gyan.FFmpeg</code> (ใช้ NVENC ของการ์ด NVIDIA เองเมื่อมี)</td></tr>
+      <tr><td class="k">เบราว์เซอร์</td><td>Google Chrome หรือ Microsoft Edge รุ่นปัจจุบัน</td></tr>
+      <tr><td class="k">ไฟล์โมเดล</td><td><code>models\yolo\*.pt</code> และ <code>runs\*\weights\best.pt</code> (ไม่อยู่ใน git ต้องคัดลอกมาเอง)</td></tr>
+      <tr><td class="k">สื่อขนาดใหญ่</td><td>วิดีโอและ dataset (~8 GB) อยู่ที่ <code>..\object_detection</code> ตามค่า <code>asset_root</code></td></tr>
+      <tr><td class="k">อินเทอร์เน็ต</td><td>จำเป็นเฉพาะตอนติดตั้ง, ส่ง LINE และเปิด tunnel</td></tr>
+    </tbody>
+  </table>
+
+  <div class="cards">
+    <div class="card"><h4>CUDA — แนะนำ</h4><p>OCR 10.1 ครั้ง/วินาที latency p95 46.6 ms · YOLO 640 px ≈ 41 ms ต่อเฟรม
+      ผ่านเกณฑ์ 10 Hz / p95 &lt; 100 ms</p></div>
+    <div class="card"><h4>CPU — สำรอง</h4><p>OCR 9.8 ครั้ง/วินาที latency p95 164 ms · YOLO 640 px ≈ 507 ms
+      ใช้ได้แต่ช้ากว่า ระบบถอยมาใช้เองถ้าไม่มีชุด CUDA</p></div>
+  </div>
+
+  <h3>ติดตั้งชุด CUDA (<code>.venv-cuda</code>)</h3>
+  <pre><code>py -3.12 -m venv .venv-cuda
+.\.venv-cuda\Scripts\python.exe -m pip install paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+.\.venv-cuda\Scripts\python.exe -m pip install torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126
+.\.venv-cuda\Scripts\python.exe -m pip install -e ".[ocr,web,ai]" nvidia-cudnn-cu12==9.9.0.52</code></pre>
+  <div class="note"><b>บรรทัดสุดท้ายต้องมี <code>nvidia-cudnn-cu12==9.9.0.52</code></b>
+    PaddlePaddle ถูกคอมไพล์กับ cuDNN 9.9 แม้จะประกาศ 9.5 ไว้ pip จะเตือนว่า version ไม่ตรง ซึ่งไม่เป็นไร
+    config ที่ใช้คู่กันคือ <code>configs\roi_calibrated_cuda.yaml</code></div>
+
+  <h3>ติดตั้งชุด CPU (<code>.venv</code>) — เมื่อไม่มี NVIDIA GPU</h3>
+  <pre><code>py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+.\.venv\Scripts\python.exe -m pip install -e ".[ocr,web,ai]"</code></pre>
+  <p>config ที่ใช้คู่กันคือ <code>configs\roi_calibrated.yaml</code></p>
+
+  <h3>ตรวจความพร้อมหลังติดตั้ง</h3>
+  <pre><code>.\.venv-cuda\Scripts\vision-lab.exe check</code></pre>
+  <p>รายงาน torch/CUDA, paddle/CUDA, ไฟล์โมเดลที่มีจริง และโฟลเดอร์สื่อที่หาเจอ ถ้าทุกข้อผ่านก็พร้อมตั้งค่าในบทถัดไป</p>
+
+  <div class="warn"><b>ห้ามให้ PaddleOCR และ PyTorch อยู่ใน process เดียวกัน</b>
+    บน Windows ทั้งคู่โหลด cuDNN ของตัวเองและชนกัน ระบบแยก YOLO ไปทำงานใน process ลูกไว้แล้ว
+    ถ้าเขียนสคริปต์เพิ่มเอง ห้าม import <code>torch</code> ในโค้ดฝั่ง <code>telemetry_ocr</code></div>
+</section>
+
+<!-- ------------------------------------------------------- 12 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">12</div>
+    <div><h2>เปิด server อัตโนมัติ และไฟล์ log<span class="anchor">ZZc12ZZ</span></h2>
+      <p class="sub">Windows Scheduled Task ชื่อ “Telemetry OCR Web Server”</p></div>
+  </div>
+
+  <h3>ติดตั้ง auto-start</h3>
+  <ol class="steps">
+    <li>ดับเบิลคลิก <code>install-ocr-web-autostart.cmd</code> ที่รากโปรเจกต์ <strong>หนึ่งครั้ง</strong></li>
+    <li>ระบบสร้าง Scheduled Task ที่เปิดตอน login ของผู้ใช้ปัจจุบัน และสั่งเปิด server ทันที</li>
+    <li>เปิด <code>http://127.0.0.1:8765</code> เพื่อตรวจ แล้วให้ผู้ใช้ติดตั้งแอปตามบทที่ 2</li>
+  </ol>
+
+  <table>
+    <thead><tr><th style="width:34%">การตั้งค่าของ task</th><th>เหตุผล</th></tr></thead>
+    <tbody>
+      <tr><td class="k">เริ่มตอน login · ซ่อนหน้าต่าง</td><td>ผู้ใช้ไม่ต้องเปิด server เอง</td></tr>
+      <tr><td class="k">ทำงานได้เมื่อใช้แบตเตอรี่</td><td>ค่าเริ่มต้นของ Windows ไม่เปิด task ตอนใช้แบต และหยุด task เมื่อถอดปลั๊ก ซึ่งผิดกับงานภาคสนาม</td></tr>
+      <tr><td class="k">เริ่มใหม่ 3 ครั้ง ห่าง 1 นาที</td><td>กู้คืนเองเมื่อ server ล้ม</td></tr>
+      <tr><td class="k">เลือก build อัตโนมัติ</td><td>ใช้ <code>.venv-cuda</code> ก่อน ถ้าไม่มีจึงใช้ <code>.venv</code></td></tr>
+    </tbody>
+  </table>
+
+  <h4>ตรวจว่า task ตั้งค่าเรื่องแบตเตอรี่ถูกต้อง</h4>
+  <pre><code>(Get-ScheduledTask -TaskName "Telemetry OCR Web Server").Settings |
+  Select-Object DisallowStartIfOnBatteries, StopIfGoingOnBatteries</code></pre>
+  <p>ทั้งสองค่าต้องเป็น <code>False</code> ถ้าเป็น <code>True</code> ให้รัน <code>install-ocr-web-autostart.cmd</code> ซ้ำหนึ่งครั้ง</p>
+
+  <h4>ตรวจว่า server ทำงานอยู่</h4>
+  <pre><code>curl http://127.0.0.1:8765/api/health
+# {"status": "ready", "model": "PP-OCRv6_tiny_rec", "version": "0.5.0"}</code></pre>
+
+  <h4>สั่ง restart server (หลังแก้ config หรือเพิ่มโมเดล)</h4>
+  <pre><code>Get-NetTCPConnection -LocalPort 8765 -State Listen |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Start-ScheduledTask -TaskName "Telemetry OCR Web Server"</code></pre>
+
+  <h4>ถอน auto-start</h4>
+  <p>ดับเบิลคลิก <code>remove-ocr-web-autostart.cmd</code> หรือรัน
+    <code>.\scripts\install_windows_ocr_web_autostart.ps1 -Remove</code></p>
+
+  <h3>เปิด server เองโดยไม่ใช้ auto-start</h3>
+  <pre><code>.\.venv-cuda\Scripts\telemetry-ocr.exe web --config configs\roi_calibrated_cuda.yaml --open-browser</code></pre>
+  <table>
+    <thead><tr><th style="width:30%">ตัวเลือก</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td><code>--config</code></td><td>ไฟล์ ROI config (จำเป็น)</td></tr>
+      <tr><td><code>--host</code>, <code>--port</code></td><td>ค่าเริ่มต้น <code>127.0.0.1</code> และ <code>8765</code></td></tr>
+      <tr><td><code>--open-browser</code></td><td>เปิดเบราว์เซอร์ให้เมื่อ server พร้อม</td></tr>
+      <tr><td><code>--quick-tunnel</code></td><td>เปิด Cloudflare quick tunnel สำหรับส่งรูปเข้า LINE (บทที่ 14)</td></tr>
+      <tr><td><code>--share-port</code></td><td>พอร์ตของ server แยกที่ให้บริการเฉพาะรูป (ค่าเริ่มต้น 8766)</td></tr>
+      <tr><td><code>--allow-origin</code></td><td>อนุญาตเว็บแอปอื่นที่เชื่อถือได้ให้เรียก API (ใส่ซ้ำได้)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>ไฟล์ log</h3>
+  <table>
+    <thead><tr><th style="width:36%">ไฟล์</th><th style="width:22%">ผู้เขียน</th><th>ใช้ดูเรื่อง</th></tr></thead>
+    <tbody>
+      <tr><td><code>output\logs\ocr-web-autostart.log</code></td><td>สคริปต์เริ่มระบบ</td><td>เลือก build ไหน, แหล่งจ่ายไฟ (AC/แบต), quick tunnel เปิดหรือไม่, server ปิดด้วย code อะไร</td></tr>
+      <tr><td><code>output\logs\ocr-web.log</code></td><td>ตัว server</td><td>การโหลดโมเดล, tunnel, การส่ง LINE, request ที่ถูกปฏิเสธ — หมุนไฟล์ที่ 2 MB เก็บย้อนหลัง 4 ไฟล์</td></tr>
+    </tbody>
+  </table>
+  <div class="tip"><b>เริ่มแก้ปัญหาจาก log เสมอ</b>
+    task รันแบบซ่อนจึงไม่มีหน้าต่าง console ข้อความ error ทั้งหมดอยู่ในสองไฟล์นี้ ตัวอย่างบรรทัดปกติ:
+    <code>Power: running on AC (100% charge).</code> และ <code>Starting the CUDA build: …</code></div>
+</section>
+
+<!-- ------------------------------------------------------- 13 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">13</div>
+    <div><h2>ตั้งค่า LINE Official Account<span class="anchor">ZZc13ZZ</span></h2>
+      <p class="sub">LINE Messaging API — ช่องทางเดียวที่เหลือหลัง LINE Notify ปิดบริการ (มี.ค. 2568)</p></div>
+  </div>
+
+  <h3>สร้าง channel และขอ token</h3>
+  <p>ตั้งแต่ 4 ก.ย. 2567 สร้าง Messaging API channel จาก LINE Developers Console โดยตรงไม่ได้แล้ว ต้องเริ่มจาก Official Account</p>
+  <ol class="steps">
+    <li>สร้าง LINE Official Account ที่ <code>https://manager.line.biz</code></li>
+    <li>ใน LINE Official Account Manager → <strong>Settings</strong> → <strong>Messaging API</strong> → เปิดใช้งาน (ขั้นนี้สร้าง channel ให้)</li>
+    <li>เข้า <code>https://developers.line.biz/console</code> → channel ที่ได้ → แท็บ <strong>Messaging API</strong> →
+      <strong>Channel access token (long-lived)</strong> → <strong>Issue</strong></li>
+    <li>แท็บ <strong>Basic settings</strong> → <strong>Your user ID</strong> (ขึ้นต้นด้วย <code>U</code>) คือค่าปลายทาง <code>to</code></li>
+    <li>ผู้รับต้อง<strong>เพิ่ม Official Account เป็นเพื่อน</strong>ด้วย QR ในแท็บ Messaging API ก่อน มิฉะนั้นจะส่งไม่ถึง</li>
+  </ol>
+
+  <h3>ใส่ค่าให้ระบบ — เลือกหนึ่งวิธี</h3>
+  <h4>วิธีที่ 1: ไฟล์ <code>configs\line.json</code> (แนะนำ ไม่ต้อง restart)</h4>
+  <p>คัดลอก <code>configs\line.example.json</code> เป็น <code>configs\line.json</code> แล้วกรอกค่า</p>
+  <pre><code>{
+  "channel_access_token": "&lt;channel access token&gt;",
+  "to": "U…",
+  "public_base_url": ""
+}</code></pre>
+  <h4>วิธีที่ 2: environment variable (ต้อง restart scheduled task)</h4>
+  <pre><code>$env:TELEMETRY_OCR_LINE_TOKEN = "&lt;channel access token&gt;"
+$env:TELEMETRY_OCR_LINE_TO    = "&lt;user id ที่ขึ้นต้นด้วย U&gt;"</code></pre>
+
+  <table>
+    <thead><tr><th style="width:26%">ค่า</th><th>รายละเอียด</th></tr></thead>
+    <tbody>
+      <tr><td><code>channel_access_token</code></td><td>bearer token ของ channel — ใครถือก็ส่งข้อความในนาม OA ได้จนกว่าจะ revoke</td></tr>
+      <tr><td><code>to</code></td><td>user id (<code>U…</code>) ไม่ใช่ชื่อที่แสดงหรือ @handle ถ้าส่งเข้ากลุ่มต้องใช้ group id (<code>C…</code>) ซึ่งได้จาก webhook เท่านั้น</td></tr>
+      <tr><td><code>public_base_url</code></td><td>ว่าง = ส่งข้อความอย่างเดียว · ใส่ hostname ของ named tunnel เพื่อแนบรูป (บทที่ 14)</td></tr>
+      <tr><td>ลำดับความสำคัญ</td><td>environment variable มาก่อนไฟล์เสมอ · ไฟล์ถูกอ่านใหม่ทุกครั้งที่กดส่ง</td></tr>
+    </tbody>
+  </table>
+  <div class="danger"><b>เก็บ token เป็นความลับ</b>
+    <code>configs\line.json</code> อยู่ใน <code>.gitignore</code> แล้ว ห้าม commit ห้ามส่งทางแชต ถ้ารั่วให้ revoke และออก token ใหม่ใน Developers Console</div>
+
+  <h3>ตรวจการตั้งค่าและโควต้า</h3>
+  <pre><code>curl -H "X-Telemetry-OCR: 1" http://127.0.0.1:8765/api/line/status</code></pre>
+  <table>
+    <thead><tr><th style="width:26%">ฟิลด์</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td><code>configured</code></td><td><code>true</code> เมื่อมีทั้ง token และ <code>to</code></td></tr>
+      <tr><td><code>images</code></td><td><code>true</code> เมื่อมีช่องทางส่งรูป (public_base_url หรือ quick tunnel)</td></tr>
+      <tr><td><code>quick_tunnel</code></td><td>ไม่เป็น <code>null</code> แปลว่ากำลังใช้ quick tunnel</td></tr>
+      <tr><td><code>quota</code></td><td><code>limit</code>, <code>used</code>, <code>remaining</code>, <code>warn</code>, <code>exhausted</code> — cache 5 นาที และ +1 เองหลังส่งสำเร็จ</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 14 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">14</div>
+    <div><h2>ส่งรูปผ่าน Cloudflare Tunnel<span class="anchor">ZZc14ZZ</span></h2>
+      <p class="sub">ให้ server ของ LINE ดึงรูปจากเครื่องนี้ได้ชั่วคราว</p></div>
+  </div>
+
+  <p>Messaging API ไม่รับการอัปโหลดไฟล์ตรงๆ ต้องให้ URL แบบ HTTPS ที่ LINE ดึงเองได้
+    ระบบจึงเปิด <strong>server แยกบนพอร์ต 8766 ที่มีเส้นทางเดียวคือรูป</strong> และให้ tunnel ชี้ไปที่พอร์ตนั้น
+    API หลักบนพอร์ต 8765 ไม่ถูกเปิดออกสู่อินเทอร์เน็ต</p>
+
+  <div class="flow">
+    <div class="box"><b>LINE server</b>ขอรูปผ่าน HTTPS</div>
+    <div class="arrow">›</div>
+    <div class="box"><b>Cloudflare</b>tunnel</div>
+    <div class="arrow">›</div>
+    <div class="box dark"><b>127.0.0.1:8766</b>คืนรูปตาม token เท่านั้น</div>
+    <div class="arrow">×</div>
+    <div class="box"><b>127.0.0.1:8765</b>API หลัก — ไม่ถูกเปิด</div>
+  </div>
+
+  <h3>ทางที่ 1 · Quick tunnel (ไม่ต้องมีบัญชีหรือโดเมน)</h3>
+  <ol class="steps">
+    <li>ติดตั้ง <code>cloudflared</code> (ค่าเริ่มต้น <code>C:\Program Files (x86)\cloudflared\cloudflared.exe</code>)</li>
+    <li>สร้างไฟล์ marker: <code>New-Item -ItemType File configs\quick-tunnel.enabled -Force</code></li>
+    <li>restart scheduled task (บทที่ 12) — ไม่ต้องตั้ง <code>public_base_url</code></li>
+  </ol>
+  <p class="small">URL เปลี่ยนทุกครั้งที่ tunnel เริ่มใหม่ ระบบอ่าน URL จาก cloudflared เองตอนส่ง
+    ปิดการส่งรูปได้โดยลบไฟล์ marker แล้ว restart</p>
+
+  <h3>ทางที่ 2 · Named tunnel ด้วยสคริปต์ (URL คงที่ ต้องมีโดเมนใน Cloudflare)</h3>
+  <pre><code>&amp; "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel login
+.\scripts\setup_cloudflare_tunnel.ps1 -Hostname drone.example.com
+&amp; "C:\Program Files (x86)\cloudflared\cloudflared.exe" service install</code></pre>
+  <p>แล้วใส่ <code>"public_base_url": "https://drone.example.com"</code> ใน <code>configs\line.json</code></p>
+
+  <h3>ทางที่ 3 · Named tunnel ที่สร้างจาก Cloudflare Zero Trust dashboard</h3>
+  <ol class="steps">
+    <li>ใน dashboard → Networks → Tunnels → tunnel ของคุณ → <strong>Public Hostname</strong>:
+      path <code>/public/img/*</code> · service <code>http://127.0.0.1:8766</code> (<strong>8766 ไม่ใช่ 8765</strong>)</li>
+    <li>ในเครื่อง ใส่ hostname ลง <code>public_base_url</code> ใน <code>configs\line.json</code></li>
+    <li>ลบ <code>configs\quick-tunnel.enabled</code> ทิ้ง (<code>public_base_url</code> มาก่อน quick tunnel อยู่แล้ว แต่ลบไว้ชัดเจนกว่า)</li>
+  </ol>
+  <p>ตรวจว่ามี service ของ cloudflared อยู่หรือไม่:
+    <code>Get-CimInstance Win32_Service -Filter "Name='Cloudflared'" | Select-Object State, PathName</code></p>
+
+  <h3>การป้องกันของเส้นทางรูป</h3>
+  <table>
+    <tbody>
+      <tr><td class="k" style="width:30%">token</td><td>สุ่ม 43 ตัวอักษร · หมดอายุใน 10 นาที · ใช้ได้เฉพาะ GET</td></tr>
+      <tr><td class="k">ขอบเขตไฟล์</td><td>ชี้ได้เฉพาะไฟล์ใน <code>output\sessions\</code> (ตรวจ path จริงหลัง resolve)</td></tr>
+      <tr><td class="k">เส้นทางอื่น</td><td><code>/</code>, <code>/api/…</code>, <code>/assets/…</code> ตอบ 404 เพราะไม่มีอยู่ใน server รูป</td></tr>
+      <tr><td class="k">ขนาดรูป</td><td>รูปเต็มไม่เกิน 10 MB · preview ไม่เกิน 1 MB (เกินจะย่อเป็น 1024 px ให้อัตโนมัติ)</td></tr>
+    </tbody>
+  </table>
+  <div class="danger"><b>LINE เก็บสำเนารูปไว้ที่ฝั่ง LINE</b>
+    token ที่หมดอายุไม่ลบสำเนาใน cache ของ LINE ส่งรูปไปแล้วเรียกคืนไม่ได้
+    ถ้าภาพจากกล้องเปิดเผยไม่ได้ อย่าเปิดการส่งรูป — การส่งข้อความอย่างเดียวไม่เปิดสิ่งใดออกภายนอก</div>
+</section>
+
+<!-- ------------------------------------------------------- 15 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">15</div>
+    <div><h2>จัดการโมเดลและการประมวลผลวิดีโอ<span class="anchor">ZZc15ZZ</span></h2>
+      <p class="sub">ทะเบียน checkpoint · <code>configs\models.local.yaml</code> · ffmpeg และ encoder</p></div>
+  </div>
+
+  <h3>ทะเบียนโมเดลสองชั้น</h3>
+  <table>
+    <thead><tr><th style="width:32%">ไฟล์</th><th>บทบาท</th></tr></thead>
+    <tbody>
+      <tr><td><code>configs\paths.yaml</code></td><td>ทะเบียนหลักที่อยู่ใน git มี comment อธิบายเหตุผล — หน้าเว็บ<strong>ไม่เขียนทับ</strong>ไฟล์นี้</td></tr>
+      <tr><td><code>configs\models.local.yaml</code></td><td>สิ่งที่เพิ่ม เอาออก และค่าเริ่มต้นที่ตั้งจากหน้าเว็บ ซ้อนทับไฟล์หลัก ไม่อยู่ใน git ลบทิ้งเพื่อกลับไปใช้ไฟล์หลักอย่างเดียวได้</td></tr>
+    </tbody>
+  </table>
+  <p>CLI (<code>vision-lab models</code>, <code>run --detect-model</code>) อ่านทั้งสองชั้นเหมือนหน้าเว็บ รายการจึงตรงกันเสมอ</p>
+
+  <h3>เพิ่มโมเดลใหม่</h3>
+  <ol class="steps">
+    <li>คัดลอกไฟล์ <code>.pt</code> ไปไว้ใน <code>models\</code> หรือคัดลอกโฟลเดอร์ผลการเทรน (เช่นจาก Google Colab) ไปไว้ใน <code>runs\</code> — ไฟล์ <code>weights\</code> ไม่เข้า git</li>
+    <li>ในหน้าเว็บ กด <strong>จัดการโมเดล</strong> ไฟล์ใหม่จะอยู่ในส่วน <strong>เพิ่มโมเดลจากไฟล์บนเครื่อง</strong></li>
+    <li>แก้ชื่อย่อ (ตัวอักษร ตัวเลข <code>. _ -</code> ไม่เกิน 40 ตัว) แล้วกด <strong>เพิ่ม</strong> ใช้ได้ทันทีโดยไม่ต้อง restart</li>
+    <li>(ถ้าต้องการ) กด <strong>ตั้งเป็นค่าเริ่มต้น</strong></li>
+  </ol>
+  <div class="danger"><b>ใส่ในโฟลเดอร์โมเดลเฉพาะไฟล์ .pt ที่เชื่อถือได้</b>
+    checkpoint ของ PyTorch เป็น pickle ที่รันโค้ดได้ตอนโหลด หน้าเว็บจึงไม่รับอัปโหลด และเพิ่มได้เฉพาะไฟล์ที่ server เจอเอง
+    ในโฟลเดอร์ของโปรเจกต์ ห้ามนำไฟล์จากแหล่งที่ไม่รู้จักมาวาง</div>
+
+  <h3>การประมวลผลวิดีโอ</h3>
+  <table>
+    <tbody>
+      <tr><td class="k" style="width:30%">ผลลัพธ์</td><td><code>output\renders\วิดีโอ__โมเดล__c0.45-s640-st1\</code> มี <code>annotated.mp4</code>, <code>tracks.jsonl</code> (กรอบรายเฟรม) และ <code>meta.json</code></td></tr>
+      <tr><td class="k">ผลเก่า</td><td>ขนาดหรือเวลาแก้ไขของวิดีโอหรือไฟล์ .pt เปลี่ยนหลังประมวลผล</td></tr>
+      <tr><td class="k">ทีละงาน</td><td>GPU 4 GB รับงานเดียว · ปิด server ระหว่างทาง = ยกเลิกงาน</td></tr>
+      <tr><td class="k">พื้นที่ดิสก์</td><td>ราว 55 MB ต่อนาทีที่ 1080p — ลบผลที่ไม่ใช้จากรายการในหน้าเว็บ</td></tr>
+      <tr><td class="k">ความเร็ววัดจริง</td><td>GTX 1650 + NVENC: 16.0 เฟรม/วินาที (track 53.4 ms · decode 5.2 · encode 2.3 · draw 1.2 ms ต่อเฟรม) · libx264 เดิม: 5.0 เฟรม/วินาที</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th style="width:36%">Environment variable</th><th>ใช้ทำอะไร</th></tr></thead>
+    <tbody>
+      <tr><td><code>TELEMETRY_OCR_FFMPEG</code></td><td>path ของ <code>ffmpeg.exe</code> ถ้าไม่ตั้ง ระบบหาใน PATH แล้วจึงโฟลเดอร์ของ winget</td></tr>
+      <tr><td><code>TELEMETRY_OCR_RENDER_ENCODER</code></td><td>บังคับ encoder: <code>h264_nvenc</code>, <code>h264_qsv</code> หรือ <code>libx264</code> (ปกติเลือกเองตามลำดับนี้โดยทดสอบจริงก่อน)</td></tr>
+      <tr><td><code>TELEMETRY_VISION_ASSETS</code></td><td>ย้ายโฟลเดอร์สื่อ ซึ่งมีโฟลเดอร์วิดีโอที่หน้าเว็บแสดง</td></tr>
+    </tbody>
+  </table>
+
+  <h3>ประเมิน checkpoint กับวิดีโอทั้งไฟล์ (CLI)</h3>
+  <pre><code>.\.venv-cuda\Scripts\vision-lab.exe evaluate 15-31-25-0.mp4 --model best50 --track --imgsz 640</code></pre>
+  <p>ได้ตัวเลขสรุปที่เทียบ checkpoint กันได้: <code>frame_summary.csv</code> (detection และ latency รายเฟรม),
+    <code>summary.json</code> (setting, throughput, จำนวน track) ใช้คู่กับหน้าเว็บเพื่อเลือกโมเดลก่อนประมวลผลวิดีโอยาว</p>
+</section>
+
+<!-- ------------------------------------------------------- 16 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">16</div>
+    <div><h2>ตั้งค่า ROI และ Calibration<span class="anchor">ZZc16ZZ</span></h2>
+      <p class="sub">บอกระบบว่าตัวเลขแต่ละค่าอยู่ตรงไหนของภาพ และควรปรับภาพอย่างไรก่อนอ่าน</p></div>
+  </div>
+
+  <p>ทำเมื่อใช้วิดีโอจากกล้องหรือโปรแกรมที่วาง OSD ต่างตำแหน่ง หรือเมื่อค่าที่อ่านผิดอย่างเป็นระบบ
+    config ที่ใช้งานอยู่คือ <code>configs\roi_calibrated_cuda.yaml</code> (CUDA) และ <code>configs\roi_calibrated.yaml</code> (CPU)</p>
+
+  <h3>กำหนดกรอบ ROI</h3>
+  <p>แต่ละฟิลด์มี <code>box: [x, y, width, height]</code> เป็นสัดส่วน 0.0–1.0 ของขนาดเฟรม
+    ตัวอย่างกรอบพิกเซล (826, 842)–(1095, 928) บนเฟรม 1920×1080:</p>
+  <pre><code>x = 826 / 1920 = 0.4302      width  = (1095 - 826) / 1920 = 0.1401
+y = 842 / 1080 = 0.7796      height = (928 - 842)  / 1080 = 0.0796</code></pre>
+  <table>
+    <thead><tr><th style="width:26%">คีย์ของฟิลด์</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td><code>allowed_chars</code></td><td>อักขระที่ฟิลด์นี้ยอมรับ</td></tr>
+      <tr><td><code>regex</code></td><td>รูปแบบเต็มของค่า ค่าที่ไม่ตรงถือว่าไม่ผ่าน</td></tr>
+      <tr><td><code>data_type</code></td><td><code>string</code>, <code>integer</code> หรือ <code>float</code></td></tr>
+      <tr><td><code>min_value</code> / <code>max_value</code></td><td>ช่วงค่าที่เป็นไปได้</td></tr>
+      <tr><td><code>profile</code></td><td><code>fast</code> ยืนยันจาก 2 ใน 3 เฟรม · <code>stable</code> ยืนยันจาก 3 ใน 5 เฟรม</td></tr>
+      <tr><td><code>max_delta_per_second</code></td><td>ขีดจำกัดการเปลี่ยนค่าต่อวินาที ใส่เมื่อรู้ข้อจำกัดทางกายภาพจริง</td></tr>
+      <tr><td><code>padding</code></td><td>ขยายกรอบรอบ ROI ตอนตัดภาพ (ถ้าไม่ระบุใช้ <code>runtime.padding</code>)</td></tr>
+    </tbody>
+  </table>
+  <div class="tip"><b>ตัดเฉพาะตัวค่า</b> เช่น <code>123.4</code> ไม่รวมคำนำหน้าอย่าง <code>ALT</code> หรือหน่วยเมื่อไม่จำเป็น OCR จะแม่นขึ้น</div>
+
+  <h3>ขั้นตอนแนะนำ</h3>
+  <ol class="steps">
+    <li><strong>ตรวจไฟล์ config</strong> (ไม่โหลด OCR):
+      <pre><code>telemetry-ocr validate-config --config configs\roi_calibrated_cuda.yaml</code></pre></li>
+    <li><strong>ดูตำแหน่งกรอบบนเฟรมจริง</strong>:
+      <pre><code>telemetry-ocr preview-rois --video &lt;video&gt; --config &lt;config&gt; --frame-index 0 --output output\roi-preview.jpg</code></pre>
+      <span class="small">ภาพ preview วาดกรอบตาม <code>box</code> โดยไม่รวม padding กรอบที่ OCR ตัดจริงจะใหญ่กว่าเล็กน้อย</span></li>
+    <li><strong>ส่งออกภาพตัวอย่างเพื่อทำคำตอบ</strong>:
+      <pre><code>telemetry-ocr export-crops --video &lt;video&gt; --config &lt;config&gt; --output-dir validation --crop-count 1000</code></pre>
+      เปิดภาพใน <code>validation\images</code> แล้วกรอกคอลัมน์ <code>expected</code> ใน <code>validation\labels.csv</code></li>
+    <li><strong>Calibrate โดยใช้คำตอบ</strong> — ทดลอง 17 สูตรการปรับภาพต่อฟิลด์ แล้วเลือกสูตรที่แม่นที่สุด:
+      <pre><code>telemetry-ocr calibrate --video &lt;video&gt; --config &lt;config&gt; --output-config &lt;new-config&gt; --report output\calibration.json --labels validation\labels.csv</code></pre></li>
+    <li>(CPU เท่านั้น) <strong>เลือกจำนวน thread</strong>:
+      <pre><code>telemetry-ocr benchmark --video &lt;video&gt; --config &lt;config&gt; --threads 2,4,6 --iterations 30 --update-config</code></pre></li>
+    <li>คัดลอก config ใหม่ไปแทนไฟล์ที่ server ใช้ แล้ว restart server</li>
+  </ol>
+
+  <h3>สถานะความแม่นยำปัจจุบัน</h3>
+  <p>วัดจากคำตอบที่ตรวจด้วยตา 876 ตัวอย่าง: <strong>95.9%</strong> (เป้าหมาย 97%) ฟิลด์ที่ยังต่ำคือ
+    <code>sensor_angle_deg</code> 91.6%, <code>eo_detail</code> 90.4% และ <code>ir_detail</code> 90.4%
+    รอบถัดไปให้ export เฉพาะสามฟิลด์นี้และข้ามเฟรมที่มีคำตอบแล้ว:</p>
+  <pre><code>telemetry-ocr export-crops --video &lt;video&gt; --config configs\roi_calibrated_cuda.yaml --output-dir output\labels-pass2 --crop-count 900 --fields sensor_angle_deg,eo_detail,ir_detail --exclude-labels examples\validation_labels_15-31-25-0.csv
+python scripts\label_contact_sheet.py output\labels-pass2</code></pre>
+  <p class="small">สคริปต์ contact sheet เรียงภาพแผ่นละ 25 ภาพพร้อมหมายเลขเฟรม ช่วยให้กรอกคำตอบได้เร็วกว่าเปิดทีละไฟล์</p>
+</section>
+
+<!-- ------------------------------------------------------- 17 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">17</div>
+    <div><h2>คำสั่ง CLI อ้างอิง<span class="anchor">ZZc17ZZ</span></h2>
+      <p class="sub">เรียกผ่าน <code>.\.venv-cuda\Scripts\telemetry-ocr.exe</code> และ <code>vision-lab.exe</code> · ใส่ <code>--help</code> ท้ายคำสั่งเพื่อดูตัวเลือกทั้งหมด</p></div>
+  </div>
+
+  <h3><code>telemetry-ocr</code> — OCR และหน้าเว็บ (ไม่โหลด PyTorch)</h3>
+  <table>
+    <thead><tr><th style="width:21%">คำสั่ง</th><th>ใช้ทำอะไร</th></tr></thead>
+    <tbody>
+      <tr><td><code>web</code></td><td>เปิดหน้าเว็บ (บทที่ 12)</td></tr>
+      <tr><td><code>run</code></td><td>อ่านค่าแบบ realtime จากไฟล์หรือสตรีม (<code>rtsp://</code> ฯลฯ) เขียน JSONL/CSV</td></tr>
+      <tr><td><code>capture</code></td><td>บันทึกเฟรมทั้งหมดลงโฟลเดอร์ session โดยไม่ทิ้งเฟรม</td></tr>
+      <tr><td><code>extract</code></td><td>อ่านค่าจาก session ที่บันทึกไว้ (อ่านซ้ำด้วย ROI ใหม่ได้)</td></tr>
+      <tr><td><code>session-info</code></td><td>สรุปข้อมูลของ session</td></tr>
+      <tr><td><code>validate-config</code></td><td>ตรวจไฟล์ config</td></tr>
+      <tr><td><code>preview-rois</code></td><td>บันทึกภาพเฟรมพร้อมกรอบ ROI</td></tr>
+      <tr><td><code>export-crops</code></td><td>ส่งออกภาพ ROI สำหรับทำคำตอบ</td></tr>
+      <tr><td><code>calibrate</code></td><td>เลือกสูตรปรับภาพที่ดีที่สุดต่อฟิลด์</td></tr>
+      <tr><td><code>benchmark</code></td><td>วัดจำนวน CPU thread ที่เหมาะสม</td></tr>
+    </tbody>
+  </table>
+
+  <h4>ตัวอย่าง: อ่านกล้องสดผ่าน RTSP พร้อม YOLO</h4>
+  <pre><code>.\.venv-cuda\Scripts\telemetry-ocr.exe run `
+  --video rtsp://user:pass@192.168.1.50:554/stream1 `
+  --config configs\roi_calibrated_cuda.yaml `
+  --jsonl output\telemetry.jsonl --csv output\telemetry.csv `
+  --detect-model best50 --detections output\detections.jsonl</code></pre>
+  <p class="small">กด <kbd>Ctrl</kbd>+<kbd>C</kbd> เพื่อหยุด หรือใช้ <code>--max-seconds</code> สตรีมที่หลุดจะต่อใหม่เองพร้อม backoff 0.5/1/2/4 วินาที
+    (หน้าเว็บรองรับเฉพาะไฟล์วิดีโอ การอ่านกล้องสดใช้คำสั่งนี้)</p>
+
+  <h4>ตัวอย่าง: บันทึกก่อน แล้วอ่านทีหลัง</h4>
+  <pre><code>.\.venv-cuda\Scripts\telemetry-ocr.exe capture --video ..\object_detection\data\15-31-25-0.mp4 --config configs\roi_calibrated_cuda.yaml --session output\sessions\flight01 --max-seconds 60
+.\.venv-cuda\Scripts\telemetry-ocr.exe extract --session output\sessions\flight01 --config configs\roi_calibrated_cuda.yaml</code></pre>
+
+  <h3><code>vision-lab</code> — ข้อมูลและโมเดล (โหลด PyTorch)</h3>
+  <table>
+    <thead><tr><th style="width:21%">คำสั่ง</th><th>ใช้ทำอะไร</th></tr></thead>
+    <tbody>
+      <tr><td><code>check</code></td><td>ตรวจ torch/paddle, CUDA, ไฟล์โมเดล และโฟลเดอร์สื่อ</td></tr>
+      <tr><td><code>models</code></td><td>แสดงทะเบียน checkpoint</td></tr>
+      <tr><td><code>extract-frames</code></td><td>สุ่มเฟรมจากวิดีโอไปทำ dataset (<code>--interval 1.0</code>)</td></tr>
+      <tr><td><code>evaluate</code></td><td>รันตรวจจับ/ติดตามทั้งวิดีโอแล้วสรุปผล</td></tr>
+      <tr><td><code>report</code></td><td>สร้างรายงาน PDF ภาษาไทยเรื่องทฤษฎีและ dataset</td></tr>
+      <tr><td><code>handbook</code></td><td>สร้างคู่มือเชิงเทคนิคฉบับเต็ม (PDF) ทั้งฝั่ง OCR และ detection</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- 18 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">18</div>
+    <div><h2>ความปลอดภัยและข้อควรระวัง<span class="anchor">ZZc18ZZ</span></h2>
+      <p class="sub">สิ่งที่ระบบป้องกันไว้แล้ว และสิ่งที่ผู้ดูแลต้องรักษา</p></div>
+  </div>
+
+  <h3>สิ่งที่ server ตรวจทุก request</h3>
+  <table>
+    <thead><tr><th style="width:30%">ชั้นป้องกัน</th><th>รายละเอียด</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Host</td><td>ต้องเป็น <code>127.0.0.1</code>, <code>localhost</code>, <code>::1</code> หรือค่าที่ส่งผ่าน <code>--host</code> มิฉะนั้นตอบ 403 (กัน DNS rebinding)</td></tr>
+      <tr><td class="k">Origin</td><td>request จากเว็บอื่นที่ไม่อยู่ใน allowlist ถูกปฏิเสธด้วย 403</td></tr>
+      <tr><td class="k">Header บังคับ</td><td>ทุก POST/DELETE ใต้ <code>/api/</code> ต้องมี <code>X-Telemetry-OCR: 1</code> — กันเว็บอื่นที่เปิดอยู่สั่งงาน server</td></tr>
+      <tr><td class="k">ทะเบียนโมเดล</td><td>เพิ่มโมเดลได้เฉพาะไฟล์ที่ server เจอเองใน <code>models/</code> และ <code>runs/*/weights/</code> ไม่รับไฟล์หรือ path จาก request</td></tr>
+      <tr><td class="k">งานประมวลผล</td><td>ทีละงาน · ต้องมี header ป้องกันเหมือน API อื่น · ปิด server = ยกเลิกงาน</td></tr>
+      <tr><td class="k">rate limit LINE</td><td>ส่งห่างกันอย่างน้อย 3 วินาที และปฏิเสธเองเมื่อโควต้าหมด</td></tr>
+    </tbody>
+  </table>
+
+  <h3>ข้อปฏิบัติของผู้ดูแล</h3>
+  <ul>
+    <li>อย่าเปลี่ยน <code>--host</code> เป็น <code>0.0.0.0</code> หรือ IP ของเครือข่าย — API ออกแบบให้ใช้จากเครื่องเดียว</li>
+    <li>อย่าชี้ tunnel ไปที่พอร์ต 8765 ใช้ 8766 (server รูป) เท่านั้น</li>
+    <li>เก็บ <code>configs\line.json</code> และ token ให้ปลอดภัย และ revoke ทันทีเมื่อสงสัยว่ารั่ว</li>
+    <li>วางใน <code>models\</code> หรือ <code>runs\*\weights\</code> เฉพาะไฟล์ <code>.pt</code> ที่ได้จากการเทรนของทีมเอง เพราะหน้าเว็บเพิ่มไฟล์จากโฟลเดอร์เหล่านี้ได้</li>
+    <li>ติดตามพื้นที่ดิสก์ของ <code>output\renders\</code> (ราว 55 MB ต่อนาทีของวิดีโอ) และลบผลที่ไม่ใช้</li>
+    <li>เปิดการส่งรูปเฉพาะเมื่อภาพเผยแพร่ได้ เพราะ LINE เก็บสำเนาไว้</li>
+    <li>สำรองโฟลเดอร์ <code>output\sessions\</code> ที่ต้องใช้เป็นหลักฐาน เพราะปุ่มลบในหน้าเว็บกู้คืนไม่ได้</li>
+  </ul>
+</section>
+
+<!-- ------------------------------------------------------- 19 -->
+<section class="chapter">
+  <div class="chapter-head">
+    <div class="badge">19</div>
+    <div><h2>แก้ปัญหาสำหรับผู้ดูแลระบบ<span class="anchor">ZZc19ZZ</span></h2>
+      <p class="sub">เริ่มจาก log สองไฟล์ในบทที่ 12 เสมอ</p></div>
+  </div>
+  <table>
+    <thead><tr><th style="width:26%">อาการ</th><th style="width:30%">ตรวจที่</th><th>วิธีแก้</th></tr></thead>
+    <tbody>
+      <tr><td class="k">PWA เปิดได้แต่ไม่มี server</td><td><code>ocr-web-autostart.log</code> ไม่มีบรรทัดใหม่</td><td>task ไม่ได้รัน — ตรวจค่าเรื่องแบตเตอรี่ แล้วรัน <code>install-ocr-web-autostart.cmd</code> ซ้ำ</td></tr>
+      <tr><td class="k">log ขึ้น “MISSING every known build”</td><td><code>ocr-web-autostart.log</code></td><td>ไม่มีทั้ง <code>.venv-cuda</code> และ <code>.venv</code> หรือไม่มีไฟล์ config — ติดตั้งตามบทที่ 11</td></tr>
+      <tr><td class="k">“Server exited with code …”</td><td><code>ocr-web.log</code> บรรทัดก่อนหน้า</td><td>อ่านข้อความ error ที่พิมพ์ก่อน server ปิด เช่น config ผิดรูปแบบ หรือพอร์ตถูกใช้</td></tr>
+      <tr><td class="k"><code>WinError 127</code> / <code>cudnn_cnn64_9.dll</code></td><td>console หรือ log</td><td>cuDNN ของ Paddle และ torch ชนกัน — ตรวจว่าติดตั้ง <code>nvidia-cudnn-cu12==9.9.0.52</code> และไม่มีสคริปต์ที่ import torch ใน process ของ OCR</td></tr>
+      <tr><td class="k">โมเดลในรายการขึ้นว่า “ไม่พบไฟล์”</td><td>จัดการโมเดล · path ของรายการนั้น</td><td>คัดลอกไฟล์ <code>.pt</code> กลับไปที่ path เดิม หรือเอารายการนั้นออก</td></tr>
+      <tr><td class="k">รายการโมเดลและวิดีโอว่าง</td><td><code>ocr-web.log</code>: “configs/paths.yaml unavailable”</td><td><code>configs\paths.yaml</code> หรือ <code>configs\models.local.yaml</code> อ่านไม่ได้ — แก้ YAML หรือลบ <code>models.local.yaml</code> แล้ว restart</td></tr>
+      <tr><td class="k">LINE ตอบ 401 / 400 / 429</td><td>บรรทัดสถานะในหน้าเว็บ และ <code>ocr-web.log</code></td><td>401 token ผิด · 400 ค่า <code>to</code> ผิดหรือยังไม่เพิ่มเพื่อน · 429 เกินโควต้า</td></tr>
+      <tr><td class="k">ส่งได้แต่ไม่มีรูป</td><td><code>/api/line/status</code> ฟิลด์ <code>images</code> และ <code>ocr-web.log</code></td><td>ตั้ง <code>public_base_url</code> หรือเปิด quick tunnel · ตรวจว่า tunnel ชี้ไป 8766</td></tr>
+      <tr><td class="k">quick tunnel ถูกเปิดทั้งที่มี named tunnel</td><td><code>quick_tunnel</code> ไม่เป็น <code>null</code></td><td>ใส่ <code>public_base_url</code> ใน <code>line.json</code> และลบ <code>quick-tunnel.enabled</code></td></tr>
+      <tr><td class="k">ประมวลผลวิดีโอช้ากว่าปกติ</td><td><code>/api/renders/current</code> ฟิลด์ <code>stages_ms</code> และ <code>encoder</code></td><td><code>track</code> สูง = GPU ถูกโปรแกรมอื่นใช้ · encoder เป็น <code>libx264</code> = ไม่มี hardware encoder ให้ตรวจ driver การ์ดจอหรือ ffmpeg</td></tr>
+      <tr><td class="k">หน้าเว็บแจ้ง “ไม่พบ ffmpeg”</td><td><code>ocr-web.log</code>: “ffmpeg not found”</td><td>ติดตั้ง ffmpeg หรือตั้ง <code>TELEMETRY_OCR_FFMPEG</code> แล้ว restart scheduled task</td></tr>
+      <tr><td class="k">ประมวลผลล้มเหลว “ffmpeg exited …”</td><td>บรรทัดสถานะในแผง และ <code>ocr-web.log</code></td><td>encoder ใช้งานไม่ได้บนเครื่องนี้ — ตั้ง <code>TELEMETRY_OCR_RENDER_ENCODER=libx264</code> แล้ว restart</td></tr>
+      <tr><td class="k">หน้าเว็บยังเป็นเวอร์ชันเก่าหลังอัปเดต</td><td>cache ของ PWA</td><td>ปิดแอปทุกหน้าต่างแล้วเปิดใหม่ หรือ <kbd>Ctrl</kbd>+<kbd>F5</kbd></td></tr>
+      <tr><td class="k">ค่าที่อ่านผิดทั้งฟิลด์</td><td><code>preview-rois</code></td><td>กรอบ ROI เลื่อน — แก้ <code>box</code> แล้ว calibrate ใหม่ (บทที่ 16)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ------------------------------------------------------- Appendix -->
+<section class="chapter" style="break-before: page; margin-top: 0">
+  <div class="chapter-head">
+    <div class="badge">ก</div>
+    <div><h2>ภาคผนวก<span class="anchor">ZZc20ZZ</span></h2>
+      <p class="sub">โครงสร้างไฟล์ · รายการ API · อภิธานศัพท์</p></div>
+  </div>
+
+  <h3>โครงสร้างโฟลเดอร์ที่เกี่ยวข้อง</h3>
+  <pre><code>telemetry-vision\
+  configs\
+    roi_calibrated_cuda.yaml    ROI config สำหรับ CUDA (server ใช้ไฟล์นี้)
+    roi_calibrated.yaml         ROI config สำหรับ CPU
+    paths.yaml                  ทะเบียนโมเดลและตำแหน่งสื่อ
+    models.local.yaml           โมเดลที่เพิ่ม/เอาออกจากหน้าเว็บ (ไม่เข้า git)
+    line.json                   token และปลายทาง LINE (ไม่เข้า git)
+    quick-tunnel.enabled        มีไฟล์นี้ = เปิด quick tunnel
+  models\yolo\                  checkpoint ของ YOLO
+  runs\                         ผลการเทรนแต่ละรอบ
+  output\
+    logs\                       ocr-web.log, ocr-web-autostart.log
+    sessions\session-…\         ภาพและค่าที่ Capture ไว้
+    renders\…\                  วิดีโอ AI + tracks.jsonl + meta.json
+  scripts\                      สคริปต์ติดตั้ง/เริ่มระบบ/tunnel
+  install-ocr-web-autostart.cmd
+  remove-ocr-web-autostart.cmd</code></pre>
+
+  <h3>API หลัก (ใช้จากเครื่องเดียวกันเท่านั้น)</h3>
+  <table>
+    <thead><tr><th style="width:42%">Endpoint</th><th>หน้าที่</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/health</code></td><td>สถานะ server และโมเดล OCR</td></tr>
+      <tr><td><code>GET /api/models</code> · <code>GET /api/models/candidates</code></td><td>ทะเบียนโมเดล · ไฟล์ .pt ที่เพิ่มได้</td></tr>
+      <tr><td><code>POST /api/models</code> · <code>POST /api/models/default</code> · <code>DELETE /api/models/{name}</code></td><td>เพิ่ม (ด้วย candidate id) · ตั้งค่าเริ่มต้น · เอาออกจากรายการ</td></tr>
+      <tr><td><code>GET /api/videos</code> · <code>GET /api/videos/source</code></td><td>รายการวิดีโอ · ไฟล์ต้นฉบับ (รองรับ Range)</td></tr>
+      <tr><td><code>POST /api/renders</code></td><td>เริ่มประมวลผลวิดีโอด้วย AI</td></tr>
+      <tr><td><code>GET · DELETE /api/renders/current</code></td><td>ความคืบหน้า (fps, ETA, stages_ms, encoder) · ยกเลิก</td></tr>
+      <tr><td><code>GET /api/renders</code> · <code>GET /api/renders/video</code> · <code>DELETE /api/renders</code></td><td>ผลการประมวลผล · เล่นวิดีโอ AI · ลบผล</td></tr>
+      <tr><td><code>POST /api/capture/shot</code></td><td>อ่านเฟรมต้นฉบับจากไฟล์ + OCR + กรอบจากผลการประมวลผล</td></tr>
+      <tr><td><code>DELETE /api/capture/shot</code> · <code>GET /api/capture/image</code></td><td>ลบภาพที่เลือก · อ่านภาพ/ภาพย่อ</td></tr>
+      <tr><td><code>GET /api/line/status</code> · <code>POST /api/line/send</code></td><td>สถานะ LINE และโควต้า · ส่งภาพที่เลือก</td></tr>
+    </tbody>
+  </table>
+  <p class="small">ทุก POST/DELETE ต้องมี header <code>X-Telemetry-OCR: 1</code></p>
+
+  <h3>อภิธานศัพท์</h3>
+  <table>
+    <thead><tr><th style="width:24%">คำ</th><th>ความหมาย</th></tr></thead>
+    <tbody>
+      <tr><td class="k">OCR</td><td>Optical Character Recognition — การอ่านตัวอักษรจากภาพ ระบบใช้ PaddleOCR</td></tr>
+      <tr><td class="k">OSD</td><td>On-Screen Display — ตัวเลขและสัญลักษณ์ที่กล้องซ้อนบนวิดีโอ</td></tr>
+      <tr><td class="k">ROI</td><td>Region of Interest — กรอบบนภาพที่ใช้ตัดไปอ่านค่าแต่ละฟิลด์</td></tr>
+      <tr><td class="k">Calibration</td><td>การทดลองสูตรปรับสี/contrast ต่อฟิลด์ เพื่อเลือกสูตรที่อ่านแม่นที่สุด</td></tr>
+      <tr><td class="k">Temporal voting</td><td>การยืนยันค่าจากการอ่านหลายเฟรมต่อเนื่อง ลดค่าผิดชั่วขณะ</td></tr>
+      <tr><td class="k">YOLO</td><td>โมเดลตรวจจับวัตถุแบบ real-time (Ultralytics YOLOv8)</td></tr>
+      <tr><td class="k">BoT-SORT</td><td>อัลกอริทึมติดตามวัตถุข้ามเฟรม ให้ Track ID ต่อเนื่อง</td></tr>
+      <tr><td class="k">Checkpoint (.pt)</td><td>ไฟล์น้ำหนักของโมเดลที่เทรนแล้ว</td></tr>
+      <tr><td class="k">Confidence</td><td>ค่าความมั่นใจของโมเดลต่อผลลัพธ์ 0–1</td></tr>
+      <tr><td class="k">PWA</td><td>Progressive Web App — เว็บที่ติดตั้งและเปิดเหมือนแอปได้</td></tr>
+      <tr><td class="k">Scheduled Task</td><td>งานตั้งเวลาของ Windows ที่ใช้เปิด server ตอน login</td></tr>
+      <tr><td class="k">Cloudflare Tunnel</td><td>ช่องทางที่ให้บริการภายนอกเข้าถึงพอร์ตบนเครื่องได้โดยไม่ต้องเปิด firewall</td></tr>
+      <tr><td class="k">NVENC</td><td>วงจรเข้ารหัสวิดีโอบนการ์ด NVIDIA ทำให้การประมวลผลวิดีโอไม่แย่ง CPU</td></tr>
+      <tr><td class="k">Session</td><td>ชุดภาพที่ Capture ในการเปิดหน้าเว็บหนึ่งครั้ง เก็บรวมในโฟลเดอร์เดียว</td></tr>
+    </tbody>
+  </table>
+</section>
+
+</body>
+</html>

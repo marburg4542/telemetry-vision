@@ -85,3 +85,6 @@ docs/*.pdf
 # The web app's model registry changes for this machine. They name checkpoints
 # that live on this disk, which is why they are not the project's to track.
 configs/models.local.yaml
+
+# Print copies build_guide.py regenerates from the screenshots.
+docs/user-guide/assets/print/
