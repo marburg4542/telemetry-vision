@@ -1,12 +1,12 @@
 "use strict";
 
-const CACHE_NAME = "telemetry-ocr-pwa-v17";
+const CACHE_NAME = "telemetry-ocr-pwa-v18";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
   "/assets/app.css",
   "/assets/app.js",
-  "/assets/detection-math.js",
+  "/assets/format.js",
   "/assets/icons/icon-192.png",
   "/assets/icons/icon-512.png",
   "/assets/icons/icon-maskable-512.png",
@@ -14,7 +14,7 @@ const APP_SHELL = [
 // Served network-first so a running page never lags behind the server build.
 const CODE_PATHS = new Set([
   "/assets/app.js",
-  "/assets/detection-math.js",
+  "/assets/format.js",
   "/assets/app.css",
 ]);
 

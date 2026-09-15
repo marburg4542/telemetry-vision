@@ -25,10 +25,9 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[web,test,lint]"
       - run: python -m pytest
-      # The overlay arithmetic lives in JavaScript and fails silently when it is
-      # wrong: a box lands a few pixels out and nothing says why. node:test is
-      # built in, so this needs no package manifest and no install step.
-      - run: node --test tests/detection-math.test.js
+      # The page's display arithmetic (the DMS sixty-carry) fails silently when
+      # it is wrong. node:test is built in, so this needs no package manifest.
+      - run: node --test tests/format.test.js
       # The seams between app.js, index.html and app.css. Nothing else notices
       # when a redesign renames an id or styles an element that is not there:
       # the page still loads and renders the wrong thing.

@@ -101,12 +101,20 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+        from _video_fixture import write_test_video
+        from telemetry_ocr.video_library import VideoLibrary
+
+        write_test_video(self.root / "videos" / "flight.avi")
         server = TestServer(
             # Port 0: the share server binds an ephemeral port so two tests in
             # this class cannot collide on the real one, and so the suite never
             # fights whatever is already listening on this machine.
             create_app(
-                config, FakeRecognizer(), output_dir=self.root, share_port=0
+                config,
+                FakeRecognizer(),
+                output_dir=self.root,
+                share_port=0,
+                video_library=VideoLibrary(self.root / "videos"),
             )
         )
         self.client = TestClient(server, headers={GUARD_HEADER: "1"})
@@ -130,13 +138,14 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         from urllib.parse import urlencode
 
         params = urlencode(
-            {"session": "flight01", "source_time_ms": "1500", "session_id": self.session_id}
+            {
+                "session": "flight01",
+                "source_time_ms": "1500",
+                "session_id": self.session_id,
+                "video": "flight.avi",
+            }
         )
-        return await self.client.post(
-            f"/api/capture/shot?{params}",
-            data=self.jpeg,
-            headers={"Content-Type": "image/jpeg"},
-        )
+        return await self.client.post(f"/api/capture/shot?{params}")
 
     async def _send(self, **query: Any) -> Any:
         from urllib.parse import urlencode
@@ -259,14 +268,15 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_shot_records_what_the_detector_saw(self) -> None:
         """Counted when the frame was taken, not when it is sent.
 
-        No model is loaded in this test, so the honest answer is `no_model` --
-        which has to be distinguishable from having looked and found nothing.
+        The video in this test was never rendered, so the honest answer is
+        `no_render` -- which has to be distinguishable from having looked and
+        found nothing.
         """
         body = await (await self._shot()).json()
-        self.assertEqual(body["detections"]["status"], "no_model")
+        self.assertEqual(body["detections"]["status"], "no_render")
         self.assertEqual(body["detections"]["counts"], {})
         await self._send()
-        self.assertIn("ยังไม่ได้โหลดโมเดล", self.pushes[0]["body"]["messages"][0]["text"])
+        self.assertIn("ยังไม่ได้ประมวลผลวิดีโอด้วย AI", self.pushes[0]["body"]["messages"][0]["text"])
 
     async def test_the_counts_reach_the_manifest(self) -> None:
         from telemetry_ocr.capture import load_session
@@ -275,7 +285,7 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         _, records = await asyncio.to_thread(load_session, self.root / "sessions" / "flight01")
         self.assertEqual(len(records), 1)
         assert records[0].detections is not None
-        self.assertEqual(records[0].detections["status"], "no_model")
+        self.assertEqual(records[0].detections["status"], "no_render")
 
 
 

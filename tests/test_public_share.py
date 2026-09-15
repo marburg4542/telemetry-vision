@@ -181,7 +181,7 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
             "/",
             "/api/health",
             "/api/config",
-            "/api/detection/models",
+            "/api/models",
             "/api/capture/status?session=s1",
             "/api/line/status",
             "/assets/app.js",
@@ -191,7 +191,7 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 403, f"{path} was reachable")
 
     async def test_mutating_endpoints_are_refused_from_outside(self) -> None:
-        for path in ("/api/session", "/api/detection/model", "/api/line/send?session=s1"):
+        for path in ("/api/session", "/api/renders", "/api/line/send?session=s1"):
             with self.subTest(path=path):
                 response = await self.outside.post(path)
                 self.assertEqual(response.status, 403)

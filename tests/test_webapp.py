@@ -1,11 +1,12 @@
 import asyncio
-import contextlib
 import importlib.util
+import json
 import tempfile
+import threading
 import time
 import unittest
-from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlencode
 
 HAS_WEB_DEPS = bool(
     importlib.util.find_spec("aiohttp")
@@ -19,128 +20,54 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         import cv2
         import numpy as np
-        from aiohttp import FormData
         from aiohttp.test_utils import TestClient, TestServer
 
+        from _video_fixture import thread_launcher, write_test_video
         from telemetry_ocr.config import AppConfig, FieldConfig, RuntimeConfig
-        from telemetry_ocr.detection import Detection
         from telemetry_ocr.ocr import OCRResult
+        from telemetry_ocr.render_job import RenderManager
+        from telemetry_ocr.video_library import VideoLibrary
         from telemetry_ocr.webapp import GUARD_HEADER, create_app
+        from vision_lab.model_registry import ModelRegistry
 
         class FakeRecognizer:
             def recognize(self, images):
                 return [OCRResult("12", 0.99) for _ in images]
 
-        self.FormData = FormData
-        self.loaded_model_paths = []
-
-        class FakeDetectionWorker:
-            def __init__(worker_self):
-                worker_self.state = "unloaded"
-                worker_self.path = None
-                worker_self.filename = None
-                worker_self.latest_result = None
-                worker_self.dropped_frames = 0
-                worker_self.pid = 2468
-
-            def start(worker_self, path, filename):
-                worker_self.path = path
-                worker_self.filename = filename
-                worker_self.state = "ready"
-                worker_self.latest_result = None
-                self.loaded_model_paths.append(path)
-
-            def restart(worker_self):
-                if worker_self.path is None:
-                    raise ValueError("No model")
-                worker_self.state = "ready"
-
-            def stop(worker_self, timeout=3.0):
-                del timeout
-                worker_self.state = "stopped"
-
-            def status(worker_self):
-                return {
-                    "status": worker_self.state,
-                    "loaded": worker_self.state == "ready",
-                    "filename": worker_self.filename,
-                    "worker_pid": worker_self.pid if worker_self.state == "ready" else None,
-                    "tracker": "BoT-SORT",
-                    "device": "cpu",
-                    "error": None,
-                    "dropped_frames": worker_self.dropped_frames,
-                    "classes": ["aircraft"] if worker_self.state == "ready" else [],
-                    "architecture": "fake-yolo",
-                    "epochs": 1,
-                    "trained_image_size": 640,
-                }
-
-            def submit(worker_self, frame):
-                if worker_self.state != "ready":
-                    return False
-                worker_self.latest_result = {
-                    "source_id": frame.source_id,
-                    "generation": frame.generation,
-                    "sequence": frame.sequence,
-                    "source_time_ms": frame.source_time_ms,
-                    "width": 160,
-                    "height": 90,
-                    "inference_ms": 12.5,
-                    "decode_ms": 2.5,
-                    "track_ms": 10.0,
-                    "worker_total_ms": 14.0,
-                    # Monotonic readings of this machine's clock; the webapp has
-                    # to turn them into spans and drop them from the response.
-                    "enqueued_at": time.perf_counter() - 0.05,
-                    "available_at": time.perf_counter(),
-                    "pipeline_ms": 50.0,
-                    "completed_at": 1.0,
-                    "dropped_frames": worker_self.dropped_frames,
-                    "detections": [
-                        asdict(
-                            Detection(
-                                10.0,
-                                12.0,
-                                80.0,
-                                70.0,
-                                0.91,
-                                0,
-                                "aircraft",
-                                7,
-                            )
-                        )
-                    ],
-                }
-                return True
-
-            def latest(worker_self):
-                return worker_self.latest_result
-
-            def reset(worker_self, source_id, generation):
-                worker_self.latest_result = None
-                worker_self.source_id = source_id
-                worker_self.generation = generation
-
-            def drain(worker_self):
-                worker_self.drain_calls = getattr(worker_self, "drain_calls", 0) + 1
-
-        self.fake_detection_worker = FakeDetectionWorker()
-        self.FakeDetectionWorker = FakeDetectionWorker
         self.FakeRecognizer = FakeRecognizer
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.root = Path(self.temp.name)
 
-        from telemetry_ocr.webapp import ModelChoice
-
-        # A registry with one checkpoint on disk and one whose file has gone.
-        self.models_dir = tempfile.TemporaryDirectory()
-        models_root = Path(self.models_dir.name)
-        self.best_path = models_root / "best.pt"
+        # A repository with a registry: one checkpoint on disk, one whose file
+        # has gone, and one unregistered .pt the app can offer to add.
+        self.repo = self.root / "repo"
+        (self.repo / "configs").mkdir(parents=True)
+        (self.repo / "configs" / "paths.yaml").write_text(
+            "version: 1\n"
+            "asset_root: .\n"
+            "models:\n"
+            "  best50: models/yolo/best.pt\n"
+            "  run7: runs/visdrone_custom_7th/weights/best.pt\n"
+            "default_model: best50\n",
+            encoding="utf-8",
+        )
+        self.best_path = self.repo / "models" / "yolo" / "best.pt"
+        self.best_path.parent.mkdir(parents=True)
         self.best_path.write_bytes(b"fake-yolo-checkpoint")
-        self.registry = [
-            ModelChoice("best50", self.best_path, "models/yolo/best.pt"),
-            ModelChoice(
-                "run7", models_root / "gone.pt", "runs/visdrone_custom_7th/weights/best.pt"
-            ),
-        ]
+        self.extra_path = self.repo / "models" / "yolo" / "extra.pt"
+        self.extra_path.write_bytes(b"another-checkpoint")
+        self.registry = ModelRegistry(self.repo)
+
+        self.videos = self.root / "videos"
+        self.video = write_test_video(self.videos / "flight.avi")
+        # Set, so renders run straight through unless a test holds them.
+        self.render_gate = threading.Event()
+        self.render_gate.set()
+        self.renders = RenderManager(
+            self.root / "renders",
+            launcher=thread_launcher(self.render_gate),
+            ffmpeg="ffmpeg-for-tests",
+        )
 
         config = AppConfig(
             runtime=RuntimeConfig(enable_fallback=False, confidence_threshold=0.8),
@@ -169,9 +96,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             create_app(
                 config,
                 FakeRecognizer(),
+                output_dir=self.root / "output",
                 allowed_origins={"https://marburg4542.github.io"},
-                detection_worker_factory=lambda: self.fake_detection_worker,
-                models=self.registry,
+                model_registry=self.registry,
+                video_library=VideoLibrary(self.videos),
+                render_manager=self.renders,
             )
         )
         # The real page sends the guard header on every API call, so the default
@@ -186,14 +115,11 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.jpeg = encoded.tobytes()
 
     async def asyncTearDown(self):
+        self.render_gate.set()
         await self.raw_client.close()
         await self.client.close()
-        self.models_dir.cleanup()
-
-    async def _select(self, name, *, client=None, headers=None):
-        return await (client or self.client).post(
-            "/api/detection/model", json={"name": name}, headers=headers
-        )
+        await asyncio.to_thread(self.renders.shutdown)
+        self.temp.cleanup()
 
     async def test_page_health_config_and_frame_session(self):
         page = await self.client.get("/")
@@ -277,7 +203,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         page_text = await page.text()
         self.assertIn('rel="manifest"', page_text)
         self.assertIn('id="modelSelect"', page_text)
-        self.assertIn('id="detectionOverlay"', page_text)
+        self.assertIn('id="videoSelect"', page_text)
+        self.assertIn('id="renderButton"', page_text)
         self.assertIn("/service-worker.js", await (await self.client.get("/assets/app.js")).text())
 
         manifest_response = await self.client.get("/manifest.webmanifest")
@@ -296,222 +223,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker.headers.get("Service-Worker-Allowed"), "/")
         self.assertIn("telemetry-ocr-pwa", await worker.text())
 
-    async def test_yolo_model_select_detection_and_clear(self):
-        unloaded = await self.client.get("/api/detection/model")
-        unloaded_payload = await unloaded.json()
-        self.assertFalse(unloaded_payload["loaded"])
-        self.assertEqual(unloaded_payload["status"], "unloaded")
-        no_model = await self.client.post(
-            "/api/detection/frame?source_id=video-a&generation=0&sequence=0&source_time_ms=0",
-            data=self.jpeg,
-            headers={"Content-Type": "image/jpeg"},
-        )
-        self.assertEqual(no_model.status, 409)
-
-        selected = await self._select("best50")
-        self.assertEqual(selected.status, 202)
-        upload_payload = await selected.json()
-        self.assertEqual(upload_payload["filename"], "best.pt")
-        self.assertEqual(upload_payload["model_name"], "best50")
-        # The registry's own file, not a copy somewhere temporary.
-        self.assertEqual(self.loaded_model_paths[0], self.best_path)
-        self.assertEqual(upload_payload["classes"], ["aircraft"])
-        self.assertEqual(upload_payload["tracker"], "BoT-SORT")
-        self.assertEqual(upload_payload["device"], "cpu")
-        self.assertTrue(self.loaded_model_paths[0].is_file())
-
-        detected = await self.client.post(
-            "/api/detection/frame?source_id=video-a&generation=1&sequence=5&source_time_ms=500&confidence=0.4&iou=0.5&image_size=640",
-            data=self.jpeg,
-            headers={"Content-Type": "image/jpeg"},
-        )
-        self.assertEqual(detected.status, 200)
-        detection_payload = await detected.json()
-        self.assertTrue(detection_payload["accepted"])
-        latest = detection_payload["latest_result"]
-        self.assertEqual(latest["width"], 160)
-        self.assertEqual(latest["sequence"], 5)
-        self.assertEqual(latest["detections"][0]["label"], "aircraft")
-        self.assertEqual(latest["detections"][0]["track_id"], 7)
-        self.assertAlmostEqual(latest["detections"][0]["confidence"], 0.91)
-
-        # Raw monotonic clock readings are meaningless off this machine, so the
-        # response carries only the differences.
-        self.assertNotIn("available_at", latest)
-        self.assertNotIn("enqueued_at", latest)
-        self.assertNotIn("pipeline_ms", latest)
-        timing = detection_payload["timing"]
-        self.assertAlmostEqual(timing["worker_total_ms"], 14.0)
-        self.assertAlmostEqual(timing["transport_ms"], 36.0)
-        self.assertGreaterEqual(timing["harvest_ms"], 0.0)
-
-        latest_response = await self.client.get(
-            "/api/detection/result?source_time_ms=650"
-        )
-        self.assertEqual(latest_response.status, 200)
-        self.assertEqual((await latest_response.json())["result_age_ms"], 150.0)
-
-        reset = await self.client.post(
-            "/api/detection/reset?source_id=video-a&generation=2"
-        )
-        self.assertEqual(reset.status, 200)
-        after_reset = await self.client.get("/api/detection/result?source_time_ms=700")
-        self.assertEqual(after_reset.status, 202)
-        self.assertIsNone((await after_reset.json())["latest_result"])
-
-        restarted = await self.client.post("/api/detection/restart")
-        self.assertEqual(restarted.status, 202)
-        self.assertTrue((await restarted.json())["loaded"])
-
-        cleared = await self.client.delete("/api/detection/model")
-        self.assertEqual(cleared.status, 200)
-        self.assertFalse((await cleared.json())["loaded"])
-        # Clearing forgets the model and must never delete the checkpoint. The
-        # upload path unlinked its temporary copy here; the same line against a
-        # registry file would remove best.pt from models/yolo.
-        self.assertTrue(self.best_path.is_file(), "clearing deleted the registry checkpoint")
-
-    async def test_a_cleared_model_stops_being_reported_as_present(self):
-        """The worker keeps the name on purpose; the payload must not repeat it.
-
-        stop() deliberately retains _filename so restart() has something to
-        reopen. The payload used to read `state.filename or worker filename`,
-        and after clearing, state.filename is None -- so the `or` fell through
-        to the name of the checkpoint that had just been cleared. The page then
-        showed it as loaded, offered "Restart worker", and that answered 409
-        forever because model_path really was gone. Reloading showed the same.
-        """
-        loaded = await (await self._select("best50")).json()
-        self.assertEqual(loaded["filename"], "best.pt")
-
-        cleared = await (await self.client.delete("/api/detection/model")).json()
-        self.assertIsNone(cleared["filename"], "the cleared checkpoint is still named")
-        self.assertFalse(cleared["loaded"])
-        self.assertEqual(cleared["size_bytes"], 0)
-
-        # And it stays gone on the next read, which is what a page reload does.
-        again = await (await self.client.get("/api/detection/model")).json()
-        self.assertIsNone(again["filename"])
-
-        # The button the stale name revealed leads nowhere, so the state that
-        # revealed it must not come back either.
-        restart = await self.client.post("/api/detection/restart")
-        self.assertEqual(restart.status, 409)
-
-    async def _load_model_and_submit(self, source_id, generation, sequence):
-        if not self.loaded_model_paths:
-            await self._select("best50")
-        response = await self.client.post(
-            f"/api/detection/frame?source_id={source_id}&generation={generation}"
-            f"&sequence={sequence}&source_time_ms=500&confidence=0.4&iou=0.5&image_size=640",
-            data=self.jpeg,
-            headers={"Content-Type": "image/jpeg"},
-        )
-        return await response.json()
-
-    async def test_result_long_poll_returns_early_and_times_out_cleanly(self):
-        await self._load_model_and_submit("video-a", 1, 5)
-
-        # A revision newer than the one held already exists, so this must not
-        # wait out the full window.
-        started = time.monotonic()
-        early = await self.client.get(
-            "/api/detection/result?source_time_ms=650&after_revision=0&wait_ms=1000"
-        )
-        self.assertEqual(early.status, 200)
-        self.assertLess(time.monotonic() - started, 0.9)
-        payload = await early.json()
-        self.assertEqual(payload["latest_result"]["sequence"], 5)
-        self.assertGreater(payload["revision"], 0)
-
-        # Nothing newer will arrive, so this one waits out its window and still
-        # answers with the current payload rather than an error.
-        started = time.monotonic()
-        timed_out = await self.client.get(
-            f"/api/detection/result?source_time_ms=700"
-            f"&after_revision={payload['revision']}&wait_ms=200"
-        )
-        self.assertEqual(timed_out.status, 200)
-        # It has to have actually blocked. Asserting only the status let a
-        # regression that ignores wait_ms entirely pass unnoticed.
-        self.assertGreaterEqual(time.monotonic() - started, 0.15)
-
-    async def test_a_client_that_renumbers_its_frames_still_blocks(self):
-        """The regression guard for an unthrottled poll loop.
-
-        The page restarts its frame sequence at zero on every seek, model change
-        and settings change. When the server tracked the high-water mark of that
-        sequence, a renumbered client asked for "newer than 0", the server
-        compared it against the pre-reset peak, concluded there was nothing to
-        wait for and answered instantly — every time, as fast as the client
-        could ask. One session logged 1.8 million of those against 19,728 real
-        frames, on the event loop that also serves OCR.
-
-        The revision counter is the server's own and never goes backwards, so
-        renumbering cannot make it look stale.
-        """
-        await self._load_model_and_submit("video-a", 1, 300)
-        after = (await (await self.client.get(
-            "/api/detection/result?source_time_ms=100&after_revision=0&wait_ms=0"
-        )).json())["revision"]
-
-        # Exactly what the client does on a seek: reset, then start again at 0.
-        await self.client.post("/api/detection/reset?source_id=video-a&generation=2")
-        await self._load_model_and_submit("video-a", 2, 0)
-
-        # The renumbered result is newer, so this returns without waiting.
-        fresh = await self.client.get(
-            f"/api/detection/result?source_time_ms=100&after_revision={after}&wait_ms=500"
-        )
-        self.assertEqual(fresh.status, 200)
-        renumbered = await fresh.json()
-        self.assertEqual(renumbered["latest_result"]["sequence"], 0)
-        self.assertGreater(renumbered["revision"], after)
-
-        # And once that one is acknowledged there is nothing newer, so the next
-        # poll blocks instead of returning instantly. This is the assertion the
-        # flood would have failed.
-        started = time.monotonic()
-        blocked = await self.client.get(
-            f"/api/detection/result?source_time_ms=100"
-            f"&after_revision={renumbered['revision']}&wait_ms=200"
-        )
-        self.assertEqual(blocked.status, 200)
-        self.assertGreaterEqual(time.monotonic() - started, 0.15)
-
-    async def test_result_long_poll_does_not_starve_the_ocr_path(self):
-        """OCR shares this event loop and must stay responsive during a poll.
-
-        A long poll that blocked the loop rather than awaiting would stall the
-        frames the page keeps sending, which is the one regression this change
-        must not cause.
-        """
-        session = await (await self.client.post("/api/session")).json()
-        poll = asyncio.ensure_future(
-            self.client.get(
-                "/api/detection/result?source_time_ms=100&after_sequence=99&wait_ms=1000"
-            )
-        )
-        await asyncio.sleep(0)
-        try:
-            recognized = await asyncio.wait_for(
-                self.client.post(
-                    f"/api/session/{session['session_id']}/frame"
-                    "?source_time_ms=120&frame_index=1",
-                    data=self.jpeg,
-                    headers={"Content-Type": "image/jpeg"},
-                ),
-                timeout=5,
-            )
-            self.assertEqual(recognized.status, 200)
-        finally:
-            poll.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await poll
-
     async def test_health_reports_the_build_the_page_checks_against(self):
-        from pathlib import Path
-
         from telemetry_ocr import __version__, webapp
 
         payload = await (await self.client.get("/api/health")).json()
@@ -524,102 +236,174 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(f'const APP_BUILD = "{__version__}"', source)
 
-    async def test_result_long_poll_rejects_a_bad_wait(self):
-        response = await self.client.get(
-            "/api/detection/result?source_time_ms=100&after_sequence=0&wait_ms=abc"
-        )
-        self.assertEqual(response.status, 400)
-
-    async def test_only_a_registered_present_model_can_be_loaded(self):
-        """The page names a checkpoint; it cannot supply one.
-
-        A .pt is a pickle that runs code as it loads, so what this process will
-        unpickle has to be decided on this machine. Anything that is not a
-        registry name with a file behind it is refused before the worker runs.
-        """
-        unknown = await self._select("best99")
-        self.assertEqual(unknown.status, 400)
-        self.assertIn("best50", (await unknown.json())["error"])
-
-        missing = await self._select("run7")
-        self.assertEqual(missing.status, 400)
-        self.assertIn("missing", (await missing.json())["error"])
-
-        # A path is not a name, however it is spelled.
-        for name in (str(self.best_path), "../models/yolo/best.pt", "best.pt"):
-            with self.subTest(name=name):
-                self.assertEqual((await self._select(name)).status, 400)
-
-        # And an upload is no longer understood at all.
-        form = self.FormData()
-        form.add_field(
-            "model", b"payload", filename="evil.pt", content_type="application/octet-stream"
-        )
-        upload = await self.client.post("/api/detection/model", data=form)
-        self.assertEqual(upload.status, 400)
-
-        self.assertEqual(self.loaded_model_paths, [])
+    # -- models ------------------------------------------------------------------
 
     async def test_the_model_list_is_the_registry(self):
-        listed = await (await self.client.get("/api/detection/models")).json()
+        listed = await (await self.client.get("/api/models")).json()
         by_name = {model["name"]: model for model in listed["models"]}
         self.assertEqual(set(by_name), {"best50", "run7"})
         self.assertTrue(by_name["best50"]["available"])
         self.assertFalse(by_name["run7"]["available"])
+        self.assertTrue(by_name["best50"]["default"])
+        self.assertEqual(listed["default"], "best50")
         self.assertEqual(by_name["best50"]["label"], "models/yolo/best.pt")
         # Labels only: the absolute path stays on the server.
-        self.assertNotIn(str(self.best_path), str(listed))
-        self.assertIsNone(listed["selected"])
+        self.assertNotIn(str(self.best_path), json.dumps(listed))
 
-        await self._select("best50")
-        listed = await (await self.client.get("/api/detection/models")).json()
-        self.assertEqual(listed["selected"], "best50")
-
-    async def _start_app(self, **options):
-        from aiohttp.test_utils import TestClient, TestServer
-
-        from telemetry_ocr.webapp import GUARD_HEADER, create_app
-
-        worker = self.FakeDetectionWorker()
-        app = create_app(
-            self.config,
-            self.FakeRecognizer(),
-            detection_worker_factory=lambda: worker,
-            models=self.registry,
-            **options,
+    async def test_a_model_is_added_from_the_files_the_server_found(self):
+        found = await (await self.client.get("/api/models/candidates")).json()
+        self.assertEqual([item["label"] for item in found["candidates"]], ["models/yolo/extra.pt"])
+        self.assertNotIn(str(self.extra_path), json.dumps(found))
+        added = await self.client.post(
+            "/api/models", json={"candidate_id": found["candidates"][0]["id"], "name": "extra"}
         )
-        client = TestClient(TestServer(app), headers={GUARD_HEADER: "1"})
-        await client.start_server()
-        return client, worker
+        self.assertEqual(added.status, 201)
+        listed = await (await self.client.get("/api/models")).json()
+        self.assertIn("extra", [model["name"] for model in listed["models"]])
 
-    async def test_the_default_model_loads_itself_after_startup(self):
-        """Nothing to choose after a restart, and the page is not held up for it."""
-        client, worker = await self._start_app(default_model="best50")
-        try:
-            status = {}
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                status = await (await client.get("/api/detection/model")).json()
-                if status.get("model_name") == "best50":
-                    break
-                await asyncio.sleep(0.02)
-            self.assertEqual(status.get("model_name"), "best50")
-            self.assertEqual(worker.path, self.best_path)
-        finally:
-            await client.close()
+    async def test_a_path_cannot_be_added_as_a_model(self):
+        """A checkpoint is a pickle, so what is loaded is decided on this machine."""
+        for candidate in (str(self.extra_path), "models/yolo/extra.pt", "../../x.pt", ""):
+            with self.subTest(candidate=candidate):
+                response = await self.client.post(
+                    "/api/models", json={"candidate_id": candidate, "name": "sneaky"}
+                )
+                self.assertEqual(response.status, 400)
+        not_json = await self.client.post(
+            "/api/models", data=b"not json", headers={"Content-Type": "application/json"}
+        )
+        self.assertEqual(not_json.status, 400)
 
-    async def test_a_default_whose_file_is_missing_leaves_detection_unloaded(self):
-        # Logged and skipped. The server stays up, because detection is the
-        # optional half of the page.
-        client, worker = await self._start_app(default_model="run7")
-        try:
-            await asyncio.sleep(0.2)
-            status = await (await client.get("/api/detection/model")).json()
-            self.assertIsNone(status["model_name"])
-            self.assertIsNone(worker.path)
-            self.assertEqual((await client.get("/api/health")).status, 200)
-        finally:
-            await client.close()
+    async def test_removing_a_model_keeps_its_file_and_moves_the_default(self):
+        response = await self.client.delete("/api/models/best50")
+        self.assertEqual(response.status, 200)
+        listed = await response.json()
+        self.assertNotIn("best50", [model["name"] for model in listed["models"]])
+        self.assertTrue(self.best_path.is_file(), "removing a model deleted its checkpoint")
+        self.assertEqual(listed["default"], "run7")
+        self.assertEqual((await self.client.delete("/api/models/best50")).status, 400)
+
+    async def test_the_default_model_can_be_chosen(self):
+        chosen = await self.client.post("/api/models/default", json={"name": "run7"})
+        self.assertEqual((await chosen.json())["default"], "run7")
+        unknown = await self.client.post("/api/models/default", json={"name": "ghost"})
+        self.assertEqual(unknown.status, 400)
+
+    # -- videos ------------------------------------------------------------------
+
+    async def test_videos_are_listed_from_the_folder(self):
+        listed = await (await self.client.get("/api/videos")).json()
+        self.assertEqual([video["id"] for video in listed["videos"]], ["flight.avi"])
+        video = listed["videos"][0]
+        self.assertEqual(video["frames"], 20)
+        self.assertAlmostEqual(video["fps"], 10.0)
+        self.assertEqual(video["width"], 160)
+
+    async def test_a_video_is_served_whole_and_by_range(self):
+        whole = await self.client.get("/api/videos/source?video=flight.avi")
+        self.assertEqual(whole.status, 200)
+        self.assertEqual(len(await whole.read()), self.video.stat().st_size)
+        # A range is what lets the page seek a long file without downloading it.
+        part = await self.client.get(
+            "/api/videos/source?video=flight.avi", headers={"Range": "bytes=0-99"}
+        )
+        self.assertEqual(part.status, 206)
+        self.assertEqual(len(await part.read()), 100)
+        for video in ("missing.avi", "../videos/flight.avi", str(self.video)):
+            with self.subTest(video=video):
+                response = await self.client.get(
+                    f"/api/videos/source?{urlencode({'video': video})}"
+                )
+                self.assertEqual(response.status, 404)
+
+    # -- renders -----------------------------------------------------------------
+
+    def _render_request(self, **overrides):
+        return {
+            "video": "flight.avi",
+            "model": "best50",
+            "confidence": 0.45,
+            "image_size": 640,
+            "stride": 1,
+            **overrides,
+        }
+
+    async def _wait_for_render(self, *statuses):
+        deadline = time.monotonic() + 10
+        job = {}
+        while time.monotonic() < deadline:
+            job = await (await self.client.get("/api/renders/current")).json()
+            if job["status"] in statuses:
+                return job
+            await asyncio.sleep(0.05)
+        self.fail(f"render never reached {statuses}: {job}")
+
+    async def test_a_render_runs_is_listed_played_reused_and_deleted(self):
+        started = await self.client.post("/api/renders", json=self._render_request())
+        self.assertEqual(started.status, 202)
+        job = await self._wait_for_render("complete")
+        self.assertEqual(job["done"], 20)
+
+        listed = await (await self.client.get("/api/renders?video=flight.avi")).json()
+        self.assertEqual(len(listed["renders"]), 1)
+        render = listed["renders"][0]
+        self.assertTrue(render["current"])
+        self.assertEqual(render["model"], "best50")
+
+        played = await self.client.get(
+            f"/api/renders/video?{urlencode({'render': render['render_id']})}"
+        )
+        self.assertEqual(played.status, 200)
+
+        # The same files and settings again: played, not rendered twice.
+        again = await self.client.post("/api/renders", json=self._render_request())
+        self.assertEqual(again.status, 200)
+        self.assertEqual((await again.json())["existing"]["render_id"], render["render_id"])
+
+        deleted = await self.client.delete(
+            f"/api/renders?{urlencode({'render': render['render_id']})}"
+        )
+        self.assertEqual(deleted.status, 200)
+        self.assertEqual((await (await self.client.get("/api/renders")).json())["renders"], [])
+        self.assertTrue(self.video.is_file(), "deleting a render deleted the video")
+
+    async def test_a_second_render_waits_and_the_first_can_be_cancelled(self):
+        self.render_gate.clear()
+        first = await self.client.post("/api/renders", json=self._render_request())
+        self.assertEqual(first.status, 202)
+        busy = await self.client.post("/api/renders", json=self._render_request(stride=2))
+        self.assertEqual(busy.status, 409)
+        cancelled = await self.client.delete("/api/renders/current")
+        self.assertTrue((await cancelled.json())["cancelled"])
+        self.render_gate.set()
+        await self._wait_for_render("cancelled")
+        self.assertEqual((await (await self.client.get("/api/renders")).json())["renders"], [])
+
+    async def test_a_render_needs_a_registered_model_file_and_offered_settings(self):
+        for body in (
+            self._render_request(model="best99"),
+            self._render_request(model="run7"),
+            self._render_request(image_size=500),
+            self._render_request(stride=9),
+            self._render_request(confidence=0),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual((await self.client.post("/api/renders", json=body)).status, 400)
+        missing = await self.client.post("/api/renders", json=self._render_request(video="x.avi"))
+        self.assertEqual(missing.status, 404)
+        job = await (await self.client.get("/api/renders/current")).json()
+        self.assertEqual(job["status"], "idle")
+
+    async def test_a_render_id_cannot_reach_outside_the_renders(self):
+        for render in ("../repo", "..", "a/b", ""):
+            with self.subTest(render=render):
+                query = urlencode({"render": render})
+                played = await self.client.get(f"/api/renders/video?{query}")
+                self.assertIn(played.status, (400, 404))
+                deleted = await self.client.delete(f"/api/renders?{query}")
+                self.assertIn(deleted.status, (200, 400, 404))
+        self.assertTrue(self.best_path.is_file())
+        self.assertTrue((self.repo / "configs" / "paths.yaml").is_file())
 
     async def test_api_allows_loopback_and_configured_cors_origins(self):
         response = await self.client.options(
@@ -659,7 +443,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Access-Control-Allow-Origin", response.headers)
 
         allowed = await self.client.options(
-            "/api/detection/model",
+            "/api/renders",
             headers={
                 "Origin": "https://marburg4542.github.io",
                 "Access-Control-Request-Method": "POST",
@@ -671,23 +455,26 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_mutating_api_requires_the_guard_header(self):
-        """A foreign page must not be able to make this server load a model.
+        """A foreign page must not be able to start a render or change the registry.
 
-        Loading is by registry name now, but it still starts a process that
-        unpickles a checkpoint, so it stays behind the header that forces a
-        preflight a foreign origin cannot pass.
+        A render occupies the GPU for as long as the video runs, and the registry
+        decides which pickles this machine will load, so both stay behind the
+        header that forces a preflight a foreign origin cannot pass.
         """
-        blocked = await self._select("best50", client=self.raw_client)
-        self.assertEqual(blocked.status, 403)
-        self.assertIn("X-Telemetry-OCR", (await blocked.json())["error"])
-        self.assertEqual(self.loaded_model_paths, [])
-
-        for path in ("/api/session", "/api/detection/reset?source_id=a&generation=0"):
-            self.assertEqual((await self.raw_client.post(path)).status, 403)
-        self.assertEqual(
-            (await self.raw_client.delete("/api/detection/model")).status, 403
-        )
-
+        for method, path in (
+            ("post", "/api/renders"),
+            ("post", "/api/models"),
+            ("post", "/api/models/default"),
+            ("delete", "/api/models/best50"),
+            ("delete", "/api/renders/current"),
+            ("delete", "/api/renders?render=x"),
+            ("post", "/api/session"),
+        ):
+            with self.subTest(method=method, path=path):
+                response = await getattr(self.raw_client, method)(path, json={})
+                self.assertEqual(response.status, 403)
+        listed = await (await self.raw_client.get("/api/models")).json()
+        self.assertIn("best50", [model["name"] for model in listed["models"]])
         # Read-only endpoints stay reachable without it.
         self.assertEqual((await self.raw_client.get("/api/health")).status, 200)
 
@@ -697,9 +484,12 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created.status, 403)
         self.assertEqual((await created.json())["error"], "Origin is not allowed")
 
-        chosen = await self._select("best50", headers=evil)
-        self.assertEqual(chosen.status, 403)
-        self.assertEqual(self.loaded_model_paths, [])
+        started = await self.client.post(
+            "/api/renders", json=self._render_request(), headers=evil
+        )
+        self.assertEqual(started.status, 403)
+        job = await (await self.client.get("/api/renders/current")).json()
+        self.assertEqual(job["status"], "idle")
 
     async def test_rejects_a_rebound_host_header(self):
         for path in ("/", "/api/health"):

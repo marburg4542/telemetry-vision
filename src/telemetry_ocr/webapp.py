@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
 import webbrowser
-from collections.abc import Callable, Iterable
-from contextlib import asynccontextmanager, suppress
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -15,8 +16,7 @@ from urllib.parse import urlsplit
 
 from . import __version__
 from .config import AppConfig, clone_config
-from .detection_worker import DetectionFrame, DetectionWorker, ProcessDetectionWorker
-from .errors import DependencyError
+from .errors import ConfigError, DependencyError
 
 # line_client is imported lazily everywhere else in this file. These three are
 # the exception because the sharing helpers below are module-level functions run
@@ -26,33 +26,24 @@ from .line_client import ImageMessage, needs_smaller_preview, oversized_for_line
 from .ocr import Recognizer
 from .pipeline import FramePacket, TelemetryPipeline
 from .public_share import DEFAULT_SHARE_PORT, ShareServer, ShareStore
+from .render_job import (
+    VIDEO_FILE,
+    RenderBusy,
+    RenderManager,
+    RenderSettings,
+    RenderUnavailable,
+    is_current,
+    read_meta,
+    render_id_for,
+    with_track_ids,
+)
+from .video_library import SourceFrames, VideoInfo, VideoLibrary
 
 
 @dataclass(slots=True)
 class BrowserSession:
     pipeline: TelemetryPipeline
     last_access: float
-
-
-@dataclass(slots=True)
-class DetectionState:
-    worker: DetectionWorker
-    model_path: Path | None = None
-    # The registry name the checkpoint was chosen by, e.g. "best50".
-    model_name: str | None = None
-    filename: str | None = None
-    size_bytes: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ModelChoice:
-    """One checkpoint the page may load, as configs/paths.yaml names it."""
-
-    name: str
-    path: Path
-    # Repository-relative where possible, for display. The absolute path stays
-    # on the server.
-    label: str
 
 
 _LOG = logging.getLogger(__name__)
@@ -71,27 +62,13 @@ _LOG_BACKUPS = 4
 
 # A request carrying this header can never be a CORS-safelisted "simple" request,
 # so the browser must send a preflight the guard below can reject. Without it a
-# multipart POST from any site the user has open would reach /api/detection/model,
-# and that model is loaded by a pickle-based torch.load in the worker process.
+# form POST from any site the user has open could start a GPU render through
+# /api/renders or change which checkpoints /api/models registers.
 GUARD_HEADER = "X-Telemetry-OCR"
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 SESSION_TTL_SECONDS = 3600.0
-
-# What a capture asks the detector for. A capture is one deliberate frame, not a
-# stream, so it can afford the larger input the checkpoints were trained at and
-# a threshold low enough to show the marginal boxes with their confidence
-# attached rather than silently dropping them.
-_CAPTURE_DETECT_IMAGE_SIZE = 960
-_CAPTURE_DETECT_CONFIDENCE = 0.25
-# Long enough for a cold model on this card, short enough that a wedged worker
-# costs the boxes rather than the capture.
-_CAPTURE_DETECT_TIMEOUT_S = 20.0
-# How long one submission is given before it is assumed lost and sent again.
-# Inference on this card is well under a second, so anything past a few seconds
-# means the frame was displaced rather than merely slow.
-_CAPTURE_DETECT_ATTEMPT_S = 5.0
 
 # Smallest gap between two LINE pushes. Every push spends one message from the
 # account's monthly quota, so a wedged client or a held button must not be able
@@ -114,9 +91,9 @@ def create_app(
     quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
     allowed_hosts: Iterable[str] = (),
-    detection_worker_factory: Callable[[], DetectionWorker] | None = None,
-    models: Iterable[ModelChoice] = (),
-    default_model: str | None = None,
+    model_registry: Any = None,
+    video_library: VideoLibrary | None = None,
+    render_manager: RenderManager | None = None,
 ) -> Any:
     try:
         from aiohttp import web
@@ -237,7 +214,7 @@ def create_app(
             return await handler(request)
         except web.HTTPException:
             raise
-        except (DependencyError, TypeError, ValueError) as exc:
+        except (ConfigError, DependencyError, TypeError, ValueError) as exc:
             _LOG.warning("%s %s rejected: %s", request.method, request.path, exc)
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
@@ -251,36 +228,13 @@ def create_app(
     output_dir = Path(output_dir)
     # The largest body any endpoint takes is a captured full frame: a JPEG of up
     # to 4096x2160 at q95. This was 256 MB while it also had to admit an uploaded
-    # checkpoint. Models are chosen from the registry now, nothing needs a body
-    # anywhere near that, and a smaller cap is less a stray request can make
-    # this process buffer.
+    # checkpoint. Nothing takes an upload now -- a capture reads its frame from
+    # the video file -- and a smaller cap is less a stray request can make this
+    # process buffer.
     request_body_limit = 32 * 1024**2
-    detection_frame_limit = 8 * 1024**2
     sessions_key = web.AppKey("sessions", dict)
     ocr_lock_key = web.AppKey("ocr_lock", asyncio.Lock)
     max_sessions_key = web.AppKey("max_sessions", int)
-    detection_state_key = web.AppKey("detection_state", DetectionState)
-    # `revision` counts results this server has published. It is deliberately
-    # NOT the client's frame sequence: the page restarts that at zero on every
-    # seek, model change and settings change, so a watermark built on it goes
-    # stale the moment the client resets and then reports "nothing newer" to a
-    # request that is in fact waiting for everything. A counter the client
-    # cannot influence is always comparable.
-    #
-    # Kept outside app state because aiohttp deprecates mutating that after
-    # startup. The event is replaced rather than cleared on each result: that
-    # releases every waiter on the old object exactly once and leaves no window
-    # for a waiter to arrive between a set and a clear.
-    pump_state: dict[str, Any] = {
-        "revision": 0,
-        "seen": None,
-        "ready": asyncio.Event(),
-        # The task handle lives here for the same reason the event does:
-        # aiohttp freezes the Application before on_startup runs, so storing
-        # it in app state warns on every assignment and is slated to become
-        # an error.
-        "task": None,
-    }
     # Open capture sessions, by name. Held for the life of the server so that
     # pressing the button repeatedly appends to one recording rather than
     # reopening a directory and re-reading its numbering every time.
@@ -334,19 +288,17 @@ def create_app(
         # Starting it blocks for as long as cloudflared takes to be given an
         # address, so it happens off the loop.
         return await asyncio.to_thread(tunnel.start)
-    # The checkpoints the page may choose from, by registry name. Loading is only
-    # ever by name: a path from the browser is never opened, so the only files
-    # this process unpickles are the ones paths.yaml already lists.
-    model_choices = {choice.name: choice for choice in models}
-    if default_model is not None and default_model not in model_choices:
-        _LOG.warning(
-            "default_model %r is not in the model registry; not loading it", default_model
-        )
-        default_model = None
-    # One model change at a time. A selection, a clear, a restart and the startup
-    # load all start or stop the same worker process.
-    model_lock = asyncio.Lock()
-    model_state: dict[str, Any] = {"autoload": None}
+    library = video_library if video_library is not None else VideoLibrary(None)
+    renders = (
+        render_manager if render_manager is not None else RenderManager(output_dir / "renders")
+    )
+    if renders.ffmpeg:
+        _LOG.info("Rendering encodes with %s", renders.ffmpeg)
+    else:
+        _LOG.warning("ffmpeg not found; videos cannot be rendered through a model")
+    # Captures read the original frame from the file on the server. What the
+    # page shows may be the rendered video, whose boxes cover the OSD digits.
+    source_frames = SourceFrames()
     app = web.Application(
         client_max_size=request_body_limit,
         middlewares=[
@@ -359,13 +311,6 @@ def create_app(
     app[sessions_key] = {}
     app[ocr_lock_key] = asyncio.Lock()
     app[max_sessions_key] = max_sessions
-    app[detection_state_key] = DetectionState(
-        worker=(detection_worker_factory or ProcessDetectionWorker)(),
-    )
-    # A capture takes the detector for itself while it runs. One at a time, and
-    # the live overlay stands down for the duration -- see detect_on_frame.
-    detector_claim = asyncio.Lock()
-    detection_holds = {"captures": 0}
 
     async def index(_: Any) -> Any:
         return web.FileResponse(
@@ -490,326 +435,252 @@ def create_app(
             }
         )
 
-    def detection_status_payload() -> dict[str, Any]:
-        state = app[detection_state_key]
-        payload = state.worker.status()
-        # The app's record of the checkpoint is the authority, including when it
-        # says there is none.
-        #
-        # This was `state.filename or payload.get("filename")`, and the fallback
-        # fired exactly when it must not: stop() keeps the worker's _filename on
-        # purpose so restart() can use it, so after clearing a model the stale
-        # name won the `or` and the page went on showing the deleted checkpoint
-        # as loaded. That also revealed "Restart worker", which then answered
-        # 409 forever because model_path really was gone -- and a reload showed
-        # the same thing.
-        #
-        # The worker's own name still fills in while a model is loaded and the
-        # app happens not to know its name.
-        if state.model_path is None:
-            payload["filename"] = None
-        else:
-            payload["filename"] = state.filename or payload.get("filename")
-        payload["size_bytes"] = state.size_bytes
-        payload["model_name"] = state.model_name
-        return payload
+    # -- models ------------------------------------------------------------------
+    #
+    # What may be loaded is decided on this machine: a model is added by the id
+    # of a checkpoint the registry itself found under the repository, removed
+    # without its file being deleted, and never named by a path in a request.
 
-    async def detection_model_status(_: Any) -> Any:
-        return web.json_response(detection_status_payload())
-
-    def model_list_payload() -> dict[str, Any]:
-        state = app[detection_state_key]
-        listed = []
-        for choice in model_choices.values():
-            present = choice.path.is_file()
-            listed.append(
-                {
-                    "name": choice.name,
-                    "label": choice.label,
-                    "available": present,
-                    "size_bytes": choice.path.stat().st_size if present else 0,
-                    "default": choice.name == default_model,
-                }
+    def require_registry() -> Any:
+        if model_registry is None:
+            raise web.HTTPServiceUnavailable(
+                text=json.dumps(
+                    {"error": "ทะเบียนโมเดลใช้งานไม่ได้ (อ่าน configs/paths.yaml ไม่สำเร็จ)"}
+                ),
+                content_type="application/json",
             )
-        return {"models": listed, "default": default_model, "selected": state.model_name}
+        return model_registry
 
-    async def detection_models(_: Any) -> Any:
-        return web.json_response(model_list_payload())
+    def model_payload(entry: Any) -> dict[str, Any]:
+        return {
+            "name": entry.name,
+            "label": entry.label,
+            "available": entry.available,
+            "size_bytes": entry.size_bytes,
+            "default": entry.default,
+        }
 
-    async def load_model(choice: ModelChoice) -> None:
-        state = app[detection_state_key]
-        async with model_lock:
-            # Spawning the worker process is slow enough to stall every other
-            # request, including the OCR frames the page is still sending.
-            async with pump_paused():
-                await asyncio.to_thread(state.worker.start, choice.path, choice.path.name)
-            state.model_path = choice.path
-            state.model_name = choice.name
-            state.filename = choice.path.name
-            state.size_bytes = choice.path.stat().st_size
-
-    async def select_detection_model(request: Any) -> Any:
-        """Load a checkpoint by its registry name.
-
-        By name and never by path or upload. This endpoint used to accept an
-        uploaded .pt, which is a pickle that runs code as it loads. Now the page
-        can only point at an entry already in configs/paths.yaml, so what this
-        process unpickles is decided on this machine rather than in a request.
-        """
-        try:
-            body = await request.json()
-        except ValueError as exc:
-            raise ValueError('Send the choice as JSON: {"name": "best50"}') from exc
-        name = str(body.get("name", "")).strip() if isinstance(body, dict) else ""
-        choice = model_choices.get(name)
-        if choice is None:
-            known = ", ".join(model_choices) or "none are registered"
-            raise ValueError(f"Unknown model {name!r}; choose one of: {known}")
-        if not choice.path.is_file():
-            raise ValueError(
-                f"Model {name!r} is registered but its file is missing: {choice.label}"
+    async def list_models(_: Any) -> Any:
+        if model_registry is None:
+            return web.json_response(
+                {"models": [], "default": None, "error": "ทะเบียนโมเดลใช้งานไม่ได้"}
             )
-        await load_model(choice)
-        return web.json_response(detection_status_payload(), status=202)
-
-    async def clear_detection_model(_: Any) -> Any:
-        state = app[detection_state_key]
-        async with model_lock:
-            async with pump_paused():
-                await asyncio.to_thread(state.worker.stop)
-            # Forgotten, never deleted. When checkpoints were uploaded this
-            # unlinked a copy in a temporary directory. The path is now the
-            # registry's own file, and unlinking it would remove best.pt from
-            # models/yolo the first time anyone pressed the button.
-            state.model_path = None
-            state.model_name = None
-            state.filename = None
-            state.size_bytes = 0
-        return web.json_response(detection_status_payload())
-
-    async def restart_detection_worker(_: Any) -> Any:
-        state = app[detection_state_key]
-        if state.model_path is None:
-            return web.json_response({"error": "No YOLO model is available"}, status=409)
-        async with model_lock, pump_paused():
-            await asyncio.to_thread(state.worker.restart)
-        return web.json_response(detection_status_payload(), status=202)
-
-    async def autoload_default_model() -> None:
-        """Load the registry's default in the background once the server is up.
-
-        In the background so a fifty-megabyte checkpoint and a CUDA context do
-        not hold up the page, or the OCR it can already serve. A failure is
-        logged and leaves detection unloaded rather than stopping the server,
-        because detection is the optional half of the page.
-        """
-        if default_model is None:
-            return
-        choice = model_choices[default_model]
-        if not choice.path.is_file():
-            _LOG.warning(
-                "Default model %s is registered but missing: %s", choice.name, choice.label
-            )
-            return
-        try:
-            _LOG.info("Loading the default model %s (%s)", choice.name, choice.label)
-            await load_model(choice)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _LOG.exception("Could not load the default model %s", choice.name)
-
-    async def reset_detection(request: Any) -> Any:
-        source_id = _source_id(request.query.get("source_id", ""))
-        generation = _non_negative_int(request.query.get("generation", "0"), "generation")
-        # reset() drains the frame queue, which is blocking IPC with up to 8 MB
-        # of pickled JPEG to unpickle and throw away. Every other worker call is
-        # already off the loop for the same reason.
-        await asyncio.to_thread(app[detection_state_key].worker.reset, source_id, generation)
+        entries = await asyncio.to_thread(model_registry.entries)
         return web.json_response(
             {
-                "reset": True,
-                "source_id": source_id,
-                "generation": generation,
+                "models": [model_payload(entry) for entry in entries],
+                "default": next((entry.name for entry in entries if entry.default), None),
             }
         )
 
-    def detection_result_payload(source_time_ms: float) -> tuple[dict[str, Any], int]:
-        state = app[detection_state_key]
-        worker_status = state.worker.status()
-        latest = state.worker.latest()
-        result_age_ms = None
-        timing = None
-        if latest is not None:
-            result_age_ms = max(0.0, source_time_ms - float(latest["source_time_ms"]))
-            latest, timing = _split_detection_timing(latest)
-        payload = {
-            "accepted": False,
-            "worker": worker_status,
-            "latest_result": latest,
-            "result_age_ms": result_age_ms,
-            "timing": timing,
-            # Echoed back by the client as `after_revision`. It must record this
-            # even for a result it discards, or it would ask for the same
-            # revision forever and never block.
-            "revision": int(pump_state["revision"]),
-            "dropped_frames": int(worker_status.get("dropped_frames", 0)),
+    async def model_candidates(_: Any) -> Any:
+        registry = require_registry()
+        found = await asyncio.to_thread(registry.candidates)
+        return web.json_response(
+            {
+                "candidates": [
+                    {
+                        "id": item.id,
+                        "label": item.label,
+                        "size_bytes": item.size_bytes,
+                        "modified": item.modified,
+                        "suggested_name": item.suggested_name,
+                    }
+                    for item in found
+                ]
+            }
+        )
+
+    async def add_model(request: Any) -> Any:
+        registry = require_registry()
+        body = await _json_object(request)
+        entry = await asyncio.to_thread(
+            registry.add, str(body.get("candidate_id", "")), str(body.get("name", ""))
+        )
+        _LOG.info("Registered model %s -> %s", entry.name, entry.label)
+        return web.json_response(model_payload(entry), status=201)
+
+    async def remove_model(request: Any) -> Any:
+        registry = require_registry()
+        name = request.match_info["name"]
+        await asyncio.to_thread(registry.remove, name)
+        _LOG.info("Removed model %s from the registry; its file is kept", name)
+        return await list_models(request)
+
+    async def set_default_model(request: Any) -> Any:
+        registry = require_registry()
+        body = await _json_object(request)
+        await asyncio.to_thread(registry.set_default, str(body.get("name", "")))
+        return await list_models(request)
+
+    # -- videos -------------------------------------------------------------------
+
+    def video_payload(video: VideoInfo) -> dict[str, Any]:
+        return {
+            "id": video.id,
+            "name": video.name,
+            "size_bytes": video.size_bytes,
+            "fps": video.fps,
+            "frames": video.frames,
+            "width": video.width,
+            "height": video.height,
+            "duration_ms": video.duration_ms,
         }
-        return payload, 200 if latest is not None else 202
 
-    async def detect_frame(request: Any) -> Any:
-        state = app[detection_state_key]
-        worker_status = state.worker.status()
-        if worker_status.get("status") != "ready":
-            return web.json_response(
-                {
-                    "error": worker_status.get("error") or "YOLO worker is not ready",
-                    "worker": worker_status,
-                },
-                status=409,
+    def find_video(video_id: str) -> VideoInfo:
+        wanted = video_id.strip()
+        video = library.get(wanted) if wanted else None
+        if video is None:
+            raise web.HTTPNotFound(
+                text=json.dumps({"error": "ไม่พบวิดีโอนี้ในโฟลเดอร์วิดีโอ"}),
+                content_type="application/json",
             )
-        source_id = _source_id(request.query.get("source_id", ""))
-        generation = _non_negative_int(request.query.get("generation", "0"), "generation")
-        sequence = _non_negative_int(request.query.get("sequence", "-1"), "sequence")
-        source_time_ms = float(request.query.get("source_time_ms", "nan"))
-        confidence = float(request.query.get("confidence", "0.45"))
-        iou = float(request.query.get("iou", "0.45"))
-        image_size = int(request.query.get("image_size", "640"))
-        if not 0 <= source_time_ms < 86_400_000:
-            raise ValueError("source_time_ms is outside the supported range")
-        if not 0.0 <= confidence <= 1.0:
-            raise ValueError("confidence must be between 0 and 1")
-        if not 0.0 <= iou <= 1.0:
-            raise ValueError("iou must be between 0 and 1")
-        if image_size < 320 or image_size > 1920:
-            raise ValueError("image_size must be between 320 and 1920")
-        payload = await request.read()
-        if not payload:
-            raise ValueError("Detection frame body is empty")
-        if len(payload) > detection_frame_limit:
-            raise ValueError("Detection frame exceeds the 8 MB limit")
-        if detection_holds["captures"]:
-            # A capture has the detector. This frame is one of many and the next
-            # one is 400 ms away; the capture is a deliberate act that has to
-            # come back with boxes on the picture being saved. Skipped rather
-            # than queued, because a frame held for half a second and then
-            # inferred would draw boxes from the wrong moment.
-            deferred, deferred_status = detection_result_payload(source_time_ms)
-            deferred["accepted"] = False
-            deferred["accepted_sequence"] = None
-            deferred["deferred"] = True
-            return web.json_response(deferred, status=deferred_status)
-        # submit() pickles up to 8 MB onto a multiprocessing queue and can spin
-        # while the feeder thread catches up, so it does not belong on the loop.
-        accepted = await asyncio.to_thread(
-            state.worker.submit,
-            DetectionFrame(
-                payload=payload,
-                source_id=source_id,
-                generation=generation,
-                sequence=sequence,
-                source_time_ms=source_time_ms,
-                confidence=confidence,
-                iou=iou,
-                image_size=image_size,
-            ),
+        return video
+
+    async def list_videos(_: Any) -> Any:
+        videos = await asyncio.to_thread(library.videos)
+        return web.json_response(
+            {
+                "directory": str(library.directory) if library.directory else None,
+                "videos": [video_payload(video) for video in videos],
+            }
         )
-        response_payload, response_status = detection_result_payload(source_time_ms)
-        response_payload["accepted"] = accepted
-        response_payload["accepted_sequence"] = sequence if accepted else None
-        return web.json_response(response_payload, status=response_status)
 
-    async def latest_detection_result(request: Any) -> Any:
-        source_time_ms = float(request.query.get("source_time_ms", "0"))
-        if not 0 <= source_time_ms < 86_400_000:
-            raise ValueError("source_time_ms is outside the supported range")
-        after_revision = _non_negative_int(
-            request.query.get("after_revision", "0"), "after_revision"
+    async def video_source(request: Any) -> Any:
+        video = await asyncio.to_thread(find_video, request.query.get("video", ""))
+        # FileResponse answers Range requests, which is what lets the page seek
+        # a 400 MB file without downloading it first.
+        return web.FileResponse(video.path, headers={"Cache-Control": "no-cache"})
+
+    # -- renders ------------------------------------------------------------------
+
+    def render_payload(
+        meta: dict[str, Any], video: VideoInfo | None, entry: Any
+    ) -> dict[str, Any]:
+        model_path = entry.path if entry is not None and entry.available else None
+        return {
+            "render_id": meta.get("render_id"),
+            "video": meta.get("video"),
+            "model": meta.get("model"),
+            "model_label": meta.get("model_label"),
+            "settings": meta.get("settings") or {},
+            "fps": meta.get("fps"),
+            "source_fps": meta.get("source_fps"),
+            "stride": meta.get("stride", 1),
+            "frames_written": meta.get("frames_written"),
+            "duration_ms": meta.get("duration_ms"),
+            "elapsed_s": meta.get("elapsed_s"),
+            "created_at": meta.get("created_at"),
+            # False once the video or the checkpoint has been replaced since.
+            "current": is_current(meta, video.path if video else None, model_path),
+        }
+
+    def collect_renders(video_id: str | None) -> list[dict[str, Any]]:
+        entries = {
+            entry.name: entry for entry in (model_registry.entries() if model_registry else [])
+        }
+        videos = {video.id: video for video in library.videos()}
+        return [
+            render_payload(
+                meta, videos.get(str(meta.get("video"))), entries.get(str(meta.get("model")))
+            )
+            for meta in renders.renders(video_id)
+        ]
+
+    async def list_renders(request: Any) -> Any:
+        video_id = (request.query.get("video") or "").strip() or None
+        listed = await asyncio.to_thread(collect_renders, video_id)
+        return web.json_response(
+            {
+                "renders": listed,
+                "job": await asyncio.to_thread(renders.status),
+                "ffmpeg": bool(renders.ffmpeg),
+            }
         )
-        wait_ms = _non_negative_int(request.query.get("wait_ms", "0"), "wait_ms")
-        # Capped so a poll cannot outlive shutdown, and so a client cannot pin a
-        # connection open indefinitely.
-        wait_ms = min(wait_ms, 1000)
 
-        if wait_ms:
-            deadline = time.monotonic() + wait_ms / 1000.0
-            while pump_state["revision"] <= after_revision:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                ready = pump_state["ready"]
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(ready.wait(), remaining)
+    async def start_render(request: Any) -> Any:
+        registry = require_registry()
+        body = await _json_object(request)
+        video = await asyncio.to_thread(find_video, str(body.get("video", "")))
+        name = str(body.get("model", "")).strip()
+        entry = await asyncio.to_thread(registry.get, name)
+        if entry is None:
+            raise ValueError(f"ไม่มีโมเดลชื่อ {name!r} ในทะเบียน")
+        if not entry.available:
+            raise ValueError(f"ไม่พบไฟล์ของโมเดล {name}: {entry.label}")
+        settings = RenderSettings(
+            confidence=float(body.get("confidence", 0.45)),
+            image_size=int(body.get("image_size", 640)),
+            stride=int(body.get("stride", 1)),
+        )
+        settings.validate()
+        render_id = render_id_for(video.id, entry.name, settings)
+        if not body.get("force"):
+            directory = renders.directory(render_id)
+            meta = read_meta(directory)
+            if (
+                meta is not None
+                and (directory / VIDEO_FILE).is_file()
+                and is_current(meta, video.path, entry.path)
+            ):
+                # Already made from these exact files: play it rather than spend
+                # half an hour of GPU making it again.
+                return web.json_response(
+                    {"existing": render_payload(meta, video, entry), "job": renders.status()}
+                )
+        try:
+            job = await asyncio.to_thread(
+                renders.start,
+                render_id=render_id,
+                video_id=video.id,
+                video_path=video.path,
+                model_name=entry.name,
+                model_label=entry.label,
+                model_path=entry.path,
+                settings=settings,
+            )
+        except RenderBusy as exc:
+            return web.json_response({"error": str(exc), "job": renders.status()}, status=409)
+        except RenderUnavailable as exc:
+            return web.json_response({"error": str(exc)}, status=503)
+        return web.json_response({"job": job}, status=202)
 
-        payload, status = detection_result_payload(source_time_ms)
-        return web.json_response(payload, status=status)
+    async def render_status(_: Any) -> Any:
+        return web.json_response(await asyncio.to_thread(renders.status))
+
+    async def cancel_render(_: Any) -> Any:
+        cancelled = await asyncio.to_thread(renders.cancel)
+        return web.json_response({"cancelled": cancelled, "job": renders.status()})
+
+    def finished_render(render_id: str) -> tuple[Path, dict[str, Any]]:
+        directory = renders.directory(render_id.strip())
+        meta = read_meta(directory)
+        if (
+            meta is None
+            or meta.get("status") != "complete"
+            or not (directory / VIDEO_FILE).is_file()
+        ):
+            raise web.HTTPNotFound(
+                text=json.dumps({"error": "ไม่พบผลการประมวลผลนี้"}),
+                content_type="application/json",
+            )
+        return directory, meta
+
+    async def render_video(request: Any) -> Any:
+        directory, _ = await asyncio.to_thread(finished_render, request.query.get("render", ""))
+        return web.FileResponse(directory / VIDEO_FILE, headers={"Cache-Control": "no-cache"})
+
+    async def delete_render(request: Any) -> Any:
+        render_id = (request.query.get("render") or "").strip()
+        try:
+            await asyncio.to_thread(renders.delete, render_id)
+        except RenderBusy as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        _LOG.info("Deleted render %s", render_id)
+        return web.json_response({"deleted": render_id})
 
     async def options(_: Any) -> Any:
         return web.Response(status=204)
-
-    async def pump_detection_results(_: Any) -> None:
-        """Collect finished results instead of waiting for a request to do it.
-
-        Without this the worker's output sits in the IPC queue until some
-        handler calls status(), latest() or submit(), which adds a whole
-        submission interval to every frame's latency — and the queue holds only
-        four before the worker starts discarding the oldest.
-
-        It runs on the event loop rather than in a thread on purpose: the
-        worker's bookkeeping is read by handlers on this loop, so a second
-        thread mutating it would reintroduce the race that moving the drain out
-        of submit() removed.
-        """
-        state = app[detection_state_key]
-        while True:
-            try:
-                state.worker.drain()
-                latest = state.worker.latest()
-                # Identity rather than ordering: a reset clears the stored
-                # result and the next one may reuse a sequence already seen, so
-                # "different from what was published last" is the only test that
-                # survives the client renumbering itself.
-                seen = None if latest is None else (
-                    latest.get("source_id"),
-                    latest.get("generation"),
-                    latest.get("sequence"),
-                )
-                if seen != pump_state["seen"]:
-                    pump_state["seen"] = seen
-                    if seen is not None:
-                        pump_state["revision"] += 1
-                        pump_state["ready"].set()
-                        pump_state["ready"] = asyncio.Event()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # A worker that is unloaded, stopped or mid-restart must not be
-                # able to kill the pump; the next tick picks it up again.
-                _LOG.exception("Detection result pump failed")
-            await asyncio.sleep(0.01)
-
-    @asynccontextmanager
-    async def pump_paused() -> Any:
-        """Hold the pump still while the worker's queues are torn down.
-
-        stop() closes both queues from a thread; a pump tick landing in that
-        window calls get_nowait() on a closed queue and logs a stack trace every
-        ten milliseconds until the teardown finishes. cleanup already ordered
-        things this way — these are the paths that did not.
-        """
-        pump = pump_state["task"]
-        if pump is not None:
-            pump.cancel()
-            with suppress(asyncio.CancelledError):
-                await pump
-        try:
-            yield
-        finally:
-            pump_state["task"] = asyncio.create_task(pump_detection_results(None))
-
-    async def start_pump(_: Any) -> None:
-        pump_state["task"] = asyncio.create_task(pump_detection_results(None))
-        model_state["autoload"] = asyncio.create_task(autoload_default_model())
 
     async def cleanup(_: Any) -> None:
         # First: it holds a child process, and leaving cloudflared running after
@@ -820,122 +691,26 @@ def create_app(
         server = share_state["server"]
         if server is not None:
             await server.stop()
-        autoload = model_state["autoload"]
-        if autoload is not None:
-            # Waited for rather than cancelled. Cancelling abandons the thread
-            # inside worker.start(), which can finish spawning the YOLO process
-            # after the stop below has already run -- a child nothing stops.
-            with suppress(Exception):
-                await autoload
-        pump = pump_state["task"]
-        if pump is not None:
-            pump.cancel()
-            with suppress(asyncio.CancelledError):
-                await pump
-        # Released after the pump stops so a long poll cannot outlive it.
-        pump_state["ready"].set()
+        # A render holds the GPU and an ffmpeg process. It is stopped before the
+        # server goes rather than being left running with nothing to report to.
+        await asyncio.to_thread(renders.shutdown)
+        await asyncio.to_thread(source_frames.close)
         # The extra recognizers a capture votes with. Built lazily on the first
         # capture, so a server that never captured has none to release.
         from .capture_service import close_ensemble
 
         await asyncio.to_thread(close_ensemble)
-        state = app[detection_state_key]
-        await asyncio.to_thread(state.worker.stop)
 
-    async def detect_on_frame(frame: Any) -> dict[str, Any] | None:
-        """Run the detector on this exact frame and wait for the answer.
-
-        The alternative -- reading whatever result happened to be latest -- is
-        what put boxes on a capture that visibly did not sit on the vehicles:
-        the newest result belongs to whichever frame the page last posted, and
-        on a moving camera that is a different scene. A capture is a deliberate
-        act with time to spare, so it pays for its own inference.
-
-        Returns None when there is no model, or when the frame was superseded in
-        the worker's newest-wins queue before it was inferred.
-        """
-        import uuid as _uuid
-
-        state = app[detection_state_key]
-        try:
-            if state.worker.status().get("status") != "ready":
-                return None
-        except Exception:
-            _LOG.exception("Could not read detector status for a capture")
-            return None
-
-        payload = await asyncio.to_thread(_encode_for_detection, frame)
-        if payload is None:
-            return None
-
-        # Claimed for the duration, because otherwise the live overlay takes the
-        # detector back before the capture's own frame has been inferred.
-        #
-        # The worker keeps one active source id and drops any result that does
-        # not carry it, so submitting under a fresh `capture-` id and then
-        # letting the page submit its next overlay frame does not merely
-        # overwrite the capture's answer -- it discards it. The overlay posts a
-        # frame at least every 400 ms while a video plays and inference takes
-        # longer than that, so with a video running the capture lost the race
-        # nearly every time: every shot came back "no_result" with no boxes
-        # drawn, while the same capture on a paused page succeeded.
-        async with detector_claim:
-            detection_holds["captures"] += 1
-            try:
-                deadline = time.monotonic() + _CAPTURE_DETECT_TIMEOUT_S
-                while time.monotonic() < deadline:
-                    # A fresh id per attempt. Reusing one would let a stale
-                    # answer from the previous attempt satisfy this one.
-                    source_id = f"capture-{_uuid.uuid4().hex[:12]}"
-                    accepted = await asyncio.to_thread(
-                        state.worker.submit,
-                        DetectionFrame(
-                            payload=payload,
-                            source_id=source_id,
-                            generation=0,
-                            sequence=0,
-                            source_time_ms=0.0,
-                            confidence=_CAPTURE_DETECT_CONFIDENCE,
-                            iou=0.45,
-                            image_size=_CAPTURE_DETECT_IMAGE_SIZE,
-                        ),
-                    )
-                    if not accepted:
-                        return None
-                    attempt_ends = min(
-                        deadline, time.monotonic() + _CAPTURE_DETECT_ATTEMPT_S
-                    )
-                    while time.monotonic() < attempt_ends:
-                        latest = state.worker.latest()
-                        if latest and latest.get("source_id") == source_id:
-                            return dict(latest)
-                        await asyncio.sleep(0.02)
-                    # An overlay frame already in flight when the claim was taken
-                    # can still displace the first attempt; a second one cannot,
-                    # because nothing new is being submitted while this holds.
-                    _LOG.info("Captured frame was displaced in the detector; resubmitting")
-                _LOG.info("Detector did not return a result for the captured frame in time")
-                return None
-            finally:
-                detection_holds["captures"] -= 1
-
-    def summarise_detections(result: dict[str, Any] | None) -> Any:
-        """Counts and confidences for a result that belongs to this frame."""
+    def summarise_boxes(boxes: list[dict[str, Any]] | None) -> Any:
+        """Counts and confidences for the boxes a render drew on this frame."""
         from collections import Counter
 
         from .capture_service import DetectionSummary
 
-        state = app[detection_state_key]
-        try:
-            ready = state.worker.status().get("status") == "ready"
-        except Exception:
-            ready = False
-        if not ready:
-            return DetectionSummary("no_model")
-        if result is None:
+        if boxes is None:
+            # The render has no line for this frame, which a complete render
+            # should never do; said rather than reported as "found nothing".
             return DetectionSummary("no_result")
-
-        boxes = result.get("detections") or []
         counts = Counter(str(item.get("label", "?")) for item in boxes)
         scores: dict[str, list[float]] = {}
         for item in boxes:
@@ -957,7 +732,7 @@ def create_app(
             counts=dict(counts),
             confidence=confidence,
             total=sum(counts.values()),
-            # Zero, and meant literally: this is the frame that was inferred.
+            # Zero, and meant literally: these boxes were drawn on this frame.
             age_ms=0.0,
         )
 
@@ -1004,9 +779,14 @@ def create_app(
     async def capture_shot(request: Any) -> Any:
         """Keep this frame and what it says.
 
-        The page posts the frame from the video it is playing. Nothing else is
-        reading that video, so the frame is recognised here, as it is kept.
+        The frame is read here, from the original file, rather than posted by the
+        page. What the page shows may be the rendered video, whose boxes sit over
+        the OSD digits OCR reads; the original never has anything drawn on it.
+        The boxes come from the render's own record of that frame, so the marked
+        copy matches the video on screen without asking the model again.
         """
+        from .capture_service import DetectionSummary
+
         name = (request.query.get("session") or "").strip()
         if not name:
             raise ValueError("session is required")
@@ -1020,24 +800,46 @@ def create_app(
                 text='{"error":"Session not found"}', content_type="application/json"
             )
         browser_session.last_access = time.monotonic()
-        payload = await request.read()
-        if not payload:
-            raise ValueError("Capture frame body is empty")
-        frame = await asyncio.to_thread(_decode_image, payload)
-        packet = FramePacket(frame, 0, source_time_ms, time.perf_counter())
+
+        video = await asyncio.to_thread(find_video, request.query.get("video", ""))
+        render_id = (request.query.get("render") or "").strip()
+        meta: dict[str, Any] | None = None
+        if render_id:
+            meta = read_meta(renders.directory(render_id))
+            if meta is None or meta.get("status") != "complete" or meta.get("video") != video.id:
+                raise ValueError("ผลการประมวลผลนี้ไม่ใช่ของวิดีโอที่เลือก")
+        fps = float((meta or {}).get("source_fps") or video.fps)
+        stride = int((meta or {}).get("stride") or 1)
+        # The frame on screen. A render made with a stride shows every
+        # stride-th source frame, so the time is rounded to one of those.
+        frame_index = round(source_time_ms * fps / stride / 1000.0) * stride
+        if video.frames:
+            frame_index = min(frame_index, (video.frames - 1) // stride * stride)
+        frame = await asyncio.to_thread(source_frames.read, video.path, frame_index)
+        frame_time_ms = round(frame_index * 1000.0 / fps, 3)
+
+        packet = FramePacket(frame, frame_index, frame_time_ms, time.perf_counter())
         async with app[ocr_lock_key]:
             recognised, _ = await asyncio.to_thread(
                 browser_session.pipeline.process_frame, packet
             )
-        session = capture_session_for(name, request.query.get("source", "browser"))
-        detected = await detect_on_frame(frame)
-        boxes, box_source = _boxes_of(detected)
+        session = capture_session_for(name, video.name)
+        boxes: list[dict[str, Any]] | None = None
+        box_source: tuple[int, int] | None = None
+        if meta is None:
+            summary = DetectionSummary("no_render")
+        else:
+            detections = await asyncio.to_thread(renders.detections_at, render_id, frame_index)
+            summary = summarise_boxes(detections)
+            if detections:
+                boxes = with_track_ids(detections)
+                box_source = (int(frame.shape[1]), int(frame.shape[0]))
         shot = await asyncio.to_thread(
             session.save,
             frame,
-            source_time_ms,
+            frame_time_ms,
             recognised,
-            summarise_detections(detected),
+            summary,
             shot_verifier([_as_record(item) for item in recognised]),
             boxes,
             box_source,
@@ -1413,14 +1215,19 @@ def create_app(
     app.router.add_post("/api/session", create_session)
     app.router.add_post("/api/session/{session_id}/reset", reset_session)
     app.router.add_post("/api/session/{session_id}/frame", recognize_frame)
-    app.router.add_get("/api/detection/models", detection_models)
-    app.router.add_get("/api/detection/model", detection_model_status)
-    app.router.add_post("/api/detection/model", select_detection_model)
-    app.router.add_delete("/api/detection/model", clear_detection_model)
-    app.router.add_post("/api/detection/restart", restart_detection_worker)
-    app.router.add_post("/api/detection/reset", reset_detection)
-    app.router.add_post("/api/detection/frame", detect_frame)
-    app.router.add_get("/api/detection/result", latest_detection_result)
+    app.router.add_get("/api/models", list_models)
+    app.router.add_get("/api/models/candidates", model_candidates)
+    app.router.add_post("/api/models", add_model)
+    app.router.add_post("/api/models/default", set_default_model)
+    app.router.add_delete("/api/models/{name}", remove_model)
+    app.router.add_get("/api/videos", list_videos)
+    app.router.add_get("/api/videos/source", video_source)
+    app.router.add_get("/api/renders", list_renders)
+    app.router.add_post("/api/renders", start_render)
+    app.router.add_delete("/api/renders", delete_render)
+    app.router.add_get("/api/renders/current", render_status)
+    app.router.add_delete("/api/renders/current", cancel_render)
+    app.router.add_get("/api/renders/video", render_video)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
     app.router.add_get("/api/capture/shots", capture_shots)
@@ -1430,34 +1237,8 @@ def create_app(
     app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     app.router.add_static("/assets/", assets, show_index=False)
-    app.on_startup.append(start_pump)
     app.on_cleanup.append(cleanup)
     return app
-
-
-def load_model_choices() -> tuple[list[ModelChoice], str | None]:
-    """The checkpoints configs/paths.yaml registers, for the page to offer.
-
-    Read through vision_lab.paths, which parses YAML and imports no ML framework:
-    the rule this process lives by is that torch never loads in it. A registry
-    that cannot be read leaves the page with no models rather than stopping the
-    server, because detection is the optional half of the page.
-    """
-    try:
-        from vision_lab.paths import load_paths
-
-        paths = load_paths()
-    except Exception as exc:
-        _LOG.warning("Model registry unavailable, so no models are offered: %s", exc)
-        return [], None
-    choices = []
-    for name, path in paths.models.items():
-        try:
-            label = path.relative_to(paths.root).as_posix()
-        except ValueError:
-            label = str(path)
-        choices.append(ModelChoice(name=name, path=path, label=label))
-    return choices, (paths.default_model or None)
 
 
 def configure_logging(log_dir: Path | str | None = DEFAULT_LOG_DIR) -> Path | None:
@@ -1523,8 +1304,6 @@ def run_web_app(
     quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
     log_dir: Path | str | None = DEFAULT_LOG_DIR,
-    models: Iterable[ModelChoice] | None = None,
-    default_model: str | None = None,
 ) -> None:
     try:
         from aiohttp import web
@@ -1533,13 +1312,12 @@ def run_web_app(
             "The web UI requires aiohttp; install the project with `pip install -e .[web]`."
         ) from exc
     log_path = configure_logging(log_dir)
-    if models is None:
-        models, default_model = load_model_choices()
+    registry, video_dir = _load_registry_and_videos()
     app = create_app(
         config,
         recognizer,
-        models=models,
-        default_model=default_model,
+        model_registry=registry,
+        video_library=VideoLibrary(video_dir),
         share_port=share_port,
         quick_tunnel=quick_tunnel,
         allowed_origins=allowed_origins,
@@ -1568,6 +1346,40 @@ def run_web_app(
     # already gone. This is a loopback server with one user; who fetched what is
     # not the question the log exists to answer.
     web.run_app(app, host=host, port=port, print=None, access_log=None)
+
+
+def _load_registry_and_videos() -> tuple[Any, Path | None]:
+    """The model registry and the video folder, both from configs/paths.yaml.
+
+    Through vision_lab, which parses YAML and imports no ML framework: the rule
+    this process lives by is that torch never loads in it. Either failing leaves
+    the page without that half rather than refusing to start the server.
+    """
+    try:
+        from vision_lab.model_registry import ModelRegistry
+        from vision_lab.paths import load_paths
+
+        paths = load_paths()
+    except Exception as exc:
+        _LOG.warning("configs/paths.yaml unavailable, so no models or videos are offered: %s", exc)
+        return None, None
+    video_dir: Path | None
+    try:
+        video_dir = paths.asset_dir("videos")
+    except Exception as exc:
+        _LOG.warning("No video folder is configured: %s", exc)
+        video_dir = None
+    return ModelRegistry(paths.root), video_dir
+
+
+async def _json_object(request: Any) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise ValueError("ส่งข้อมูลเป็น JSON object") from exc
+    if not isinstance(body, dict):
+        raise ValueError("ส่งข้อมูลเป็น JSON object")
+    return body
 
 
 async def _all_reachable(images: list[ImageMessage]) -> bool:
@@ -1692,7 +1504,7 @@ def _thumbnail_of(path: Path, cache_dir: Path) -> Path | None:
 
 
 def _shot_stage(shot: Any) -> str:
-    """How far a capture got: "ready", "no_model" or "no_result".
+    """How far a capture got: "ready", "no_render", "no_model" or "no_result".
 
     Kept as three words rather than a boolean because they are fixed in three
     different places. "no_model" means best.pt was never loaded, "no_result"
@@ -1701,7 +1513,9 @@ def _shot_stage(shot: Any) -> str:
     with the successes.
     """
     status = getattr(getattr(shot, "detections", None), "status", "")
-    if status in {"no_model", "no_result"}:
+    # "no_render": taken from a video that had not been run through a model.
+    # "no_model" is kept for sessions recorded before renders existed.
+    if status in {"no_render", "no_model", "no_result"}:
         return status
     return "ready"
 
@@ -1804,32 +1618,6 @@ def _share_images(
     return images, notes
 
 
-def _encode_for_detection(frame: Any) -> bytes | None:
-    """The captured frame as JPEG, at the size the detector will work on."""
-    try:
-        import cv2
-    except ImportError:  # pragma: no cover - OpenCV ships with the app
-        return None
-    height, width = frame.shape[:2]
-    scale = min(1.0, _CAPTURE_DETECT_IMAGE_SIZE / max(width, height))
-    resized = (
-        frame
-        if scale >= 1.0
-        else cv2.resize(frame, (round(width * scale), round(height * scale)))
-    )
-    ok, buffer = cv2.imencode(".jpg", resized, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-    return buffer.tobytes() if ok else None
-
-
-def _boxes_of(result: dict[str, Any] | None) -> tuple[list[Any], tuple[int, int] | None]:
-    """Boxes and the frame size they are expressed in, for drawing."""
-    if not result:
-        return [], None
-    width = int(result.get("width") or 0)
-    height = int(result.get("height") or 0)
-    return list(result.get("detections") or []), ((width, height) if width else None)
-
-
 def _as_record(record: Any) -> dict[str, Any]:
     """A TelemetryRecord as the plain dict the verifier compares against."""
     from dataclasses import asdict as _asdict
@@ -1863,15 +1651,6 @@ def _hostname(value: str) -> str:
         return ""
 
 
-def _source_id(value: str) -> str:
-    source_id = value.strip()
-    if not source_id:
-        raise ValueError("source_id is required")
-    if len(source_id) > 128:
-        raise ValueError("source_id must not exceed 128 characters")
-    return source_id
-
-
 def _non_negative_int(value: str, label: str) -> int:
     try:
         parsed = int(value)
@@ -1882,37 +1661,3 @@ def _non_negative_int(value: str, label: str) -> int:
     return parsed
 
 
-def _split_detection_timing(result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Turn the worker's raw spans into a breakdown, and drop the raw clocks.
-
-    `enqueued_at` and `available_at` are readings of this machine's monotonic
-    clock. They mean nothing to a browser, so they are removed rather than
-    serialised; only the differences leave the process.
-    """
-    trimmed = dict(result)
-    available_at = trimmed.pop("available_at", None)
-    trimmed.pop("enqueued_at", None)
-    pipeline_ms = trimmed.pop("pipeline_ms", None)
-    worker_total_ms = trimmed.get("worker_total_ms")
-
-    transport_ms = None
-    if pipeline_ms is not None and worker_total_ms is not None:
-        # Everything the worker did not spend on the frame itself: queue wait
-        # plus both IPC hops.
-        transport_ms = max(0.0, float(pipeline_ms) - float(worker_total_ms))
-
-    timing = {
-        "decode_ms": trimmed.get("decode_ms"),
-        "track_ms": trimmed.get("track_ms"),
-        "worker_total_ms": worker_total_ms,
-        "pipeline_ms": pipeline_ms,
-        "transport_ms": transport_ms,
-        # How long a finished result sat here unread. This is the delivery
-        # delay the background pump exists to remove.
-        "harvest_ms": (
-            None
-            if available_at is None
-            else max(0.0, (time.perf_counter() - available_at) * 1000.0)
-        ),
-    }
-    return trimmed, timing

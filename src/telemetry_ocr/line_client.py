@@ -325,6 +325,8 @@ def describe_detections(summary: Any) -> str:
     call for completely different responses from whoever reads this.
     """
     status = getattr(summary, "status", "unknown")
+    if status == "no_render":
+        return "ตรวจจับ: ยังไม่ได้ประมวลผลวิดีโอด้วย AI"
     if status == "no_model":
         return "ตรวจจับ: ยังไม่ได้โหลดโมเดล"
     if status == "no_result":

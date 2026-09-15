@@ -151,15 +151,35 @@ test("the page has no stream mode left", () => {
 
 test("a model is named from the registry, never sent as a file", () => {
   /*
-   * A .pt is a pickle that runs code as it loads. The page used to upload one.
-   * It now offers only the checkpoints configs/paths.yaml lists, by name, so
-   * what the detection process unpickles is decided on this machine.
+   * A .pt is a pickle that runs code as it loads. The page offers only the
+   * checkpoints the server registered, and adds one by the id of a file the
+   * server itself found -- never by uploading bytes or naming a path.
    */
   assert.match(indexHtml, /<select[^>]*id="modelSelect"/, "the model dropdown is missing");
-  assert.doesNotMatch(indexHtml, /type="file"[^>]*\.pt/, "a .pt file picker is back");
+  assert.doesNotMatch(indexHtml, /type="file"/, "a file picker is back");
   assert.doesNotMatch(appJs, /new FormData\(/, "app.js builds a multipart upload again");
-  assert.match(appJs, /\/api\/detection\/models/, "the page no longer reads the registry");
-  assert.match(appJs, /JSON\.stringify\(\{ name \}\)/, "a model is not chosen by name");
+  assert.match(appJs, /\/api\/models\/candidates/, "models are no longer added from discovered files");
+  assert.match(appJs, /candidate_id: candidate\.id/, "a model is added by something other than its id");
+  assert.match(appJs, /JSON\.stringify\(\{ name \}\)/, "the default is not chosen by name");
+});
+
+test("the page plays what the model rendered and draws no boxes itself", () => {
+  /*
+   * The live overlay painted boxes a frame or three late over a video that had
+   * moved on, from a tracker fed an uneven fraction of the frames. Renders run
+   * every frame through the model once and bake the boxes in, so the page must
+   * not grow a second, lagging drawing path back.
+   */
+  for (const needle of ["detectionOverlay", "requestVideoFrameCallback", "/api/detection", "DetectionMath"]) {
+    assert.ok(!appJs.includes(needle), `app.js still refers to ${needle}`);
+  }
+  assert.doesNotMatch(indexHtml, /detection-math\.js|<canvas/, "the overlay canvas is back");
+  assert.match(appJs, /\/api\/renders/, "the page no longer starts or plays renders");
+  assert.match(appJs, /\/api\/videos\/source/, "the original is no longer served by the server");
+  // A capture reads its frame on the server, from the original; it posts no picture.
+  const capture = appJs.match(/async function takeCaptureShot\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(capture, "takeCaptureShot() is missing");
+  assert.doesNotMatch(capture[0], /body:/, "a capture uploads the frame again");
 });
 
 test("the service worker cache turns over when the shell changes", () => {

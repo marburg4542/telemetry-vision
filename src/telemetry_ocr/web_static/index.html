@@ -12,21 +12,19 @@
     <title>Telemetry OCR — Flight Data Lab</title>
     <meta
       name="description"
-      content="เล่นวิดีโอต้นฉบับและอ่าน flight telemetry ด้วย PaddleOCR บนเครื่อง"
+      content="เล่นวิดีโอเที่ยวบิน ประมวลผลด้วย AI และอ่าน flight telemetry ด้วย PaddleOCR บนเครื่อง"
     />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/icons/icon-192.png" sizes="192x192" />
     <link rel="apple-touch-icon" href="/assets/icons/icon-192.png" />
     <link rel="stylesheet" href="/assets/app.css" />
-    <script src="/assets/detection-math.js" defer></script>
+    <script src="/assets/format.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
     <div class="app-shell">
       <!-- One bar for the two things that are true of the whole page: whether
-           the OCR engine is up, and whether this can be installed. Both used to
-           sit inside the capture panel, where they read as properties of the
-           captures rather than of the server. -->
+           the OCR engine is up, and whether this can be installed. -->
       <header class="topbar">
         <h1>Telemetry OCR</h1>
         <div class="topbar-meta">
@@ -41,34 +39,37 @@
       </header>
 
       <main class="workspace">
-        <section class="video-column" aria-label="วิดีโอต้นฉบับ">
-          <!-- Where the video comes from: a file on this machine, played in the
-               browser. The file itself never reaches the server; the detector
-               and a capture send only the frames they need. -->
+        <section class="video-column" aria-label="วิดีโอ">
+          <!-- Chosen from the project's video folder rather than opened from the
+               browser: the server reads the file itself, to run it through a
+               model and to take the clean frame a capture recognises. -->
           <div class="source-bar">
-            <label class="file-button" for="videoInput">
-              <span>เลือกวิดีโอ</span>
-              <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
+            <label class="field-control video-select" for="videoSelect">
+              <span>วิดีโอ</span>
+              <select id="videoSelect" disabled>
+                <option value="">กำลังอ่านรายการวิดีโอ…</option>
+              </select>
             </label>
+            <!-- Only once a render exists. The original is always there; the AI
+                 version is the same timeline with the boxes drawn in. -->
+            <div class="view-switch" id="viewSwitch" role="group" aria-label="ภาพที่แสดง" hidden>
+              <button type="button" id="viewOriginal" class="is-active" aria-pressed="true">
+                ต้นฉบับ
+              </button>
+              <button type="button" id="viewRendered" aria-pressed="false">วิดีโอ AI</button>
+            </div>
           </div>
 
           <div class="video-stage" id="videoStage">
             <video id="sourceVideo" controls playsinline preload="metadata"></video>
-            <canvas id="detectionOverlay" class="detection-overlay" aria-hidden="true"></canvas>
             <div class="drop-state" id="dropState">
-              <h3>เลือกไฟล์เที่ยวบินเพื่อเริ่ม</h3>
-              <p>ลากวางไฟล์ลงตรงนี้ หรือกดปุ่มด้านล่าง — MP4, MOV, WebM</p>
-              <button class="primary-button" id="chooseVideoButton" type="button">
-                เลือกไฟล์วิดีโอ
-              </button>
+              <h3 id="emptyStateTitle">เลือกวิดีโอเที่ยวบินเพื่อเริ่ม</h3>
+              <p id="emptyStateText">เลือกจากรายการ วิดีโอ ด้านบน</p>
             </div>
             <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
 
             <!-- A chosen capture at the size the video plays at, inside the
-                 stage so it covers exactly the area the video occupies. The
-                 panel's copy is too small to read an OSD off, and reading the
-                 OSD against the rows beside it is the only way to tell whether
-                 the extraction was right. -->
+                 stage so it covers exactly the area the video occupies. -->
             <div class="shot-overlay" id="shotOverlay" hidden>
               <img id="shotOverlayImage" alt="ภาพที่เลือก ขยาย" />
               <div class="shot-overlay-bar">
@@ -87,118 +88,72 @@
             <button class="line-button" id="lineSendButton" type="button" disabled>
               <span id="lineSendButtonText">ส่งเข้า LINE</span>
             </button>
-            <!-- Beside the button, not on it. The allowance is a standing fact
-                 about the account, and putting it in the label made it read as
-                 part of the action -- as though the number were how many sends
-                 this press was worth, or a daily count. It is the month's. -->
+            <!-- Beside the button, not on it: the allowance is a standing fact
+                 about the account, and it is the month's, not the day's. -->
             <span class="line-quota" id="lineQuotaLabel" hidden></span>
             <div class="playback-time">
               <span id="currentTime">00:00.000</span>
               <span class="time-separator">/</span>
               <span id="durationTime">00:00.000</span>
             </div>
-            <!-- The Realtime OCR toggle and the sampling rate used to live
-                 here. Both are gone with the reading they controlled: OCR now
-                 runs on a captured frame, on request. A switch that stays on
-                 screen after the thing it switches has been removed is worse
-                 than no switch, because it looks like it still does something. -->
             <button class="ghost-button" id="resetButton" type="button" disabled>Reset</button>
           </div>
 
           <p class="source-line">
-            <strong id="fileName">ยังไม่ได้เลือกไฟล์</strong>
-            <span id="fileDetails">วิดีโอเล่นจากเครื่องโดยตรง ไฟล์เต็มไม่ถูกอัปโหลด</span>
+            <strong id="fileName">ยังไม่ได้เลือกวิดีโอ</strong>
+            <span id="fileDetails">วิดีโอจากโฟลเดอร์วิดีโอของโปรเจกต์</span>
           </p>
 
-          <!-- Collapsed, because none of it is needed to capture a frame. It is
-               how the detector is configured and how it is performing, which
-               matters when something is wrong and is noise the rest of the
-               time. The summary carries the one line worth seeing at a glance. -->
-          <details class="model-panel" id="modelPanel">
-            <summary>
-              <span class="model-summary-title">AI annotation</span>
-              <small id="modelName">ยังไม่ได้เลือกโมเดล</small>
-            </summary>
-
-            <div class="model-body">
-              <div class="model-row">
-                <label class="toggle-control">
-                  <input id="detectionToggle" type="checkbox" checked disabled />
-                  <span class="toggle-track"><span></span></span>
-                  <span>แสดงกรอบตรวจจับ</span>
-                </label>
-                <!-- Filled from the server's registry. There is no file picker:
-                     the page names a checkpoint, it never sends one. -->
-                <label class="field-control model-select" for="modelSelect">
-                  <span>โมเดล</span>
-                  <select id="modelSelect" disabled>
-                    <option value="">กำลังอ่านรายการโมเดล…</option>
-                  </select>
-                </label>
-                <button class="ghost-button" id="restartWorkerButton" type="button" hidden>
-                  Restart worker
-                </button>
-                <button class="ghost-button" id="clearModelButton" type="button" disabled>
-                  ล้างโมเดล
-                </button>
-              </div>
-
-              <div class="model-row model-settings">
-                <label class="field-control" for="detectionRate">
-                  <span>Frame submit</span>
-                  <select id="detectionRate" disabled>
-                    <option value="auto" selected>Auto</option>
-                    <option value="5">5 Hz</option>
-                    <option value="10">10 Hz</option>
-                    <option value="15">15 Hz</option>
-                    <option value="20">20 Hz</option>
-                  </select>
-                </label>
-                <label class="field-control" for="modelConfidence">
-                  <span>Confidence</span>
-                  <input
-                    id="modelConfidence" type="number" value="0.45"
-                    min="0.05" max="1" step="0.05" disabled
-                  />
-                </label>
-                <label class="field-control" for="modelImageSize">
-                  <span>Image size</span>
-                  <select id="modelImageSize" disabled>
-                    <option value="416" selected>416 px</option>
-                    <option value="640">640 px</option>
-                    <option value="960">960 px</option>
-                  </select>
-                </label>
-                <label
-                  class="check-control" for="trackIdToggle"
-                  title="เลขที่ tracker ใช้ไล่ตามวัตถุคันเดิมข้ามเฟรม ถ้าเลขกระโดดแปลว่า tracker หลุด"
-                >
-                  <input id="trackIdToggle" type="checkbox" disabled />
-                  <span>Track ID</span>
-                </label>
-              </div>
-
-              <p class="model-status" id="modelStatus">
-                เลือกโมเดลจากรายการเพื่อวาดกรอบตรวจจับทับวิดีโอ
-              </p>
-              <!-- Kept in view rather than behind a tooltip. A checkpoint is a
-                   pickle and loading one runs code, so what may be loaded is
-                   decided by configs/paths.yaml on this machine, not by a page. -->
-              <p class="model-warning">
-                รายการมาจาก <code>configs/paths.yaml</code> — checkpoint ของ PyTorch
-                รันโค้ดได้ตอนโหลด ใส่ในทะเบียนเฉพาะไฟล์ที่เชื่อถือได้
-              </p>
-
-              <div class="metrics" aria-label="สถานะ Object Detection">
-                <span>Track <strong id="detectionFps">0.0</strong> FPS</span>
-                <span>Inference <strong id="detectionLatency">—</strong> ms</span>
-                <span>Lag <strong id="detectionLag">—</strong> ms</span>
-                <span>Capture <strong id="detectionCapture">—</strong> ms</span>
-                <span>Wait <strong id="detectionHarvest">—</strong> ms</span>
-                <span>Dropped <strong id="detectionDropped">0</strong></span>
-              </div>
+          <!-- Running a video through a model. Not collapsed: this is how the
+               boxes get onto the picture now, rather than a setting behind a
+               disclosure. -->
+          <section class="ai-panel" id="aiPanel" aria-label="ประมวลผลด้วย AI">
+            <div class="ai-row">
+              <label class="field-control model-select" for="modelSelect">
+                <span>โมเดล</span>
+                <select id="modelSelect" disabled>
+                  <option value="">กำลังอ่านรายการโมเดล…</option>
+                </select>
+              </label>
+              <button class="ghost-button" id="manageModelsButton" type="button">จัดการโมเดล</button>
+              <label class="field-control" for="renderConfidence">
+                <span>Confidence</span>
+                <input
+                  id="renderConfidence" type="number" value="0.45"
+                  min="0.05" max="1" step="0.05"
+                />
+              </label>
+              <label class="field-control" for="renderImageSize">
+                <span>Image size</span>
+                <select id="renderImageSize">
+                  <option value="416">416 px</option>
+                  <option value="640" selected>640 px</option>
+                  <option value="960">960 px</option>
+                  <option value="1280">1280 px</option>
+                </select>
+              </label>
+              <label class="field-control" for="renderStride">
+                <span>ประมวลผล</span>
+                <select id="renderStride">
+                  <option value="1" selected>ทุกเฟรม</option>
+                  <option value="2">ทุก 2 เฟรม</option>
+                  <option value="3">ทุก 3 เฟรม</option>
+                </select>
+              </label>
+              <button class="primary-button" id="renderButton" type="button" disabled>
+                ประมวลผลด้วย AI
+              </button>
             </div>
-          </details>
+
+            <div class="render-progress" id="renderProgress" hidden>
+              <div class="render-bar" aria-hidden="true"><span id="renderBarFill"></span></div>
+              <span class="render-progress-text" id="renderProgressText"></span>
+              <button class="ghost-button" id="renderCancelButton" type="button">ยกเลิก</button>
+            </div>
+
+            <p class="model-status" id="renderStatus">เลือกวิดีโอและโมเดล แล้วกดประมวลผลด้วย AI</p>
+            <div class="render-list" id="renderList" hidden></div>
+          </section>
         </section>
 
         <aside class="telemetry-panel" aria-label="ภาพที่ capture ไว้">
@@ -208,22 +163,19 @@
           </div>
 
           <!-- What the captures are doing, in the panel rather than in a
-               console. Without it a capture is a button press with no visible
-               consequence for as long as the model takes, and the operator
-               cannot tell a slow model from a dead one. -->
+               console, so a slow read is distinguishable from a dead one. -->
           <div class="shot-progress" id="shotProgress" role="status" aria-live="polite">
             <span class="shot-progress-item" id="shotTotal">0 ภาพ</span>
             <span class="shot-progress-item is-working" id="shotWorking" hidden>
               <span class="shot-spinner" aria-hidden="true"></span>
-              <span id="shotWorkingText">กำลังผ่านโมเดล</span>
+              <span id="shotWorkingText">กำลังอ่านค่า</span>
             </span>
             <span class="shot-progress-item is-ready" id="shotReady" hidden></span>
             <span class="shot-progress-item is-warning" id="shotUnprocessed" hidden></span>
             <span class="shot-progress-item is-error" id="shotFailed" hidden></span>
           </div>
 
-          <!-- The thumbnails. Every shot in this session, newest first, so the
-               one just taken is where the eye already is. -->
+          <!-- Every shot in this session, newest first. -->
           <div class="shot-strip" id="shotStrip" role="listbox" aria-label="ภาพที่เก็บไว้"></div>
 
           <div class="shot-select-bar" id="shotSelectBar" hidden>
@@ -270,8 +222,27 @@
       </main>
     </div>
 
-    <canvas id="captureCanvas" hidden></canvas>
-    <canvas id="detectionCaptureCanvas" hidden></canvas>
+    <!-- Adding and removing checkpoints. A dialog rather than a page: it is
+         visited rarely, and closing it returns to exactly where the video was. -->
+    <dialog class="model-dialog" id="modelDialog" aria-labelledby="modelDialogTitle">
+      <div class="dialog-head">
+        <h2 id="modelDialogTitle">จัดการโมเดล</h2>
+        <button class="ghost-button" id="modelDialogClose" type="button">ปิด</button>
+      </div>
+      <h3 class="dialog-section">โมเดลในรายการ</h3>
+      <div class="model-table" id="registeredModels"></div>
+      <h3 class="dialog-section">เพิ่มโมเดลจากไฟล์บนเครื่อง</h3>
+      <p class="model-note">
+        ไฟล์ <code>.pt</code> ใน <code>models/</code> และ <code>runs/*/weights/</code>
+        ที่ยังไม่อยู่ในรายการ — วางไฟล์ใหม่ไว้ในโฟลเดอร์เหล่านี้ก่อน
+      </p>
+      <div class="model-table" id="candidateModels"></div>
+      <p class="model-warning">
+        checkpoint ของ PyTorch รันโค้ดได้ตอนโหลด เพิ่มเฉพาะไฟล์ที่เชื่อถือได้ ·
+        การเอาออกจากรายการไม่ลบไฟล์
+      </p>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   </body>
 </html>

@@ -23,113 +23,19 @@ HAS_WEB_DEPS = bool(
 )
 
 
-class _FakeDetector:
-    """Answers only for the frame it was actually given.
-
-    Written this way on purpose: returning a canned result regardless of input
-    would pass whether or not the capture submits its own frame, which is the
-    behaviour under test.
-    """
-
-    def __init__(self) -> None:
-        self.state = "ready"
-        self.submissions: list[Any] = []
-        self._result: dict[str, Any] | None = None
-        self._active_source = ""
-        # Hooks for the tests that need the capture to still be inside the
-        # detector when something else happens.
-        self.on_submit: Any = None
-        self.withhold = False
-
-    def start(self, path: Any, filename: str) -> None:
-        self.state = "ready"
-
-    def restart(self) -> None:
-        self.state = "ready"
-
-    def stop(self, timeout: float = 3.0) -> None:
-        self.state = "stopped"
-
-    def status(self) -> dict[str, Any]:
-        return {
-            "status": self.state,
-            "loaded": self.state == "ready",
-            "filename": "fake.pt",
-            "worker_pid": 4242 if self.state == "ready" else None,
-            "tracker": "BoT-SORT",
-            "device": "cpu",
-            "error": None,
-            "dropped_frames": 0,
-            "classes": ["car"],
-            "architecture": "fake-yolo",
-            "epochs": 1,
-            "trained_image_size": 640,
-        }
-
-    def submit(self, frame: Any) -> bool:
-        if self.state != "ready":
-            return False
-        self.submissions.append(frame)
-        # Like the real worker: one active source at a time, and a result that
-        # does not carry it is discarded rather than merely superseded.
-        if frame.source_id != self._active_source:
-            self._active_source = frame.source_id
-            self._result = None
-        if self.on_submit is not None:
-            self.on_submit(frame)
-        if frame.source_id != self._active_source:
-            return True
-        self._result = {
-            "source_id": frame.source_id,
-            "generation": frame.generation,
-            "sequence": frame.sequence,
-            "source_time_ms": frame.source_time_ms,
-            "width": 640,
-            "height": 360,
-            "inference_ms": 11.0,
-            "detections": [
-                {
-                    "x1": 10.0,
-                    "y1": 20.0,
-                    "x2": 60.0,
-                    "y2": 70.0,
-                    "confidence": 0.83,
-                    "class_id": 0,
-                    "label": "car",
-                    "track_id": 1,
-                }
-            ],
-        }
-        return True
-
-    def latest(self) -> dict[str, Any] | None:
-        return None if self.withhold else self._result
-
-    def take_over(self, source_id: str) -> None:
-        """What an overlay frame does to a capture that is still waiting."""
-        self._active_source = source_id
-        self._result = None
-
-    def reset(self, source_id: str, generation: int) -> None:
-        self._active_source = source_id
-        self._result = None
-
-    def drain(self) -> None:
-        return None
-
-
 @unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
 class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        import cv2
-        import numpy as np
         from aiohttp.test_utils import TestClient, TestServer
 
+        from _video_fixture import car, write_fake_render, write_test_video
         from telemetry_ocr.config import AppConfig, FieldConfig, RuntimeConfig
         from telemetry_ocr.ocr import OCRResult
+        from telemetry_ocr.render_job import RenderManager
+        from telemetry_ocr.video_library import VideoLibrary
         from telemetry_ocr.webapp import GUARD_HEADER, create_app
 
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
@@ -152,24 +58,38 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.fake_detection_worker = _FakeDetector()
+        # A 20-frame video at 10 fps whose frame N is filled with brightness
+        # N * 10, and a finished render of it with a car on frame 15 -- the
+        # moment _shot takes by default -- and nothing on frame 5.
+        self.videos = self.root / "videos"
+        self.video = write_test_video(self.videos / "flight.avi")
+        self.model = self.root / "best.pt"
+        self.model.write_bytes(b"checkpoint")
+        self.renders_root = self.root / "renders"
+        self.render_id = "flight__best50__c0.45-s640-st1"
+        self.write_fake_render = write_fake_render
+        self.car = car
+        write_fake_render(
+            self.renders_root,
+            self.render_id,
+            video_id="flight.avi",
+            video_path=self.video,
+            model_path=self.model,
+            detections={15: [car(track_id=4)]},
+        )
         server = TestServer(
             create_app(
                 config,
                 FakeRecognizer(),
                 output_dir=self.root,
-                detection_worker_factory=lambda: self.fake_detection_worker,
+                video_library=VideoLibrary(self.videos),
+                render_manager=RenderManager(self.renders_root, ffmpeg="ffmpeg-for-tests"),
             )
         )
         self.client = TestClient(server, headers={GUARD_HEADER: "1"})
         await self.client.start_server()
         self.raw_client = TestClient(server)
         await self.raw_client.start_server()
-
-        frame = np.full((120, 160, 3), 90, dtype=np.uint8)
-        ok, encoded = cv2.imencode(".jpg", frame)
-        self.assertTrue(ok)
-        self.jpeg = encoded.tobytes()
 
         session = await self.client.post("/api/session")
         self.session_id = (await session.json())["session_id"]
@@ -182,19 +102,20 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         return self.root / "sessions" / name
 
     async def _shot(self, name: str = "flight01", **query: Any) -> Any:
+        from urllib.parse import urlencode
+
         params = {
             "session": name,
             "source_time_ms": "1500",
             "session_id": self.session_id,
+            "video": "flight.avi",
+            "render": self.render_id,
             **{key: str(value) for key, value in query.items()},
         }
-        from urllib.parse import urlencode
-
-        return await self.client.post(
-            f"/api/capture/shot?{urlencode(params)}",
-            data=self.jpeg,
-            headers={"Content-Type": "image/jpeg"},
-        )
+        # An empty value leaves the parameter out: render="" is a shot taken
+        # from a video that has not been run through a model.
+        params = {key: value for key, value in params.items() if value != ""}
+        return await self.client.post(f"/api/capture/shot?{urlencode(params)}")
 
     async def test_a_shot_writes_the_frame_and_its_telemetry(self) -> None:
         response = await self._shot()
@@ -274,41 +195,40 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_capturing_needs_the_guard_header(self) -> None:
         response = await self.raw_client.post(
-            "/api/capture/shot?session=x&source_time_ms=0", data=self.jpeg
+            "/api/capture/shot?session=x&source_time_ms=0&video=flight.avi"
         )
         self.assertEqual(response.status, 403)
 
-    async def test_detection_runs_on_the_captured_frame(self) -> None:
-        """Not on whatever result happened to be newest.
+    async def test_the_frame_is_read_from_the_video_at_that_time(self) -> None:
+        """From the original file on the server, at the moment on screen.
 
-        Reusing the latest result put boxes on a capture that visibly did not
-        sit on the vehicles: the newest result belongs to whichever frame the
-        page last posted, and on a moving camera that is a different scene.
+        The page used to post the frame it was showing. What it shows can now be
+        the rendered video, whose boxes sit over the OSD digits OCR reads, so the
+        clean frame has to come from the file instead.
         """
+        import cv2
+
+        body = await (await self._shot(source_time_ms=1500)).json()
+        saved = cv2.imread(str(self._dir("flight01") / body["image"]))
+        # Frame 15 of the test video is filled with brightness 150.
+        self.assertAlmostEqual(float(saved.mean()), 150.0, delta=6)
+        self.assertEqual(body["source_time_ms"], 1500.0)
+
+    async def test_the_boxes_come_from_the_render_of_that_frame(self) -> None:
+        """Not from asking a model again: the render already drew this frame."""
         body = await (await self._shot()).json()
         self.assertEqual(body["detections"]["status"], "ok")
-        # Zero, and meant literally: this is the frame that was inferred.
+        self.assertEqual(body["detections"]["counts"], {"car": 1})
+        # Zero, and meant literally: these boxes were drawn on this frame.
         self.assertEqual(body["detections"]["age_ms"], 0.0)
 
-    async def test_the_capture_submits_its_own_frame(self) -> None:
-        """The frame goes to the detector rather than a result coming back from it.
-
-        And under its own source id: a one-off frame pushed under the page's id
-        would perturb the tracker the overlay depends on.
-        """
-        await self._shot()
-        self.assertEqual(len(self.fake_detection_worker.submissions), 1)
-        submitted = self.fake_detection_worker.submissions[0]
-        self.assertTrue(submitted.source_id.startswith("capture-"))
-        self.assertTrue(submitted.payload)
-
-    async def test_no_model_is_distinct_from_finding_nothing(self) -> None:
-        # A bare empty count cannot tell the two apart, and they are fixed in
-        # completely different ways.
-        self.fake_detection_worker.state = "unloaded"
-        body = await (await self._shot()).json()
-        self.assertEqual(body["detections"]["status"], "no_model")
+    async def test_a_shot_without_a_render_says_so(self) -> None:
+        # "Never ran" and "found nothing" are fixed in different ways, so they
+        # must not look alike.
+        body = await (await self._shot(render="")).json()
+        self.assertEqual(body["detections"]["status"], "no_render")
         self.assertEqual(body["detections"]["counts"], {})
+        self.assertFalse(body["annotated"])
 
     async def test_the_boxes_are_drawn_from_that_result(self) -> None:
         body = await (await self._shot()).json()
@@ -384,8 +304,7 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         a direct call should get the picture, not an error about a copy that was
         never made because there was nothing to draw.
         """
-        self.fake_detection_worker.state = "unloaded"
-        body = await (await self._shot()).json()
+        body = await (await self._shot(render="")).json()
         self.assertFalse(body["annotated"])
         response = await self.client.get(
             "/api/capture/image?session=flight01&frame_index=0&annotated=1"
@@ -445,21 +364,20 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
         self.assertEqual(body["shots"][0]["stage"], "ready")
 
-        self.fake_detection_worker.state = "unloaded"
-        await self._shot()
+        await self._shot(render="")
         body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
         stages = {shot["frame_index"]: shot["stage"] for shot in body["shots"]}
         self.assertEqual(stages[0], "ready")
-        self.assertEqual(stages[1], "no_model")
+        self.assertEqual(stages[1], "no_render")
 
     async def test_finding_nothing_still_counts_as_having_run(self) -> None:
         # A clear frame is an answer. Filing it with the failures would have the
         # page warn about every capture of an empty road.
-        self.fake_detection_worker.state = "ready"
-        self.fake_detection_worker._result = None
-        await self._shot()
+        # Frame 5 of the render has no boxes on it.
+        await self._shot(source_time_ms=500)
         body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
-        self.assertEqual(body["shots"][0]["detections"]["counts"], {"car": 1})
+        self.assertEqual(body["shots"][0]["detections"]["status"], "ok")
+        self.assertEqual(body["shots"][0]["detections"]["counts"], {})
         self.assertEqual(body["shots"][0]["stage"], "ready")
 
     async def test_listing_reads_each_file_once(self) -> None:
@@ -540,79 +458,43 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reopened.frame_count, 3)
 
 
-    async def test_the_live_overlay_cannot_take_the_detector_mid_capture(self) -> None:
-        """The bug this guards: every capture came back with no boxes.
+    async def test_a_render_of_another_video_is_refused(self) -> None:
+        from _video_fixture import write_test_video
 
-        The worker keeps one active source id and discards any result that does
-        not carry it. A capture submits under its own `capture-` id, and the
-        page's overlay -- which posts a frame at least every 400 ms while a
-        video plays -- takes the active id straight back. Inference takes longer
-        than that, so the capture's answer was thrown away before it arrived and
-        every shot was filed as "no_result" with no annotated copy written.
+        write_test_video(self.videos / "other.avi")
+        response = await self._shot(video="other.avi")
+        self.assertEqual(response.status, 400)
+        self.assertFalse(self._dir("flight01").exists())
+
+    async def test_a_video_outside_the_folder_is_not_found(self) -> None:
+        for video in ("../flight.avi", "missing.avi", str(self.video)):
+            with self.subTest(video=video):
+                response = await self._shot(video=video, render="")
+                self.assertEqual(response.status, 404)
+
+    async def test_a_time_past_the_end_takes_the_last_frame(self) -> None:
+        body = await (await self._shot(source_time_ms=60_000, render="")).json()
+        self.assertEqual(body["source_time_ms"], 1900.0)
+
+    async def test_a_striding_render_snaps_to_a_frame_it_drew(self) -> None:
+        """A render made every second frame shows only even frames.
+
+        1.45 s is frame 14.5 of the source. Rounding to a source frame could land
+        on 15, which the render never drew, and file boxes from nowhere.
         """
-        overlay_frames = []
-
-        def overlay_cuts_in(frame: Any) -> None:
-            # Exactly once, and only for the capture: the first overlay frame
-            # that was already in flight when the capture claimed the detector.
-            if frame.source_id.startswith("capture-") and not overlay_frames:
-                overlay_frames.append(frame)
-                self.fake_detection_worker.take_over("page-source")
-
-        self.fake_detection_worker.on_submit = overlay_cuts_in
-        body = await (await self._shot()).json()
-        self.assertEqual(len(overlay_frames), 1)
-        # Resubmitted rather than given up on.
-        self.assertEqual(body["detections"]["status"], "ok")
+        stride_id = "flight__best50__c0.45-s640-st2"
+        self.write_fake_render(
+            self.renders_root,
+            stride_id,
+            video_id="flight.avi",
+            video_path=self.video,
+            model_path=self.model,
+            stride=2,
+            detections={14: [self.car(track_id=9)]},
+        )
+        body = await (await self._shot(render=stride_id, source_time_ms=1450)).json()
+        self.assertEqual(body["source_time_ms"], 1400.0)
         self.assertEqual(body["detections"]["counts"], {"car": 1})
-        self.assertTrue(body["annotated"])
-
-    async def test_the_overlay_stands_down_while_a_capture_holds_it(self) -> None:
-        """The other half: the overlay is told to skip, not queued behind.
-
-        A frame held for half a second and then inferred would draw boxes from
-        the wrong moment, which is the fault this whole path exists to avoid.
-        """
-        import asyncio as _asyncio
-
-        released = _asyncio.Event()
-        overlay_result: dict[str, Any] = {}
-
-        async def overlay_posts() -> None:
-            response = await self.client.post(
-                "/api/detection/frame?source_id=page&generation=0&sequence=1"
-                "&source_time_ms=0&image_size=640",
-                data=self.jpeg,
-                headers={"Content-Type": "image/jpeg"},
-            )
-            overlay_result.update(await response.json())
-            # Only now may the capture see its answer, so the overlay is
-            # guaranteed to have been refused while the claim was held rather
-            # than served after it was released.
-            self.fake_detection_worker.withhold = False
-            released.set()
-
-        # submit() runs in a worker thread, so the loop is captured here and the
-        # overlay's post is handed back to it rather than started from there.
-        loop = _asyncio.get_running_loop()
-
-        def hold(frame: Any) -> None:
-            if frame.source_id.startswith("capture-") and not overlay_result:
-                # The overlay tries to post while the capture is inside the
-                # detector. It must be refused rather than served.
-                self.fake_detection_worker.withhold = True
-                _asyncio.run_coroutine_threadsafe(overlay_posts(), loop)
-
-        self.fake_detection_worker.on_submit = hold
-        shot = await (await self._shot()).json()
-        self.assertEqual(shot["detections"]["status"], "ok")
-        await _asyncio.wait_for(released.wait(), timeout=5.0)
-        self.assertTrue(overlay_result.get("deferred"))
-        self.assertFalse(overlay_result.get("accepted"))
-        # And nothing from the page reached the detector during the capture.
-        sources = [item.source_id for item in self.fake_detection_worker.submissions]
-        self.assertNotIn("page", sources)
-
 
     async def _discard(self, *indexes: int, session: str = "flight01") -> Any:
         from urllib.parse import urlencode

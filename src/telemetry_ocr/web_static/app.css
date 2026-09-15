@@ -38,10 +38,10 @@
 * { box-sizing: border-box; }
 
 /* Ahead of every rule below, and !important on purpose. `hidden` is how the
-   page hides the overlay, the install button and the restart
-   button, and any later `display:` on a class those elements also carry would
-   silently override the attribute -- which is how a Restart worker button that
-   is meant to appear only when the worker has died ends up on screen always. */
+   page hides the overlay, the install button, the render progress and the
+   view switch, and any later `display:` on a class those elements also carry
+   would silently override the attribute -- which is how a button meant to
+   appear only sometimes once ended up on screen always. */
 [hidden] { display: none !important; }
 
 body {
@@ -200,17 +200,39 @@ summary:focus-visible, label:has(input:focus-visible) {
 .text-button:hover:not(:disabled), .link-button:hover { color: var(--blue); }
 .link-button.is-danger { color: var(--danger); }
 
-.file-button input { display: none; }
-
 /* ---------------------------------------------------------------- source */
 
 .source-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin-bottom: 12px;
 }
+/* Folder-relative ids, which can be long, so wider than the other selects. */
+.video-select select { min-width: 320px; max-width: 100%; }
+
+/* Original or AI: the same timeline either way, so a segmented pair rather
+   than a toggle -- both states are named, and neither reads as "off". */
+.view-switch {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.view-switch button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.view-switch button.is-active { background: var(--blue); color: #fff; }
 
 /* ---------------------------------------------------------------- stage */
 
@@ -234,15 +256,6 @@ summary:focus-visible, label:has(input:focus-visible) {
   width: auto;
   height: auto;
   display: block;
-}
-.video-stage.is-dragging { border-color: var(--blue); box-shadow: inset 0 0 0 2px var(--blue-soft); }
-
-.detection-overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
 }
 
 .drop-state {
@@ -364,52 +377,21 @@ summary:focus-visible, label:has(input:focus-visible) {
 .source-line strong { color: var(--text); font-weight: 600; }
 .source-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------------------------------------------------------------- model */
+/* ---------------------------------------------------------------- AI */
 
-.model-panel {
+.ai-panel {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
   margin-top: 12px;
+  padding: 11px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
 }
-.model-panel > summary {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 9px 12px;
-  list-style: none;
-  font-size: 13px;
-}
-.model-panel > summary::-webkit-details-marker { display: none; }
-.model-panel > summary::before {
-  content: "";
-  width: 6px; height: 6px;
-  border-right: 1.6px solid var(--muted);
-  border-bottom: 1.6px solid var(--muted);
-  transform: rotate(-45deg);
-  transition: transform .15s ease;
-}
-.model-panel[open] > summary::before { transform: rotate(45deg); }
-.model-summary-title { font-weight: 620; }
-.model-panel summary small {
-  color: var(--muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 0 12px 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-}
-.model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.model-settings { gap: 14px; }
+.ai-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.ai-row .primary-button { margin-left: auto; min-height: 32px; }
 
 .field-control, .check-control {
   display: inline-flex;
@@ -432,35 +414,35 @@ summary:focus-visible, label:has(input:focus-visible) {
 .model-select select { min-width: 240px; max-width: 100%; }
 .check-control input { accent-color: var(--blue); }
 
-.toggle-control { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; }
-.toggle-control input { position: absolute; opacity: 0; pointer-events: none; }
-.toggle-track {
-  width: 34px; height: 20px;
-  padding: 2px;
+.render-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--blue); }
+.render-bar {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 120px;
+  height: 8px;
   border-radius: 999px;
-  background: var(--line-strong);
-  transition: background .15s ease;
+  background: var(--blue-soft);
+  overflow: hidden;
 }
-.toggle-track > span {
-  display: block;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform .15s ease;
+.render-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: var(--blue);
+  transition: width .4s ease;
 }
-.toggle-control input:checked + .toggle-track { background: var(--blue); }
-.toggle-control input:checked + .toggle-track > span { transform: translateX(14px); }
-.toggle-control input:disabled + .toggle-track { opacity: .45; }
+.render-progress-text {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 .model-status { font-size: 12px; color: var(--muted); }
 .model-status.is-error { color: var(--danger); }
-.model-warning code {
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, .7);
-  font-size: 11px;
-}
-.model-status code {
+.model-status code, .model-note code {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--blue-soft);
@@ -477,15 +459,95 @@ summary:focus-visible, label:has(input:focus-visible) {
   line-height: 1.5;
 }
 
-.metrics {
+.render-list { display: flex; flex-direction: column; gap: 4px; }
+.render-list-title { font-size: 11px; font-weight: 650; color: var(--muted); }
+.render-item {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  font-size: 11.5px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
 }
-.metrics strong { color: var(--text); font-weight: 620; }
+.render-item.is-active { border-color: var(--blue-line); background: var(--blue-soft); }
+.render-item-text { font-weight: 600; white-space: nowrap; }
+.render-item-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.render-item-meta.is-stale { color: var(--warn); }
+.render-item-actions { display: inline-flex; gap: 2px; }
+
+/* ---------------------------------------------------------------- models */
+
+.model-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(80vh, 760px);
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 18px 48px rgba(18, 33, 47, .22);
+}
+.model-dialog::backdrop { background: rgba(13, 22, 32, .38); }
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.dialog-section {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--blue);
+}
+.model-table { display: flex; flex-direction: column; gap: 5px; }
+.model-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.model-item-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.model-item-name { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.model-item-meta { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.model-item-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.model-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.model-badge.is-warning { background: var(--danger-soft); color: var(--danger); }
+.model-name-input {
+  width: 140px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.model-note { margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.model-note.is-error { color: var(--danger); }
+.model-dialog .model-warning { margin-top: 14px; }
 
 /* ---------------------------------------------------------------- panel */
 
@@ -765,6 +827,9 @@ summary:focus-visible, label:has(input:focus-visible) {
 
 @media (max-width: 620px) {
   .source-bar, .action-bar { flex-wrap: wrap; }
+  .video-select, .video-select select { min-width: 0; width: 100%; }
+  .ai-row .primary-button { margin-left: 0; flex: 1 1 100%; }
+  .model-item { flex-direction: column; align-items: stretch; }
   .playback-time { margin-left: 0; }
   .capture-button, .line-button { flex: 1 1 auto; }
   /* Stacked rather than wrapped: the file name and the note about it are two

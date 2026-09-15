@@ -3,10 +3,14 @@
 const $ = (id) => document.getElementById(id);
 
 const ui = {
-  videoInput: $("videoInput"),
-  chooseVideoButton: $("chooseVideoButton"),
+  videoSelect: $("videoSelect"),
+  viewSwitch: $("viewSwitch"),
+  viewOriginal: $("viewOriginal"),
+  viewRendered: $("viewRendered"),
   videoStage: $("videoStage"),
   video: $("sourceVideo"),
+  dropState: $("dropState"),
+  emptyStateText: $("emptyStateText"),
   captureButton: $("captureButton"),
   captureButtonText: $("captureButtonText"),
   captureStatus: $("captureStatus"),
@@ -14,25 +18,22 @@ const ui = {
   lineSendButton: $("lineSendButton"),
   lineSendButtonText: $("lineSendButtonText"),
   lineQuotaLabel: $("lineQuotaLabel"),
-  dropState: $("dropState"),
-  detectionOverlay: $("detectionOverlay"),
-  detectionCanvas: $("detectionCaptureCanvas"),
   modelSelect: $("modelSelect"),
-  detectionToggle: $("detectionToggle"),
-  detectionRate: $("detectionRate"),
-  modelConfidence: $("modelConfidence"),
-  modelImageSize: $("modelImageSize"),
-  modelName: $("modelName"),
-  modelStatus: $("modelStatus"),
-  detectionFps: $("detectionFps"),
-  detectionLatency: $("detectionLatency"),
-  trackIdToggle: $("trackIdToggle"),
-  detectionLag: $("detectionLag"),
-  detectionCapture: $("detectionCapture"),
-  detectionHarvest: $("detectionHarvest"),
-  detectionDropped: $("detectionDropped"),
-  restartWorkerButton: $("restartWorkerButton"),
-  clearModelButton: $("clearModelButton"),
+  manageModelsButton: $("manageModelsButton"),
+  renderConfidence: $("renderConfidence"),
+  renderImageSize: $("renderImageSize"),
+  renderStride: $("renderStride"),
+  renderButton: $("renderButton"),
+  renderProgress: $("renderProgress"),
+  renderBarFill: $("renderBarFill"),
+  renderProgressText: $("renderProgressText"),
+  renderCancelButton: $("renderCancelButton"),
+  renderStatus: $("renderStatus"),
+  renderList: $("renderList"),
+  modelDialog: $("modelDialog"),
+  modelDialogClose: $("modelDialogClose"),
+  registeredModels: $("registeredModels"),
+  candidateModels: $("candidateModels"),
   fileName: $("fileName"),
   fileDetails: $("fileDetails"),
   currentTime: $("currentTime"),
@@ -66,7 +67,6 @@ const ui = {
   downloadJsonButton: $("downloadJsonButton"),
   downloadCsvButton: $("downloadCsvButton"),
   clearLogButton: $("clearLogButton"),
-  canvas: $("captureCanvas"),
   toast: $("toast"),
 };
 
@@ -94,46 +94,24 @@ const FIELD_META = {
 const state = {
   config: null,
   sessionId: null,
-  objectUrl: null,
-  file: null,
   generation: 0,
   rowElements: new Map(),
-  loopStarted: false,
-  fallbackTimer: null,
   toastTimer: null,
   installPrompt: null,
-  detectorLoaded: false,
-  // The registry the server offers: {name, label, available, default}.
-  detectionModels: [],
-  detectionInFlight: false,
-  detectionGeneration: 0,
-  detectionModelGeneration: 0,
-  detectionSequence: 0,
-  detectionSourceId: "",
-  lastDetectionMs: -Infinity,
-  detectionTracks: new Map(),
-  detectionResultSequence: -1,
-  detectionCompletions: [],
-  detectionPollTimer: null,
-  detectionPollToken: 0,
-  detectionRevision: 0,
-  detectionModelPollTimer: null,
-  detectionRenderFrame: null,
-  detectionSourceWidth: 0,
-  detectionSourceHeight: 0,
-  detectionCaptureMs: null,
-  detectionPostMs: null,
-  detectionTrainedImageSize: null,
-  detectionDevice: "",
-  detectionImageSizeTouched: false,
-  detectionEncoder: undefined,
-  detectionEncodeJobs: new Map(),
-  detectionEncodeSequence: 0,
-  detectionCameraVelocity: null,
-  detectionResultGapMs: 0,
-  detectionLastResultMs: null,
-  mediaClockMs: null,
-  mediaClockWall: 0,
+  // The project's videos, the registered checkpoints, and the renders the
+  // server holds for the video on screen.
+  videos: [],
+  video: null,
+  models: [],
+  renders: [],
+  // The render the page plays or last chose for this video. Captures take their
+  // boxes from it even while the original is on screen.
+  activeRender: null,
+  view: "original",
+  // null until the server has said; false means nothing new can be rendered.
+  ffmpeg: null,
+  renderJob: null,
+  renderPollTimer: null,
   // Capture: one session per page load unless the operator is holding the
   // button down, in which case shots keep appending to the same one.
   captureSession: null,
@@ -157,61 +135,16 @@ const state = {
   chosen: new Set(),
   // Captures the server has been asked for and has not answered yet. They get a
   // placeholder in the strip so a press is never a press with nothing visible
-  // behind it -- the frame is saved, run through best.pt and re-read before the
-  // response comes back, which takes about six tenths of a second and can take
-  // far longer on a cold model.
+  // behind it.
   pendingCaptures: 0,
   captureQueued: 0,
   captureFailures: 0,
-  detectionWorkerCycleMs: null,
 };
 
 // Compared against the server's version at startup. A service worker serving a
 // stale app.js looks exactly like a bug in the current code, so the page says
 // which build it is actually running rather than leaving it to be deduced.
 const APP_BUILD = "0.5.0";
-
-const DETECTION_MAX_EXTRAPOLATION_MS = 600;
-const DETECTION_MIN_EXTRAPOLATION_MS = 250;
-const DETECTION_MIN_SAMPLE_GAP_MS = 30;
-// Must stay above DETECTION_AUTO_MAX_INTERVAL_MS. When the two were equal, auto
-// pacing at its ceiling put every sample gap exactly on this boundary, so the
-// per-box velocity was thrown away on precisely the slow machines that need it.
-const DETECTION_MAX_SAMPLE_GAP_MS = 600;
-// Weight of each new velocity sample. Detection boxes jitter by a few pixels
-// between frames; without smoothing that jitter is divided by the gap and
-// multiplied by the extrapolation window, which throws the box around.
-const DETECTION_VELOCITY_SMOOTHING = 0.45;
-// Source pixels per millisecond. Nothing real crosses a 640 px frame in under
-// half a second, so anything faster is a tracker mistake, not motion.
-const DETECTION_MAX_SPEED = 1.5;
-// What is drawn this frame is shown at the next repaint, one 60 Hz interval
-// later, by which time the video has moved on again.
-const DETECTION_PRESENTATION_LEAD_MS = 16;
-// No new video frame for this long means stalled, seeking or a background
-// tab, where carrying the clock forward would run away from the picture.
-const DETECTION_STALL_MS = 250;
-// The camera estimate is a median across every box, so it is already denoised
-// spatially and can follow a changing pan faster than a single box's velocity
-// can be trusted to.
-const DETECTION_CAMERA_SMOOTHING = 0.7;
-// Auto pacing bounds. The headroom keeps the queue empty without letting the
-// gap between results grow enough to starve the tracker.
-const DETECTION_AUTO_HEADROOM = 1.1;
-const DETECTION_AUTO_MIN_INTERVAL_MS = 1000 / 20;
-const DETECTION_AUTO_MAX_INTERVAL_MS = 400;
-// The server holds a poll open until it has something new, so these are only
-// the floor and the retry gap, never the normal cadence.
-const DETECTION_POLL_FLOOR_MS = 16;
-const DETECTION_POLL_BACKOFF_MS = 500;
-// Generous: a slow machine encoding 960 px still finishes far inside this.
-// It exists to break a wedge, not to police normal timing.
-const DETECTION_ENCODE_TIMEOUT_MS = 4000;
-// Mirrors the bounds the frame endpoint enforces.
-const DETECTION_MIN_IMAGE_SIZE = 320;
-const DETECTION_MAX_IMAGE_SIZE = 1920;
-const DETECTION_STALE_MS = 750;
-const DETECTION_FADE_MS = 150;
 
 async function verifyBuildMatchesServer() {
   try {
@@ -293,269 +226,579 @@ async function jsonFetch(url, options = {}) {
   return payload;
 }
 
-function setModelStatus(text, isError = false) {
-  ui.modelStatus.textContent = text;
-  ui.modelStatus.classList.toggle("is-error", isError);
+function setRenderStatus(text, isError = false) {
+  ui.renderStatus.textContent = text;
+  ui.renderStatus.classList.toggle("is-error", isError);
 }
 
-async function initializeDetectionModel() {
-  try {
-    await loadModelChoices();
-    const payload = await jsonFetch("/api/detection/model");
-    const wasReady = state.detectorLoaded;
-    applyDetectionModelState(payload);
-    if (!wasReady && state.detectorLoaded && ui.video.readyState >= 2 && ui.detectionToggle.checked) {
-      await resetDetectionTracker();
-      submitDetectionFrame(true);
-    }
-  } catch (error) {
-    setModelStatus(`ระบบ AI annotation ไม่พร้อม: ${error.message}`, true);
-  }
+// ---------------------------------------------------------------------------
+// Models
+//
+// The registry lives on the server. The page names a checkpoint and never sends
+// one: adding picks from the .pt files the server itself found under models/
+// and runs/*/weights, and removing forgets a model without deleting its file.
+// ---------------------------------------------------------------------------
+
+async function loadModels(preferred = null) {
+  const payload = await jsonFetch("/api/models");
+  state.models = Array.isArray(payload.models) ? payload.models : [];
+  renderModelSelect(preferred ?? ui.modelSelect.value);
+  if (payload.error) setRenderStatus(payload.error, true);
 }
 
-function applyDetectionModelState(payload) {
-  const workerStatus = payload.status || (payload.loaded ? "ready" : "unloaded");
-  state.detectorLoaded = workerStatus === "ready";
-  if (state.detectorLoaded) startDetectionResultPolling();
-  else stopDetectionResultPolling();
-  const hasModel = Boolean(payload.filename);
-  ui.detectionToggle.disabled = !state.detectorLoaded;
-  ui.detectionRate.disabled = !state.detectorLoaded;
-  ui.modelConfidence.disabled = !state.detectorLoaded;
-  ui.modelImageSize.disabled = !state.detectorLoaded;
-  ui.trackIdToggle.disabled = !state.detectorLoaded;
-  ui.clearModelButton.disabled = !hasModel;
-  ui.restartWorkerButton.hidden = !hasModel || !["error", "stopped"].includes(workerStatus);
-  ui.modelName.textContent = hasModel
-    ? (payload.model_name ? `${payload.model_name} · ${payload.filename}` : payload.filename)
-    : "ยังไม่ได้เลือกโมเดล";
-  syncModelSelect(payload.model_name || "", workerStatus === "loading");
-  ui.detectionDropped.textContent = String(payload.dropped_frames || 0);
-
-  if (workerStatus === "ready") {
-    stopModelStatusPolling();
-    state.detectionTrainedImageSize = Number(payload.trained_image_size) || null;
-    state.detectionDevice = String(payload.device || "");
-    adoptTrainedImageSize();
-    const classes = Array.isArray(payload.classes) ? payload.classes.join(", ") : "";
-    const training = [
-      payload.architecture,
-      payload.epochs ? `${payload.epochs} epochs` : "",
-      payload.trained_image_size ? `trained ${payload.trained_image_size}px` : "",
-    ].filter(Boolean).join(" · ");
-    const mismatch = imageSizeMismatchWarning();
-    setModelStatus(
-      `BoT-SORT พร้อมใช้งาน · ${classes || "โหลด class labels แล้ว"}${training ? ` · ${training}` : ""}`
-      + (mismatch ? ` · ${mismatch}` : ""),
-      Boolean(mismatch),
-    );
-  } else if (workerStatus === "loading") {
-    // Spawning the worker takes seconds. Without this the boxes from the
-    // previous model stay on screen the whole time, over a video that has moved
-    // on, attributed to a model that is no longer loaded.
-    resetDetectionFrame();
-    setModelStatus(`กำลังเริ่ม Detection worker สำหรับ ${payload.filename || "โมเดล"}…`);
-    scheduleModelStatusPolling();
-  } else if (workerStatus === "error") {
-    stopModelStatusPolling();
-    setModelStatus(`Detection worker หยุดทำงาน: ${payload.error || "ไม่ทราบสาเหตุ"}`, true);
-    resetDetectionFrame();
-  } else if (workerStatus === "stopped" && hasModel) {
-    stopModelStatusPolling();
-    setModelStatus("Detection worker หยุดอยู่ กด Restart worker เพื่อเริ่มใหม่", true);
-    resetDetectionFrame();
-  } else {
-    stopModelStatusPolling();
-    setModelStatus("เลือกโมเดลจากรายการเพื่อวาดกรอบตรวจจับทับวิดีโอ");
-    resetDetectionFrame();
-  }
-}
-
-async function applyImageSizeChange() {
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  await resetDetectionTracker();
-  if (state.detectorLoaded && ui.video.readyState >= 2) submitDetectionFrame(true);
-}
-
-function adoptTrainedImageSize() {
-  const trained = state.detectionTrainedImageSize;
-  if (!trained) return;
-
-  // Always make the trained size selectable, even when it is not one of the
-  // three the page ships with.
-  // Anything added for a previous checkpoint is removed first, or the list grows
-  // by one entry per model loaded and most of them mean nothing for the current
-  // one.
-  for (const option of [...ui.modelImageSize.options]) {
-    if (option.dataset.trained === "1") option.remove();
-  }
-  const options = [...ui.modelImageSize.options];
-  if (!options.some((option) => Number(option.value) === trained)) {
-    const option = document.createElement("option");
-    option.value = String(trained);
-    option.textContent = `${trained} px`;
-    option.dataset.trained = "1";
-    const insertBefore = options.find((candidate) => Number(candidate.value) > trained);
-    ui.modelImageSize.insertBefore(option, insertBefore || null);
-  }
-
-  if (state.detectionImageSizeTouched) return;
-
-  // Running below the trained size costs small-object accuracy, but running a
-  // 960 px model on the CPU costs well over a second per frame. Cap the
-  // automatic choice where the README's own benchmark stops being usable.
-  const onCpu = state.detectionDevice.toLowerCase().startsWith("cpu");
-  // The frame endpoint rejects anything outside 320-1920, so adopting a trained
-  // size beyond that would turn every submission into a 400 with no clue why.
-  const withinApi = Math.min(DETECTION_MAX_IMAGE_SIZE, Math.max(DETECTION_MIN_IMAGE_SIZE, trained));
-  const target = onCpu ? Math.min(withinApi, 640) : withinApi;
-  if (Number(ui.modelImageSize.value) === target) return;
-
-  ui.modelImageSize.value = String(target);
-  // Assigning .value does not fire "change", so the reset the handler would
-  // have done has to happen here. Not awaited, matching handleFile: the
-  // generation bump already invalidates anything in flight.
-  applyImageSizeChange();
-}
-
-function imageSizeMismatchWarning() {
-  const trained = state.detectionTrainedImageSize;
-  const selected = Number(ui.modelImageSize.value);
-  if (!trained || !selected || trained === selected) return "";
-  return `โมเดลเทรนที่ ${trained}px แต่กำลังรันที่ ${selected}px — ตำแหน่งกรอบจะคลาดเคลื่อน`;
-}
-
-function scheduleModelStatusPolling() {
-  window.clearTimeout(state.detectionModelPollTimer);
-  const generation = state.detectionModelGeneration;
-  state.detectionModelPollTimer = window.setTimeout(async () => {
-    try {
-      const payload = await jsonFetch("/api/detection/model");
-      if (generation !== state.detectionModelGeneration) return;
-      const wasReady = state.detectorLoaded;
-      applyDetectionModelState(payload);
-      if (!wasReady && state.detectorLoaded && ui.video.readyState >= 2) {
-        await resetDetectionTracker();
-        submitDetectionFrame(true);
-      }
-    } catch (error) {
-      if (generation === state.detectionModelGeneration) {
-        setModelStatus(`อ่านสถานะ Detection worker ไม่ได้: ${error.message}`, true);
-        scheduleModelStatusPolling();
-      }
-    }
-  }, 500);
-}
-
-function stopModelStatusPolling() {
-  window.clearTimeout(state.detectionModelPollTimer);
-  state.detectionModelPollTimer = null;
-}
-
-// The checkpoints the server offers, from configs/paths.yaml. Chosen by name
-// only: the page cannot hand the server a file to load, which keeps a pickle
-// from anywhere but this machine out of the detection process.
-async function loadModelChoices() {
-  const payload = await jsonFetch("/api/detection/models");
-  state.detectionModels = Array.isArray(payload.models) ? payload.models : [];
-  renderModelSelect();
-  syncModelSelect(payload.selected || "", false);
-}
-
-function renderModelSelect() {
+function renderModelSelect(preferred) {
   const select = ui.modelSelect;
   select.replaceChildren();
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = state.detectionModels.length
-    ? "— ไม่ใช้โมเดล —"
-    : "ไม่มีโมเดลใน configs/paths.yaml";
-  select.append(none);
-  for (const model of state.detectionModels) {
+  if (!state.models.length) {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "ไม่มีโมเดลในรายการ";
+    select.append(none);
+  }
+  for (const model of state.models) {
     const option = document.createElement("option");
     option.value = model.name;
     const notes = [];
     if (model.default) notes.push("ค่าเริ่มต้น");
-    // Listed rather than hidden: a registered checkpoint whose file has gone is
-    // worth seeing, because the fix is to put the file back.
+    // Listed rather than hidden: the fix for a missing file is to put it back.
     if (!model.available) notes.push("ไม่พบไฟล์");
     const suffix = notes.length ? ` (${notes.join(", ")})` : "";
     option.textContent = `${model.name} · ${model.label}${suffix}`;
     option.disabled = !model.available;
     select.append(option);
   }
+  const usable = state.models.filter((model) => model.available);
+  const chosen = usable.find((model) => model.name === preferred)
+    || usable.find((model) => model.default)
+    || usable[0];
+  select.value = chosen ? chosen.name : "";
+  select.disabled = usable.length === 0;
 }
 
-function syncModelSelect(selectedName, loading) {
-  const select = ui.modelSelect;
-  const known = [...select.options].some((option) => option.value === selectedName);
-  select.value = known ? selectedName : "";
-  // Held still while a model loads: a second choice mid-load would start a
-  // worker while the first one is still coming up.
-  select.disabled = loading || !state.detectionModels.length;
+function selectedModel() {
+  return state.models.find(
+    (model) => model.name === ui.modelSelect.value && model.available,
+  ) || null;
 }
 
-async function selectDetectionModel(name) {
-  if (!name) {
-    await clearDetectionModel();
+async function openModelManager() {
+  if (!ui.modelDialog.open) ui.modelDialog.showModal();
+  await refreshModelManager();
+}
+
+async function refreshModelManager() {
+  ui.registeredModels.replaceChildren(managerNote("กำลังอ่านรายการ…"));
+  ui.candidateModels.replaceChildren();
+  try {
+    const [models, found] = await Promise.all([
+      jsonFetch("/api/models"),
+      jsonFetch("/api/models/candidates"),
+    ]);
+    state.models = Array.isArray(models.models) ? models.models : [];
+    renderModelSelect(ui.modelSelect.value);
+    renderRegisteredModels();
+    renderCandidateModels(Array.isArray(found.candidates) ? found.candidates : []);
+  } catch (error) {
+    ui.registeredModels.replaceChildren(
+      managerNote(`อ่านรายการโมเดลไม่สำเร็จ: ${error.message}`, true),
+    );
+  }
+  onRenderChoiceChange();
+}
+
+function managerNote(text, isError = false) {
+  const note = document.createElement("p");
+  note.className = "model-note";
+  note.classList.toggle("is-error", isError);
+  note.textContent = text;
+  return note;
+}
+
+function modelBadge(text, isWarning = false) {
+  const badge = document.createElement("span");
+  badge.className = "model-badge";
+  badge.classList.toggle("is-warning", isWarning);
+  badge.textContent = text;
+  return badge;
+}
+
+function renderRegisteredModels() {
+  ui.registeredModels.replaceChildren();
+  if (!state.models.length) {
+    ui.registeredModels.append(managerNote("ยังไม่มีโมเดลในรายการ — เพิ่มจากไฟล์ด้านล่าง"));
     return;
   }
-  const generation = ++state.detectionModelGeneration;
-  state.detectorLoaded = false;
-  // An image size chosen for the outgoing model says nothing about the incoming
-  // one, which may well have been trained at a different size. Clearing this
-  // lets the new model's trained size be adopted the way a first load would.
-  state.detectionImageSizeTouched = false;
-  ui.detectionToggle.disabled = true;
-  ui.detectionRate.disabled = true;
-  ui.modelConfidence.disabled = true;
-  ui.modelImageSize.disabled = true;
-  ui.clearModelButton.disabled = true;
-  ui.modelSelect.disabled = true;
-  setModelStatus(`กำลังโหลด ${name}…`);
+  for (const model of state.models) {
+    const row = document.createElement("div");
+    row.className = "model-item";
+    const info = document.createElement("div");
+    info.className = "model-item-info";
+    const name = document.createElement("strong");
+    name.className = "model-item-name";
+    name.textContent = model.name;
+    if (model.default) name.append(modelBadge("ค่าเริ่มต้น"));
+    if (!model.available) name.append(modelBadge("ไม่พบไฟล์", true));
+    const meta = document.createElement("small");
+    meta.className = "model-item-meta";
+    meta.textContent = model.available
+      ? `${model.label} · ${formatBytes(model.size_bytes)}`
+      : model.label;
+    info.append(name, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "model-item-actions";
+    if (!model.default && model.available) {
+      const makeDefault = document.createElement("button");
+      makeDefault.type = "button";
+      makeDefault.className = "link-button";
+      makeDefault.textContent = "ตั้งเป็นค่าเริ่มต้น";
+      makeDefault.addEventListener("click", () => setDefaultModel(model.name));
+      actions.append(makeDefault);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "link-button is-danger";
+    remove.textContent = "เอาออกจากรายการ";
+    remove.addEventListener("click", () => removeModel(model));
+    actions.append(remove);
+    row.append(info, actions);
+    ui.registeredModels.append(row);
+  }
+}
+
+function renderCandidateModels(candidates) {
+  ui.candidateModels.replaceChildren();
+  if (!candidates.length) {
+    ui.candidateModels.append(managerNote("ไม่พบไฟล์ .pt ใหม่ — ทุกไฟล์ในโฟลเดอร์อยู่ในรายการแล้ว"));
+    return;
+  }
+  for (const candidate of candidates) {
+    const row = document.createElement("div");
+    row.className = "model-item";
+    const info = document.createElement("div");
+    info.className = "model-item-info";
+    const label = document.createElement("strong");
+    label.className = "model-item-name";
+    label.textContent = candidate.label;
+    const meta = document.createElement("small");
+    meta.className = "model-item-meta";
+    meta.textContent =
+      `${formatBytes(candidate.size_bytes)} · แก้ไขล่าสุด ${formatDate(candidate.modified * 1000)}`;
+    info.append(label, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "model-item-actions";
+    const nameInput = document.createElement("input");
+    nameInput.className = "model-name-input";
+    nameInput.type = "text";
+    nameInput.maxLength = 40;
+    nameInput.value = candidate.suggested_name;
+    nameInput.setAttribute("aria-label", `ชื่อย่อสำหรับ ${candidate.label}`);
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button";
+    add.textContent = "เพิ่ม";
+    add.addEventListener("click", () => addModel(candidate, nameInput.value, add));
+    actions.append(nameInput, add);
+    row.append(info, actions);
+    ui.candidateModels.append(row);
+  }
+}
+
+async function addModel(candidate, name, button) {
+  button.disabled = true;
   try {
-    const payload = await jsonFetch("/api/detection/model", {
+    const added = await jsonFetch("/api/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidate_id: candidate.id, name: name.trim() }),
+    });
+    showToast(`เพิ่มโมเดล ${added.name} แล้ว`);
+    await refreshModelManager();
+    renderModelSelect(added.name);
+    onRenderChoiceChange();
+  } catch (error) {
+    button.disabled = false;
+    showToast(`เพิ่มโมเดลไม่สำเร็จ: ${error.message}`);
+  }
+}
+
+async function removeModel(model) {
+  const asked = window.confirm(
+    `เอา ${model.name} ออกจากรายการ?\n`
+    + `ไฟล์ ${model.label} ยังอยู่บนเครื่อง เพิ่มกลับได้จากส่วน เพิ่มโมเดล`,
+  );
+  if (!asked) return;
+  try {
+    await jsonFetch(`/api/models/${encodeURIComponent(model.name)}`, { method: "DELETE" });
+    showToast(`เอา ${model.name} ออกจากรายการแล้ว (ไฟล์ยังอยู่)`);
+    await refreshModelManager();
+  } catch (error) {
+    showToast(`เอาออกไม่สำเร็จ: ${error.message}`);
+  }
+}
+
+async function setDefaultModel(name) {
+  try {
+    await jsonFetch("/api/models/default", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    if (generation !== state.detectionModelGeneration) return;
-    applyDetectionModelState(payload);
+    await refreshModelManager();
   } catch (error) {
-    if (generation !== state.detectionModelGeneration) return;
-    // Ask what the server actually holds rather than assuming nothing: a failed
-    // switch can leave the previous model loaded.
-    try {
-      applyDetectionModelState(await jsonFetch("/api/detection/model"));
-    } catch {
-      applyDetectionModelState({ loaded: false });
+    showToast(`ตั้งค่าเริ่มต้นไม่สำเร็จ: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Videos and AI renders
+//
+// The page plays files the server serves. A render is the same video run
+// through a model once, every frame in order, with the boxes drawn into the
+// picture -- so there is nothing to draw here, and nothing that can fall
+// behind the video the way a live overlay did.
+// ---------------------------------------------------------------------------
+
+const RENDER_ACTIVE = new Set(["loading", "running", "cancelling"]);
+
+async function initializeLibrary() {
+  const results = await Promise.allSettled([loadModels(), loadVideos()]);
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    setRenderStatus(`อ่านรายการวิดีโอหรือโมเดลไม่สำเร็จ: ${failed.reason.message}`, true);
+  }
+  try {
+    const payload = await jsonFetch("/api/renders");
+    state.ffmpeg = Boolean(payload.ffmpeg);
+    applyRenderJob(payload.job);
+  } catch (error) {
+    setRenderStatus(`อ่านสถานะการประมวลผลไม่ได้: ${error.message}`, true);
+    return;
+  }
+  if (!failed) describeRenderChoice();
+}
+
+async function loadVideos() {
+  const payload = await jsonFetch("/api/videos");
+  state.videos = Array.isArray(payload.videos) ? payload.videos : [];
+  const select = ui.videoSelect;
+  const previous = select.value;
+  select.replaceChildren();
+  const prompt = document.createElement("option");
+  prompt.value = "";
+  prompt.textContent = state.videos.length ? "— เลือกวิดีโอ —" : "ไม่พบวิดีโอในโฟลเดอร์";
+  select.append(prompt);
+  for (const video of state.videos) {
+    const option = document.createElement("option");
+    option.value = video.id;
+    option.textContent =
+      `${video.id} · ${formatTime(video.duration_ms / 1000)} · ${formatBytes(video.size_bytes)}`;
+    select.append(option);
+  }
+  select.value = state.videos.some((video) => video.id === previous) ? previous : "";
+  select.disabled = state.videos.length === 0;
+  ui.emptyStateText.textContent = state.videos.length
+    ? "เลือกจากรายการ วิดีโอ ด้านบน"
+    : `ไม่พบวิดีโอใน ${payload.directory || "โฟลเดอร์วิดีโอ"} — คัดลอกไฟล์ไปไว้ที่นั่นแล้วโหลดหน้าใหม่`;
+}
+
+function renderSettings() {
+  const confidence = Math.min(1, Math.max(0.05, Number(ui.renderConfidence.value) || 0.45));
+  ui.renderConfidence.value = confidence.toFixed(2);
+  return {
+    confidence: Number(confidence.toFixed(2)),
+    image_size: Number(ui.renderImageSize.value),
+    stride: Number(ui.renderStride.value),
+  };
+}
+
+async function refreshRenders({ autoplay = false } = {}) {
+  if (!state.video) return;
+  const videoId = state.video.id;
+  let payload;
+  try {
+    payload = await jsonFetch(`/api/renders?${new URLSearchParams({ video: videoId })}`);
+  } catch (error) {
+    setRenderStatus(`อ่านผลการประมวลผลไม่สำเร็จ: ${error.message}`, true);
+    return;
+  }
+  // Another video may have been chosen while this was in flight.
+  if (!state.video || state.video.id !== videoId) return;
+  state.renders = Array.isArray(payload.renders) ? payload.renders : [];
+  state.ffmpeg = Boolean(payload.ffmpeg);
+  applyRenderJob(payload.job);
+  const stillThere = state.activeRender && state.renders.some(
+    (render) => render.render_id === state.activeRender.render_id,
+  );
+  if (state.activeRender && !stillThere) {
+    state.activeRender = null;
+    showView("original");
+  }
+  if (autoplay) {
+    const match = matchingRender();
+    if (match) {
+      state.activeRender = match;
+      showView("rendered");
     }
-    setModelStatus(`โหลดโมเดลไม่สำเร็จ: ${error.message}`, true);
+  }
+  renderRenderList();
+  updateRenderControls();
+  describeRenderChoice();
+}
+
+// A render made from these files, with the model and settings chosen above.
+function matchingRender() {
+  const model = selectedModel();
+  if (!state.video || !model) return null;
+  const wanted = renderSettings();
+  return state.renders.find((render) => (
+    render.current
+    && render.model === model.name
+    && Number(render.settings.confidence).toFixed(2) === wanted.confidence.toFixed(2)
+    && Number(render.settings.image_size) === wanted.image_size
+    && Number(render.stride) === wanted.stride
+  )) || null;
+}
+
+function renderRenderList() {
+  ui.renderList.replaceChildren();
+  ui.renderList.hidden = !state.video || state.renders.length === 0;
+  if (ui.renderList.hidden) return;
+  const title = document.createElement("div");
+  title.className = "render-list-title";
+  title.textContent = "ผลการประมวลผลของวิดีโอนี้";
+  ui.renderList.append(title);
+  for (const render of state.renders) {
+    const playing = state.view === "rendered"
+      && state.activeRender?.render_id === render.render_id;
+    const row = document.createElement("div");
+    row.className = "render-item";
+    row.classList.toggle("is-active", playing);
+    const text = document.createElement("span");
+    text.className = "render-item-text";
+    const settings = render.settings || {};
+    const stride = Number(render.stride) > 1 ? ` · ทุก ${render.stride} เฟรม` : "";
+    text.textContent =
+      `${render.model} · conf ${Number(settings.confidence).toFixed(2)} · ${settings.image_size} px${stride}`;
+    const meta = document.createElement("small");
+    meta.className = "render-item-meta";
+    meta.classList.toggle("is-stale", !render.current);
+    meta.textContent = render.current
+      ? `${playing ? "กำลังเล่น · " : ""}สร้างเมื่อ ${formatDate(render.created_at)}`
+      : "วิดีโอหรือโมเดลเปลี่ยนไปหลังประมวลผล — ควรประมวลผลใหม่";
+    const actions = document.createElement("span");
+    actions.className = "render-item-actions";
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "link-button";
+    play.textContent = "เล่น";
+    play.disabled = playing;
+    play.addEventListener("click", () => {
+      state.activeRender = render;
+      showView("rendered");
+      describeRenderChoice();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "link-button is-danger";
+    remove.textContent = "ลบ";
+    remove.addEventListener("click", () => deleteRender(render));
+    actions.append(play, remove);
+    row.append(text, meta, actions);
+    ui.renderList.append(row);
   }
 }
 
-async function clearDetectionModel() {
-  ++state.detectionModelGeneration;
-  // The encoder is per-page, not per-model, but a wedged one would otherwise
-  // survive the clear and greet the next model already broken.
-  failEncoder("model cleared");
-  stopModelStatusPolling();
+async function deleteRender(render) {
+  const asked = window.confirm(
+    `ลบผลการประมวลผล ${render.model} ของวิดีโอนี้?\n`
+    + "วิดีโอต้นฉบับและไฟล์โมเดลไม่ถูกลบ ประมวลผลใหม่ได้ภายหลัง",
+  );
+  if (!asked) return;
   try {
-    applyDetectionModelState(await jsonFetch("/api/detection/model", { method: "DELETE" }));
+    const params = new URLSearchParams({ render: render.render_id });
+    await jsonFetch(`/api/renders?${params}`, { method: "DELETE" });
+    if (state.activeRender?.render_id === render.render_id) {
+      state.activeRender = null;
+      showView("original");
+    }
+    await refreshRenders();
   } catch (error) {
-    setModelStatus(`ล้างโมเดลไม่สำเร็จ: ${error.message}`, true);
+    setRenderStatus(`ลบไม่สำเร็จ: ${error.message}`, true);
   }
 }
 
-async function restartDetectionWorker() {
-  ++state.detectionModelGeneration;
-  stopModelStatusPolling();
-  try {
-    applyDetectionModelState(await jsonFetch("/api/detection/restart", { method: "POST" }));
-  } catch (error) {
-    setModelStatus(`Restart Detection worker ไม่สำเร็จ: ${error.message}`, true);
+async function onRenderButton() {
+  const match = matchingRender();
+  if (match) {
+    state.activeRender = match;
+    showView("rendered");
+    describeRenderChoice();
+    return;
   }
+  await startRender();
+}
+
+async function startRender() {
+  const model = selectedModel();
+  if (!state.video || !model) return;
+  ui.renderButton.disabled = true;
+  try {
+    const payload = await jsonFetch("/api/renders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video: state.video.id, model: model.name, ...renderSettings() }),
+    });
+    if (payload.existing) {
+      await refreshRenders();
+      state.activeRender = state.renders.find(
+        (render) => render.render_id === payload.existing.render_id,
+      ) || payload.existing;
+      showView("rendered");
+      describeRenderChoice();
+      return;
+    }
+    setRenderStatus(
+      `เริ่มประมวลผล ${state.video.name} ด้วย ${model.name} — ระหว่างรอดูต้นฉบับได้ตามปกติ`,
+    );
+    applyRenderJob(payload.job);
+  } catch (error) {
+    if (error.payload?.job) applyRenderJob(error.payload.job);
+    setRenderStatus(`เริ่มประมวลผลไม่สำเร็จ: ${error.message}`, true);
+  } finally {
+    updateRenderControls();
+  }
+}
+
+async function cancelRender() {
+  ui.renderCancelButton.disabled = true;
+  try {
+    const payload = await jsonFetch("/api/renders/current", { method: "DELETE" });
+    applyRenderJob(payload.job);
+  } catch (error) {
+    ui.renderCancelButton.disabled = false;
+    setRenderStatus(`ยกเลิกไม่สำเร็จ: ${error.message}`, true);
+  }
+}
+
+function applyRenderJob(job) {
+  const previous = state.renderJob;
+  state.renderJob = job && job.status && job.status !== "idle" ? job : null;
+  const current = state.renderJob;
+  const active = Boolean(current && RENDER_ACTIVE.has(current.status));
+  ui.renderProgress.hidden = !active;
+  if (active) {
+    const percent = current.total ? Math.min(100, (current.done / current.total) * 100) : 0;
+    ui.renderBarFill.style.width = `${percent.toFixed(1)}%`;
+    const parts = [`${current.video} · ${current.model}`];
+    if (current.status === "loading") {
+      parts.push("กำลังโหลดโมเดล…");
+    } else if (current.status === "cancelling") {
+      parts.push("กำลังยกเลิก…");
+    } else {
+      parts.push(`${percent.toFixed(1)}%`);
+      if (current.fps) parts.push(`${Number(current.fps).toFixed(1)} เฟรม/วินาที`);
+      if (Number.isFinite(current.eta_s)) parts.push(`เหลืออีกราว ${formatDuration(current.eta_s)}`);
+    }
+    ui.renderProgressText.textContent = parts.join(" · ");
+    ui.renderCancelButton.disabled = current.status === "cancelling";
+    scheduleRenderPoll();
+  } else {
+    stopRenderPoll();
+  }
+  const finished = previous && RENDER_ACTIVE.has(previous.status)
+    && current && !RENDER_ACTIVE.has(current.status);
+  if (finished) {
+    if (current.status === "complete") {
+      setRenderStatus(`ประมวลผล ${current.video} ด้วย ${current.model} เสร็จแล้ว`);
+      showToast("ประมวลผลวิดีโอด้วย AI เสร็จแล้ว");
+      if (state.video && state.video.id === current.video) refreshRenders({ autoplay: true });
+    } else if (current.status === "error") {
+      setRenderStatus(`ประมวลผลไม่สำเร็จ: ${current.error || "ไม่ทราบสาเหตุ"}`, true);
+    } else if (current.status === "cancelled") {
+      setRenderStatus("ยกเลิกการประมวลผลแล้ว");
+    }
+  }
+  updateRenderControls();
+}
+
+function scheduleRenderPoll() {
+  if (state.renderPollTimer !== null) return;
+  state.renderPollTimer = window.setTimeout(async () => {
+    state.renderPollTimer = null;
+    try {
+      applyRenderJob(await jsonFetch("/api/renders/current"));
+    } catch (error) {
+      setRenderStatus(`อ่านสถานะการประมวลผลไม่ได้: ${error.message}`, true);
+      scheduleRenderPoll();
+    }
+  }, 1000);
+}
+
+function stopRenderPoll() {
+  window.clearTimeout(state.renderPollTimer);
+  state.renderPollTimer = null;
+}
+
+function updateRenderControls() {
+  const busy = Boolean(state.renderJob && RENDER_ACTIVE.has(state.renderJob.status));
+  const model = selectedModel();
+  const match = matchingRender();
+  const playingMatch = Boolean(
+    match && state.view === "rendered" && state.activeRender?.render_id === match.render_id,
+  );
+  ui.renderButton.textContent = match ? "เล่นวิดีโอ AI" : "ประมวลผลด้วย AI";
+  ui.renderButton.disabled = !state.video || !model || playingMatch
+    || (!match && (busy || state.ffmpeg === false));
+}
+
+function describeRenderChoice() {
+  if (state.renderJob && RENDER_ACTIVE.has(state.renderJob.status)) return;
+  if (!state.video) {
+    setRenderStatus("เลือกวิดีโอและโมเดล แล้วกดประมวลผลด้วย AI");
+    return;
+  }
+  const model = selectedModel();
+  if (!model) {
+    setRenderStatus("ยังไม่มีโมเดลที่ใช้ได้ — กด จัดการโมเดล เพื่อเพิ่ม", true);
+    return;
+  }
+  const match = matchingRender();
+  if (match && state.view === "rendered" && state.activeRender?.render_id === match.render_id) {
+    setRenderStatus(`กำลังแสดงวิดีโอ AI จาก ${match.model} · สลับเป็นต้นฉบับได้ที่ปุ่มด้านบน`);
+  } else if (state.view === "rendered" && state.activeRender) {
+    setRenderStatus(`กำลังแสดงวิดีโอ AI จาก ${state.activeRender.model} (ค่าไม่ตรงกับที่ตั้งไว้ด้านบน)`);
+  } else if (match) {
+    setRenderStatus(`มีวิดีโอ AI จาก ${match.model} ที่ค่านี้แล้ว — กด เล่นวิดีโอ AI`);
+  } else if (state.ffmpeg === false) {
+    setRenderStatus("ไม่พบ ffmpeg บนเครื่องนี้ จึงประมวลผลวิดีโอใหม่ไม่ได้ (ยังเล่นผลที่มีอยู่ได้)", true);
+  } else {
+    setRenderStatus(
+      `ยังไม่ได้ประมวลผล ${state.video.name} ด้วย ${model.name} ที่ค่านี้ · `
+      + "ใช้เวลาใกล้เคียงหรือนานกว่าความยาววิดีโอ ระหว่างรอดูต้นฉบับได้",
+    );
+  }
+}
+
+function onRenderChoiceChange() {
+  updateRenderControls();
+  describeRenderChoice();
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours) return `${hours} ชม. ${minutes} นาที`;
+  if (minutes) return `${minutes} นาที`;
+  return `${total} วินาที`;
 }
 
 async function initialize() {
@@ -565,7 +808,7 @@ async function initialize() {
     state.sessionId = session.session_id;
     renderTelemetryRows();
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
-    initializeDetectionModel();
+    initializeLibrary();
     checkLineConfigured();
   } catch (error) {
     setEngineStatus("error", "เชื่อมต่อ OCR ไม่สำเร็จ");
@@ -624,30 +867,74 @@ function renderTelemetryRows() {
   }
 }
 
-function handleFile(file) {
-  if (!file) return;
-  if (!file.type.startsWith("video/") && !/\.(mp4|mov|avi|mkv|webm)$/i.test(file.name)) {
-    showToast("กรุณาเลือกไฟล์วิดีโอ");
+async function selectVideo(videoId) {
+  const video = state.videos.find((item) => item.id === videoId) || null;
+  state.video = video;
+  state.activeRender = null;
+  state.renders = [];
+  renderRenderList();
+  if (!video) {
+    state.view = "original";
+    ui.video.removeAttribute("src");
+    ui.video.load();
+    ui.dropState.hidden = false;
+    ui.viewSwitch.hidden = true;
+    ui.fileName.textContent = "ยังไม่ได้เลือกวิดีโอ";
+    ui.fileDetails.textContent = "วิดีโอจากโฟลเดอร์วิดีโอของโปรเจกต์";
+    ui.durationTime.textContent = formatTime(0);
+    updateCaptureAvailability();
+    onRenderChoiceChange();
     return;
   }
-  if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-  state.file = file;
-  state.objectUrl = URL.createObjectURL(file);
-  ui.video.src = state.objectUrl;
-  ui.video.load();
-  ui.fileName.textContent = file.name;
-  ui.fileDetails.textContent = `${formatBytes(file.size)} · กำลังอ่านข้อมูลวิดีโอ`;
   ui.dropState.hidden = true;
-  // Reset the outgoing source before adopting the new id. Minting it first made
-  // the reset name a source the server had never seen, while the tracker state
-  // for the video being replaced was never cleared at all.
-  resetDetectionTracker();
-  state.detectionSourceId = globalThis.crypto?.randomUUID?.()
-    || `video-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  resetDetectionFrame();
+  ui.fileName.textContent = video.name;
+  ui.fileDetails.textContent = [
+    formatBytes(video.size_bytes),
+    `${video.width}×${video.height}`,
+    formatTime(video.duration_ms / 1000),
+    `${Number(video.fps).toFixed(2)} fps`,
+  ].join(" · ");
   resetSession(true);
+  showView("original", 0);
+  updateRenderControls();
+  await refreshRenders({ autoplay: true });
+}
+
+function sourceUrl(view) {
+  if (view === "rendered" && state.activeRender) {
+    return `/api/renders/video?${new URLSearchParams({ render: state.activeRender.render_id })}`;
+  }
+  return `/api/videos/source?${new URLSearchParams({ video: state.video.id })}`;
+}
+
+// Swaps what the <video> plays and keeps the moment on screen. The original and
+// its render share one timeline, so switching is a comparison, not a restart.
+function showView(view, atSeconds = null) {
+  if (!state.video) return;
+  const target = view === "rendered" && state.activeRender ? "rendered" : "original";
+  state.view = target;
+  ui.viewSwitch.hidden = !state.activeRender;
+  ui.viewOriginal.classList.toggle("is-active", target === "original");
+  ui.viewRendered.classList.toggle("is-active", target === "rendered");
+  ui.viewOriginal.setAttribute("aria-pressed", String(target === "original"));
+  ui.viewRendered.setAttribute("aria-pressed", String(target === "rendered"));
+  renderRenderList();
+  const url = sourceUrl(target);
+  if (ui.video.getAttribute("src") === url) return;
+  const resumeAt = atSeconds ?? (ui.video.currentTime || 0);
+  const resume = !ui.video.paused && !ui.video.ended;
+  ui.video.addEventListener("loadedmetadata", () => {
+    if (resumeAt > 0) ui.video.currentTime = Math.min(resumeAt, ui.video.duration || resumeAt);
+    if (resume) ui.video.play().catch(() => {});
+  }, { once: true });
+  ui.video.src = url;
+  ui.video.load();
+}
+
+function chooseView(view) {
+  showView(view);
+  updateRenderControls();
+  describeRenderChoice();
 }
 
 async function resetSession(clearRecords = true) {
@@ -687,736 +974,10 @@ function clearLog() {
   ui.shotDetections.textContent = "";
 }
 
-function startFrameLoop() {
-  if (state.loopStarted) return;
-  state.loopStarted = true;
-  if (typeof ui.video.requestVideoFrameCallback === "function") {
-    // Detection goes first. Its result is drawn on top of the moving picture,
-    // so every millisecond it waits shows up as a box in the wrong place, while
-    // OCR reads fixed regions and does not care. Behind maybeSubmit it paid for
-    // the full-resolution ROI encode before it could start its own.
-    const tick = (_, metadata) => {
-      // The reference point the overlay's media clock is carried forward from.
-      state.mediaClockMs = metadata.mediaTime * 1000;
-      state.mediaClockWall = performance.now();
-      maybeSubmitDetection(metadata.mediaTime * 1000);
-      updatePlaybackTime();
-      ui.video.requestVideoFrameCallback(tick);
-    };
-    ui.video.requestVideoFrameCallback(tick);
-  } else {
-    state.fallbackTimer = window.setInterval(() => {
-      if (!ui.video.paused) {
-        const sourceTimeMs = ui.video.currentTime * 1000;
-        maybeSubmitDetection(sourceTimeMs);
-        updatePlaybackTime();
-      }
-    }, 35);
-  }
-}
-
-// The picture detection, the overlay and capture read from. It is always the
-// <video> now that the page has no stream mode, but they ask through these
-// rather than naming the element, which left each of them unchanged by that.
-function sourceElement() {
-  return ui.video;
-}
-
-function sourceWidth() {
-  return ui.video.videoWidth;
-}
-
-function sourceHeight() {
-  return ui.video.videoHeight;
-}
-
 // "There is a picture to read."
 function sourceReady() {
-  return ui.video.readyState >= 2;
+  return Boolean(state.video) && ui.video.readyState >= 2;
 }
-
-// "The picture is moving."
-function sourceLive() {
-  return !(ui.video.paused || ui.video.ended);
-}
-
-function maybeSubmitDetection(sourceTimeMs) {
-  if (
-    !sourceLive()
-    || !state.detectorLoaded
-    || !ui.detectionToggle.checked
-    || state.detectionInFlight
-  ) return;
-  // detectionIntervalMs is a wall-clock budget while this delta is media time,
-  // so at 2x playback an unscaled comparison submitted twice as often and
-  // oversubscribed the very worker the pacing exists to protect.
-  const mediaInterval = detectionIntervalMs()
-    * (ui.video.playbackRate || 1);
-  if (sourceTimeMs - state.lastDetectionMs < mediaInterval) return;
-  submitDetectionFrame(false, sourceTimeMs);
-}
-
-// Submitting faster than the worker can keep up makes the boxes worse, not
-// better. When it is oversubscribed it always finishes onto a frame that has
-// been waiting in the queue, so that wait is added to every result; when it is
-// not, each frame goes straight in and the staleness is just the inference. The
-// wasted frames also cost a browser encode and an upload for nothing.
-//
-// Auto therefore paces submissions just under the measured round trip, which is
-// the fastest rate at which nothing has to queue.
-function detectionIntervalMs() {
-  const choice = ui.detectionRate.value;
-  if (choice !== "auto") return 1000 / Number(choice);
-  const paced = DetectionMath.autoIntervalMs(
-    state.detectionWorkerCycleMs,
-    DETECTION_AUTO_HEADROOM,
-    DETECTION_AUTO_MIN_INTERVAL_MS,
-    DETECTION_AUTO_MAX_INTERVAL_MS,
-  );
-  // Nothing measured yet, so fall back to a rate that suits a typical machine.
-  return paced === null ? 1000 / 10 : paced;
-}
-
-async function submitDetectionFrame(force = false, sourceTimeMs = currentMediaTime()) {
-  if (!state.detectorLoaded || state.detectionInFlight || !sourceReady()) return;
-  if (!force && (!sourceLive() || !ui.detectionToggle.checked)) return;
-  const generation = state.detectionGeneration;
-  const sequence = state.detectionSequence++;
-  // Everything describing this frame is read before the first await. Dropping a
-  // new video mid-encode reassigns detectionSourceId and bumps the generation,
-  // and reading these afterwards posted old pixels under the new source id --
-  // which the server takes as a source change and uses to reset the tracker
-  // generation the client had only just installed. The image size has the same
-  // problem: the bitmap was already sized from the previous value.
-  const sourceId = state.detectionSourceId;
-  const imageSize = ui.modelImageSize.value;
-  const confidence = Math.min(1, Math.max(0.05, Number(ui.modelConfidence.value) || 0.45));
-  state.detectionInFlight = true;
-  state.lastDetectionMs = sourceTimeMs;
-  try {
-    const captureStarted = performance.now();
-    let blob;
-    try {
-      blob = await captureDetectionFrame();
-    } catch (error) {
-      // A capture failure is local — a dead encoder, a frame the browser cannot
-      // read. Reporting it as a model fault and re-initialising the model would
-      // be wrong, and would start another polling loop for good measure.
-      if (generation === state.detectionGeneration) {
-        setModelStatus(`สร้างเฟรมสำหรับ AI ไม่สำเร็จ: ${error.message}`, true);
-      }
-      return;
-    }
-    state.detectionCaptureMs = performance.now() - captureStarted;
-    const params = new URLSearchParams({
-      source_id: sourceId,
-      generation: String(generation),
-      sequence: String(sequence),
-      source_time_ms: sourceTimeMs.toFixed(3),
-      confidence: confidence.toFixed(2),
-      iou: "0.45",
-      image_size: imageSize,
-    });
-    const postStarted = performance.now();
-    const payload = await jsonFetch(`/api/detection/frame?${params}`, {
-      method: "POST",
-      headers: { "Content-Type": "image/jpeg" },
-      body: blob,
-    });
-    state.detectionPostMs = performance.now() - postStarted;
-    if (generation !== state.detectionGeneration) return;
-    applyDetectionPayload(payload);
-    // The polling loop delivers results now, whether or not playback is running.
-  } catch (error) {
-    if (generation === state.detectionGeneration) {
-      setModelStatus(`AI detection ขัดข้อง: ${error.message}`, true);
-      initializeDetectionModel();
-    }
-  } finally {
-    state.detectionInFlight = false;
-  }
-}
-
-// Encoding the detection frame used to cost ~78 ms on the main thread, all of
-// it added to how stale the frame was before inference even started. The
-// downscale goes through createImageBitmap, which resizes without the main
-// thread touching pixels, and the JPEG encode moves to a worker. The worker is
-// built from a blob rather than shipped as a file so it cannot be served from a
-// stale cache independently of app.js.
-const ENCODER_SOURCE = `
-self.onmessage = async (event) => {
-  const { id, bitmap, quality } = event.data;
-  try {
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const context = canvas.getContext("2d", { alpha: false });
-    context.drawImage(bitmap, 0, 0);
-    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality });
-    self.postMessage({ id, blob });
-  } catch (error) {
-    self.postMessage({ id, error: String(error) });
-  } finally {
-    // Transferred, so the main thread cannot release it; without this a failed
-    // encode leaks a full-size backing store every time.
-    bitmap.close();
-  }
-};
-`;
-
-function detectionEncoder() {
-  if (state.detectionEncoder !== undefined) return state.detectionEncoder;
-  state.detectionEncoder = null;
-  const supported = typeof Worker === "function"
-    && typeof OffscreenCanvas === "function"
-    && typeof createImageBitmap === "function";
-  if (supported) {
-    try {
-      const url = URL.createObjectURL(new Blob([ENCODER_SOURCE], { type: "text/javascript" }));
-      const worker = new Worker(url);
-      URL.revokeObjectURL(url);
-      worker.onmessage = (event) => {
-        const pending = state.detectionEncodeJobs.get(event.data.id);
-        if (!pending) return;
-        settleEncodeJob(event.data.id);
-        if (event.data.error) pending.reject(new Error(event.data.error));
-        else pending.resolve(event.data.blob);
-      };
-      // Without these a dead worker leaves every job unsettled. The capture is
-      // awaited inside submitDetectionFrame, so its finally never runs, the
-      // in-flight flag stays raised and detection stops for good with nothing
-      // said. A worker that has failed is also discarded rather than reused.
-      worker.onerror = (event) => failEncoder(`worker error: ${event.message || "unknown"}`);
-      worker.onmessageerror = () => failEncoder("worker returned an uncloneable message");
-      state.detectionEncoder = worker;
-    } catch (error) {
-      console.warn("Detection encoder worker unavailable, using the main thread", error);
-    }
-  }
-  return state.detectionEncoder;
-}
-
-function settleEncodeJob(id) {
-  const pending = state.detectionEncodeJobs.get(id);
-  if (!pending) return null;
-  window.clearTimeout(pending.timer);
-  state.detectionEncodeJobs.delete(id);
-  return pending;
-}
-
-// Fails every outstanding encode and drops the worker. The next capture builds
-// a fresh one, or falls back to the main thread if that fails too, so a crashed
-// encoder costs frames rather than the whole feature.
-function failEncoder(reason) {
-  for (const id of [...state.detectionEncodeJobs.keys()]) {
-    settleEncodeJob(id)?.reject(new Error(reason));
-  }
-  if (state.detectionEncoder) state.detectionEncoder.terminate();
-  state.detectionEncoder = undefined;
-}
-
-function detectionFrameSize() {
-  const width = sourceWidth();
-  const height = sourceHeight();
-  const targetLongSide = Math.max(320, Number(ui.modelImageSize.value) || 640);
-  const scale = Math.min(1, targetLongSide / Math.max(width, height));
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
-}
-
-async function captureDetectionFrame() {
-  const { width, height } = detectionFrameSize();
-  const worker = detectionEncoder();
-  if (worker) {
-    const bitmap = await createImageBitmap(sourceElement(), {
-      resizeWidth: width,
-      resizeHeight: height,
-      resizeQuality: "medium",
-    });
-    const id = ++state.detectionEncodeSequence;
-    return new Promise((resolve, reject) => {
-      // Last line of defence: a worker that is alive but silently never answers
-      // this job would otherwise wedge detection permanently.
-      const timer = window.setTimeout(() => {
-        settleEncodeJob(id);
-        reject(new Error(`encode timed out after ${DETECTION_ENCODE_TIMEOUT_MS} ms`));
-      }, DETECTION_ENCODE_TIMEOUT_MS);
-      state.detectionEncodeJobs.set(id, { resolve, reject, timer });
-      worker.postMessage({ id, bitmap, quality: 0.86 }, [bitmap]);
-    });
-  }
-  return captureDetectionFrameOnMainThread(width, height);
-}
-
-function captureDetectionFrameOnMainThread(width, height) {
-  ui.detectionCanvas.width = width;
-  ui.detectionCanvas.height = height;
-  const context = ui.detectionCanvas.getContext("2d", { alpha: false });
-  context.drawImage(sourceElement(), 0, 0, width, height);
-  return new Promise((resolve, reject) => {
-    ui.detectionCanvas.toBlob(
-      (blob) => blob ? resolve(blob) : reject(new Error("สร้างเฟรมสำหรับ AI ไม่สำเร็จ")),
-      "image/jpeg",
-      0.86,
-    );
-  });
-}
-
-function resetDetectionFrame() {
-  state.lastDetectionMs = -Infinity;
-  state.detectionResultSequence = -1;
-  state.detectionTracks.clear();
-  state.detectionCompletions = [];
-  state.detectionSourceWidth = 0;
-  state.detectionSourceHeight = 0;
-  state.detectionCaptureMs = null;
-  state.detectionPostMs = null;
-  // Abandoned encodes must be failed rather than forgotten, or whatever is
-  // awaiting them never resumes and never clears the in-flight flag.
-  for (const id of [...state.detectionEncodeJobs.keys()]) {
-    settleEncodeJob(id)?.reject(new Error("detection was reset"));
-  }
-  // Motion learned from the previous video, model or seek position says nothing
-  // about the next one.
-  state.detectionCameraVelocity = null;
-  state.detectionWorkerCycleMs = null;
-  state.detectionResultGapMs = 0;
-  state.detectionLastResultMs = null;
-  state.mediaClockMs = null;
-  ui.detectionFps.textContent = "0.0";
-  ui.detectionLatency.textContent = "—";
-  ui.detectionLag.textContent = "—";
-  ui.detectionCapture.textContent = "—";
-  ui.detectionHarvest.textContent = "—";
-  drawDetections();
-}
-
-async function resetDetectionTracker() {
-  resetDetectionFrame();
-  // The running loop is pinned to the previous generation and would exit on
-  // its own; restarting it now avoids waiting out its in-flight long poll.
-  restartDetectionResultPolling();
-  if (!state.detectorLoaded || !state.detectionSourceId) return;
-  const params = new URLSearchParams({
-    source_id: state.detectionSourceId,
-    generation: String(state.detectionGeneration),
-  });
-  try {
-    await jsonFetch(`/api/detection/reset?${params}`, { method: "POST" });
-  } catch (error) {
-    setModelStatus(`Reset tracker ไม่สำเร็จ: ${error.message}`, true);
-  }
-}
-
-function applyDetectionPayload(payload) {
-  const worker = payload.worker || {};
-  // Recorded before every guard below, and never reset: the server's revision
-  // only climbs, so remembering it is exactly what lets the next poll block.
-  // Skipping it for a result that fails a guard would leave the poll asking for
-  // a revision the server already passed, which is an unthrottled loop.
-  const revision = Number(payload.revision);
-  if (Number.isFinite(revision)) state.detectionRevision = revision;
-  ui.detectionDropped.textContent = String(payload.dropped_frames ?? worker.dropped_frames ?? 0);
-  if (worker.status && worker.status !== "ready") {
-    applyDetectionModelState(worker);
-    return;
-  }
-  const result = payload.latest_result;
-  if (!result || result.source_id !== state.detectionSourceId) return;
-  if (Number(result.generation) !== state.detectionGeneration) return;
-  if (Number(result.sequence) <= state.detectionResultSequence) return;
-
-  state.detectionResultSequence = Number(result.sequence);
-  state.detectionSourceWidth = Number(result.width) || sourceWidth();
-  state.detectionSourceHeight = Number(result.height) || sourceHeight();
-  const completedNow = performance.now();
-  state.detectionCompletions.push(completedNow);
-  state.detectionCompletions = state.detectionCompletions.filter((value) => completedNow - value <= 5000);
-  const durationMs = state.detectionCompletions.length > 1
-    ? completedNow - state.detectionCompletions[0]
-    : 0;
-  const fps = durationMs > 0
-    ? (state.detectionCompletions.length - 1) * 1000 / durationMs
-    : 0;
-  // Measured against the same clock the overlay uses to decide staleness;
-  // reading video.currentTime here under-reported it by a frame or two and
-  // disagreed with the compensation actually being applied.
-  const lagMs = Math.max(0, currentMediaTime() - Number(result.source_time_ms));
-  const timing = payload.timing || {};
-  // What one frame actually costs the worker end to end, which is what the
-  // automatic pacing has to stay just under.
-  const workerCycle = Number(result.inference_ms) + Number(timing.transport_ms || 0);
-  if (Number.isFinite(workerCycle) && workerCycle > 0) {
-    state.detectionWorkerCycleMs = smooth(state.detectionWorkerCycleMs, workerCycle);
-  }
-  ui.detectionFps.textContent = fps.toFixed(1);
-  ui.detectionLatency.textContent = String(Math.round(Number(result.inference_ms) || 0));
-  ui.detectionLag.textContent = String(Math.round(lagMs));
-  ui.detectionCapture.textContent = formatMs(state.detectionCaptureMs);
-  ui.detectionHarvest.textContent = formatMs(timing.harvest_ms);
-  applyDetectionResult(result, completedNow);
-  const objectCount = Array.isArray(result.detections) ? result.detections.length : 0;
-  let detectionSummary = `ไม่พบวัตถุในเฟรมล่าสุดที่ confidence ${ui.modelConfidence.value}`;
-  if (objectCount > 0 && lagMs > DETECTION_STALE_MS) {
-    detectionSummary = `พบ ${objectCount} วัตถุ แต่ผลช้ากว่าวิดีโอเกิน ${DETECTION_STALE_MS} ms จึงซ่อนกรอบ`;
-  } else if (objectCount > 0) {
-    detectionSummary = `พบ ${objectCount} วัตถุ`;
-  }
-  // The breakdown has to reconcile with lag, which is the ground truth; it is
-  // the only way to tell where the delay actually lives.
-  const breakdown = [
-    `rate ${(1000 / detectionIntervalMs()).toFixed(1)} Hz`,
-    `cap ${formatMs(state.detectionCaptureMs)}`,
-    `post ${formatMs(state.detectionPostMs)}`,
-    `infer ${formatMs(result.inference_ms)}`,
-    `transport ${formatMs(timing.transport_ms)}`,
-    `wait ${formatMs(timing.harvest_ms)}`,
-  ].join(" · ");
-  // Re-stated on every result: this line is rewritten continuously, so a
-  // warning shown once at load time would vanish the moment boxes arrive.
-  const mismatch = imageSizeMismatchWarning();
-  // A worker that rejects every frame stays "ready" and simply stops producing
-  // boxes. Without this the overlay just froze and the reason lived only in the
-  // server log.
-  const frameError = worker.frame_error
-    ? `เฟรมล่าสุดประมวลผลไม่สำเร็จ (${worker.frame_errors} ครั้ง): ${worker.frame_error}`
-    : "";
-  setModelStatus(
-    `${ui.modelName.textContent} · BoT-SORT · ${detectionSummary} · ${fps.toFixed(1)} FPS`
-    + ` · lag ${Math.round(lagMs)} ms · ${breakdown}`
-    + (mismatch ? ` · ${mismatch}` : "")
-    + (frameError ? ` · ${frameError}` : ""),
-    Boolean(mismatch || frameError),
-  );
-}
-
-function formatMs(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? String(Math.round(number)) : "—";
-}
-
-// video.currentTime is quantised to frame boundaries and reads behind the frame
-// actually on screen, so measuring staleness against it under-reports it and
-// the box is compensated by less than it needs. requestVideoFrameCallback gives
-// the exact presentation timestamp of the frame that was just shown; the clock
-// is carried forward from there at the current playback rate.
-function currentMediaTime() {
-  return projectMediaTime({
-    clockMs: state.mediaClockMs,
-    clockWallMs: state.mediaClockWall,
-    nowWallMs: performance.now(),
-    playbackRate: ui.video.playbackRate,
-    paused: ui.video.paused,
-    currentTimeMs: ui.video.currentTime * 1000,
-    leadMs: DETECTION_PRESENTATION_LEAD_MS,
-    stallMs: DETECTION_STALL_MS,
-  });
-}
-
-// Shared with detection-math.js so the arithmetic the page runs is the
-// arithmetic the tests exercise.
-const {
-  boxCentre, letterbox, usableGap, extrapolationReach, projectMediaTime,
-} = DetectionMath;
-
-const clampSpeed = (value) => DetectionMath.clampSpeed(value, DETECTION_MAX_SPEED);
-const median = (values) => DetectionMath.median(values);
-const smooth = (previousValue, nextValue, weight = DETECTION_VELOCITY_SMOOTHING) =>
-  DetectionMath.smooth(previousValue, nextValue, weight);
-
-function expireDetectionTracks(renderNow) {
-  for (const [key, track] of state.detectionTracks) {
-    if (track.missingSince === null) continue;
-    if (renderNow - track.missingSince >= DETECTION_FADE_MS) state.detectionTracks.delete(key);
-  }
-}
-
-function applyDetectionResult(result, completedNow) {
-  const activeKeys = new Set();
-  const sourceTimeMs = Number(result.source_time_ms);
-  const sampled = [];
-
-  // How far apart results actually land, in media time. Used to decide how far
-  // forward a linear guess can be trusted.
-  if (Number.isFinite(state.detectionLastResultMs)) {
-    const gap = sourceTimeMs - state.detectionLastResultMs;
-    if (usableGap(gap, DETECTION_MIN_SAMPLE_GAP_MS, DETECTION_MAX_SAMPLE_GAP_MS)) {
-      state.detectionResultGapMs = smooth(state.detectionResultGapMs, gap);
-    }
-  }
-  state.detectionLastResultMs = sourceTimeMs;
-
-  (result.detections || []).forEach((detection, index) => {
-    const untracked = detection.track_id === null || detection.track_id === undefined;
-    const key = untracked
-      ? `untracked:${result.sequence}:${index}`
-      : `track:${detection.track_id}`;
-    activeKeys.add(key);
-    const existing = state.detectionTracks.get(key);
-    const current = { ...detection, sourceTimeMs };
-    const previous = existing?.current && existing.current.sourceTimeMs < current.sourceTimeMs
-      ? existing.current
-      : existing?.previous || null;
-
-    let velocityX = null;
-    let velocityY = null;
-    const gap = previous ? current.sourceTimeMs - previous.sourceTimeMs : 0;
-    if (usableGap(gap, DETECTION_MIN_SAMPLE_GAP_MS, DETECTION_MAX_SAMPLE_GAP_MS)) {
-      velocityX = smooth(
-        existing?.velocityX,
-        clampSpeed((boxCentre(current, "x") - boxCentre(previous, "x")) / gap),
-      );
-      velocityY = smooth(
-        existing?.velocityY,
-        clampSpeed((boxCentre(current, "y") - boxCentre(previous, "y")) / gap),
-      );
-      // A box with a malformed coordinate yields no usable speed. Feeding that
-      // into the median as a zero would invent a stationary object and pull the
-      // camera estimate toward standing still.
-      if (Number.isFinite(velocityX) && Number.isFinite(velocityY)) {
-        sampled.push([velocityX, velocityY]);
-      }
-    }
-
-    state.detectionTracks.set(key, {
-      previous,
-      current,
-      missingSince: null,
-      untracked,
-      velocityX,
-      velocityY,
-    });
-  });
-
-  // When the aircraft moves, every object in frame translates together, so the
-  // median across objects estimates that shared motion far more reliably than
-  // two samples of any single box. The median rather than the mean so that a
-  // genuinely moving vehicle among stationary ones does not drag the estimate.
-  if (!sampled.length && state.detectionCameraVelocity) {
-    // Nothing measurable this round: a single-object scene, every box on its
-    // first sighting. Holding the last pan indefinitely kept sliding every box
-    // off its object after the camera had already stopped, so it decays toward
-    // rest instead of persisting until the next reset.
-    state.detectionCameraVelocity = {
-      x: smooth(state.detectionCameraVelocity.x, 0, DETECTION_CAMERA_SMOOTHING),
-      y: smooth(state.detectionCameraVelocity.y, 0, DETECTION_CAMERA_SMOOTHING),
-    };
-  }
-  if (sampled.length) {
-    state.detectionCameraVelocity = {
-      x: smooth(
-        state.detectionCameraVelocity?.x,
-        median(sampled.map((v) => v[0])),
-        DETECTION_CAMERA_SMOOTHING,
-      ),
-      y: smooth(
-        state.detectionCameraVelocity?.y,
-        median(sampled.map((v) => v[1])),
-        DETECTION_CAMERA_SMOOTHING,
-      ),
-    };
-  }
-
-  // A box seen only once has no velocity of its own and would sit still while
-  // everything around it moved. That is every newly assigned track id, and every
-  // detection the tracker never identified at all -- those get a fresh key each
-  // result and so can never accumulate a second sample. The camera estimate is
-  // the best available guess for them.
-  const camera = state.detectionCameraVelocity;
-  if (camera) {
-    for (const key of activeKeys) {
-      const track = state.detectionTracks.get(key);
-      if (track && !Number.isFinite(track.velocityX)) {
-        track.velocityX = camera.x;
-        track.velocityY = camera.y;
-      }
-    }
-  }
-
-  for (const [key, track] of state.detectionTracks) {
-    if (!activeKeys.has(key) && track.missingSince === null) {
-      track.missingSince = completedNow;
-    }
-  }
-}
-
-// Results used to arrive only piggy-backed on the next frame POST, which meant
-// a finished detection waited a whole submission interval before it could be
-// drawn. This loop runs independently of submission and blocks on the server
-// until a newer result exists, so a result reaches the canvas as soon as the
-// worker publishes it.
-// Each loop carries the token it was started with. A boolean could not do this
-// job: stopping only flips it, while the running loop is parked inside a fetch
-// and cannot observe the change until that returns — so a stop immediately
-// followed by a start left the old loop alive beside the new one, and every
-// reset that did not also bump the generation added another.
-function startDetectionResultPolling() {
-  const token = ++state.detectionPollToken;
-  pollDetectionResultLoop(token);
-}
-
-function stopDetectionResultPolling() {
-  // Only invalidates the token. Cancelling the pending delay would leave its
-  // promise unresolved and strand the loop mid-await forever; letting it expire
-  // costs one short timer and the loop then sees the token and exits.
-  ++state.detectionPollToken;
-}
-
-function pollingAbandoned(token) {
-  return token !== state.detectionPollToken || !state.detectorLoaded;
-}
-
-async function pollDetectionResultLoop(token) {
-  while (!pollingAbandoned(token)) {
-    try {
-      const params = new URLSearchParams({
-        source_time_ms: (ui.video.currentTime * 1000).toFixed(3),
-        after_revision: String(state.detectionRevision),
-        wait_ms: "250",
-      });
-      const payload = await jsonFetch(`/api/detection/result?${params}`);
-      if (pollingAbandoned(token)) return;
-      try {
-        applyDetectionPayload(payload);
-      } catch (error) {
-        // Distinguished from a transport failure on purpose: retrying the same
-        // malformed payload at 2 Hz forever, silently, is not a recovery.
-        console.error("Discarding a detection payload that could not be applied", error);
-      }
-      // A backstop, not the pacing mechanism: the server is supposed to hold
-      // the request until there is something new. If it ever returns instantly
-      // — a bug, a version mismatch, an unexpected payload — this is what keeps
-      // the page from turning into a flood against the loop that also runs OCR.
-      await pollDelay(DETECTION_POLL_FLOOR_MS);
-    } catch (error) {
-      if (pollingAbandoned(token)) return;
-      await pollDelay(DETECTION_POLL_BACKOFF_MS);
-    }
-  }
-}
-
-function pollDelay(ms) {
-  return new Promise((resolve) => {
-    state.detectionPollTimer = window.setTimeout(resolve, ms);
-  });
-}
-
-function restartDetectionResultPolling() {
-  stopDetectionResultPolling();
-  if (state.detectorLoaded) startDetectionResultPolling();
-}
-
-function startDetectionRenderLoop() {
-  if (state.detectionRenderFrame !== null) return;
-  const render = (now) => {
-    drawDetections(now);
-    state.detectionRenderFrame = window.requestAnimationFrame(render);
-  };
-  state.detectionRenderFrame = window.requestAnimationFrame(render);
-}
-
-function drawDetections(renderNow = performance.now()) {
-  const stageWidth = ui.videoStage.clientWidth;
-  const stageHeight = ui.videoStage.clientHeight;
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  const requiredWidth = Math.max(1, Math.round(stageWidth * pixelRatio));
-  const requiredHeight = Math.max(1, Math.round(stageHeight * pixelRatio));
-  if (ui.detectionOverlay.width !== requiredWidth || ui.detectionOverlay.height !== requiredHeight) {
-    ui.detectionOverlay.width = requiredWidth;
-    ui.detectionOverlay.height = requiredHeight;
-  }
-  const context = ui.detectionOverlay.getContext("2d");
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  context.clearRect(0, 0, stageWidth, stageHeight);
-  // Expiry runs before anything that can return early. It used to sit inside the
-  // draw loop, past both guards below, so switching the overlay off and then
-  // scrubbing grew the map for the life of the page — forced submissions keep
-  // arriving regardless of the toggle, and every untracked detection takes a
-  // fresh key it can never be given a second sample under.
-  expireDetectionTracks(renderNow);
-  if (!state.detectorLoaded || !ui.detectionToggle.checked || !state.detectionTracks.size) return;
-
-  const frameWidth = state.detectionSourceWidth || sourceWidth();
-  const frameHeight = state.detectionSourceHeight || sourceHeight();
-  if (!frameWidth || !frameHeight) return;
-  const { offsetX, offsetY, scaleX, scaleY } = letterbox(
-    stageWidth, stageHeight, frameWidth, frameHeight,
-  );
-  context.lineWidth = 2;
-  context.font = "600 12px ui-monospace, SFMono-Regular, Consolas, monospace";
-  context.textBaseline = "top";
-
-  // prefers-reduced-motion used to disable prediction entirely. That query is
-  // about decorative animation causing discomfort; a tracking box is neither
-  // decorative nor calmer for being wrong. Honouring it here just froze the
-  // compensation and left every box trailing its object.
-  const currentMediaTimeMs = currentMediaTime();
-  for (const [key, track] of state.detectionTracks) {
-    let opacity = 1;
-    if (track.missingSince !== null) {
-      opacity = Math.max(0, 1 - (renderNow - track.missingSince) / DETECTION_FADE_MS);
-      if (opacity <= 0) continue;
-    }
-    const detection = track.current;
-    const mediaAgeMs = currentMediaTimeMs - detection.sourceTimeMs;
-    if (mediaAgeMs > DETECTION_STALE_MS || mediaAgeMs < -100) continue;
-    // A linear guess holds for roughly two result intervals; past that the box
-    // overshoots on every turn, which reads worse than trailing. The reach is
-    // therefore tied to the observed cadence rather than to the lag.
-    const reach = extrapolationReach(
-      state.detectionResultGapMs,
-      DETECTION_MIN_EXTRAPOLATION_MS,
-      DETECTION_MAX_EXTRAPOLATION_MS,
-    );
-    const extrapolationMs = sourceLive()
-      ? Math.min(reach, Math.max(0, mediaAgeMs))
-      : 0;
-    // Velocity is smoothed as results arrive, and falls back to the shared
-    // camera motion for boxes with only one sample. Only the centre moves:
-    // BoT-SORT's jitter is mostly in the box dimensions, so predicting the
-    // corners separately amplified the noisiest signal and made boxes pulse
-    // while they drifted.
-    const rawWidth = Number(detection.x2) - Number(detection.x1);
-    const rawHeight = Number(detection.y2) - Number(detection.y1);
-    const velocityX = Number.isFinite(track.velocityX) ? track.velocityX : 0;
-    const velocityY = Number.isFinite(track.velocityY) ? track.velocityY : 0;
-    const centreX = boxCentre(detection, "x") + velocityX * extrapolationMs;
-    const centreY = boxCentre(detection, "y") + velocityY * extrapolationMs;
-    const x1 = Math.min(frameWidth, Math.max(0, centreX - rawWidth / 2));
-    const y1 = Math.min(frameHeight, Math.max(0, centreY - rawHeight / 2));
-    const x2 = Math.min(frameWidth, Math.max(x1 + 1, centreX + rawWidth / 2));
-    const y2 = Math.min(frameHeight, Math.max(y1 + 1, centreY + rawHeight / 2));
-    const x = offsetX + x1 * scaleX;
-    const y = offsetY + y1 * scaleY;
-    const width = Math.max(1, (x2 - x1) * scaleX);
-    const height = Math.max(1, (y2 - y1) * scaleY);
-    const hue = (Number(detection.class_id) * 67 + 88) % 360;
-    const color = `hsl(${hue} 88% 62%)`;
-    // The track id is BoT-SORT's identity for this object across frames. It is
-    // off by default because it is debugging information: it matters when you
-    // are checking whether the tracker is holding on to an object, and is
-    // noise the rest of the time.
-    const trackLabel = !ui.trackIdToggle.checked
-      || detection.track_id === null
-      || detection.track_id === undefined
-      ? ""
-      : ` #${detection.track_id}`;
-    const label = `${detection.label}${trackLabel} ${(Number(detection.confidence) * 100).toFixed(0)}%`;
-    const metrics = context.measureText(label);
-    const labelWidth = metrics.width + 10;
-    const labelHeight = 20;
-    const labelY = Math.max(offsetY, y - labelHeight);
-    context.globalAlpha = opacity;
-    context.strokeStyle = color;
-    context.strokeRect(x, y, width, height);
-    context.fillStyle = "rgba(4,8,10,.82)";
-    context.fillRect(x, labelY, labelWidth, labelHeight);
-    context.fillStyle = color;
-    context.fillText(label, x + 5, labelY + 3);
-    context.globalAlpha = 1;
-  }
-}
-
 
 // ---------------------------------------------------------------------------
 // Capture
@@ -1476,7 +1037,7 @@ const MAX_CAPTURE_QUEUE = 3;
 
 function requestCapture() {
   if (!sourceReady()) {
-    setCaptureStatus("ยังไม่มีภาพให้เก็บ เลือกวิดีโอหรือเปิดสตรีมก่อน", true);
+    setCaptureStatus("ยังไม่มีภาพให้เก็บ เลือกวิดีโอก่อน", true);
     return false;
   }
   if (state.captureQueued >= MAX_CAPTURE_QUEUE) return false;
@@ -1516,19 +1077,17 @@ async function takeCaptureShot() {
   try {
     const params = new URLSearchParams({
       session: captureSessionName(),
-      source_time_ms: Math.max(0, currentMediaTime()).toFixed(3),
+      source_time_ms: Math.max(0, (ui.video.currentTime || 0) * 1000).toFixed(3),
+      session_id: state.sessionId,
+      video: state.video.id,
     });
-    params.set("session_id", state.sessionId);
-    params.set("source", state.file ? state.file.name : "browser");
-    const options = {
-      method: "POST",
-      headers: { "Content-Type": "image/jpeg" },
-      body: await captureFullFrame(),
-    };
-    // The server does not answer until the frame has been saved, put through
-    // best.pt and re-read from the file, so by the time this returns the shot
-    // is finished rather than merely stored.
-    const shot = await jsonFetch(`/api/capture/shot?${params}`, options);
+    // Boxes come from the render being played, or the one last chosen for this
+    // video. The frame itself is always read from the original on the server:
+    // the rendered picture has boxes over the OSD digits OCR reads.
+    if (state.activeRender) params.set("render", state.activeRender.render_id);
+    // The server does not answer until the frame has been read, recognised and
+    // re-read from the saved file, so by the time this returns it is finished.
+    const shot = await jsonFetch(`/api/capture/shot?${params}`, { method: "POST" });
     state.captureCount += 1;
     flashCapture();
     await refreshShots(shot.frame_index);
@@ -1540,25 +1099,6 @@ async function takeCaptureShot() {
     state.captureFailures += 1;
     setCaptureStatus(`Capture ไม่สำเร็จ: ${error.message}`, true);
   }
-}
-
-// The whole frame, not the ROI-only montage the OCR path sends. A capture that
-// kept only the strips it read would be unable to answer the question it exists
-// for, which is what the rest of the picture looked like at that moment.
-function captureFullFrame() {
-  const width = sourceWidth();
-  const height = sourceHeight();
-  ui.canvas.width = width;
-  ui.canvas.height = height;
-  const context = ui.canvas.getContext("2d", { alpha: false });
-  context.drawImage(sourceElement(), 0, 0, width, height);
-  return new Promise((resolve, reject) => {
-    ui.canvas.toBlob(
-      (blob) => blob ? resolve(blob) : reject(new Error("สร้างภาพเฟรมไม่สำเร็จ")),
-      "image/jpeg",
-      0.95,
-    );
-  });
 }
 
 function startCaptureHold() {
@@ -1726,13 +1266,13 @@ function updateShotProgress() {
   ui.shotTotal.textContent = `${total} ภาพ`;
   ui.shotWorking.hidden = working === 0;
   ui.shotWorkingText.textContent = state.captureQueued
-    ? `กำลังผ่านโมเดล ${state.pendingCaptures} · รออีก ${state.captureQueued}`
-    : `กำลังผ่านโมเดล ${state.pendingCaptures}`;
+    ? `กำลังอ่านค่า ${state.pendingCaptures} · รออีก ${state.captureQueued}`
+    : `กำลังอ่านค่า ${state.pendingCaptures}`;
   const ready = total - unprocessed;
   ui.shotReady.hidden = ready === 0;
   ui.shotReady.textContent = `พร้อมส่ง ${ready}`;
   ui.shotUnprocessed.hidden = unprocessed === 0;
-  ui.shotUnprocessed.textContent = `ไม่ได้ผ่านโมเดล ${unprocessed}`;
+  ui.shotUnprocessed.textContent = `ไม่มีกรอบ AI ${unprocessed}`;
   // Counted rather than only flashed in the status line: a failure during a
   // long hold scrolls past, and the operator is left believing they have more
   // frames than they got.
@@ -1822,7 +1362,7 @@ function renderShotStrip() {
     card.append(spinner);
     const label = document.createElement("span");
     label.className = "shot-thumb-label";
-    label.textContent = i < state.pendingCaptures ? "กำลังผ่านโมเดล" : "รอคิว";
+    label.textContent = i < state.pendingCaptures ? "กำลังอ่านค่า" : "รอคิว";
     card.append(label);
     ui.shotStrip.append(card);
   }
@@ -1871,7 +1411,8 @@ function buildShotThumb(shot) {
   if (shot.stage && shot.stage !== "ready") {
     const badge = document.createElement("span");
     badge.className = "shot-thumb-badge";
-    badge.textContent = shot.stage === "no_model" ? "ไม่มีโมเดล" : "โมเดลไม่ตอบ";
+    badge.textContent = { no_render: "ไม่มี AI", no_model: "ไม่มีโมเดล" }[shot.stage]
+      || "โมเดลไม่ตอบ";
     card.append(badge);
   }
   return card;
@@ -1942,6 +1483,9 @@ function selectShot(frameIndex) {
 
 function describeShotDetections(detections) {
   if (!detections) return "";
+  if (detections.status === "no_render") {
+    return "ยังไม่ได้ประมวลผลด้วย AI — ภาพนี้ไม่มีกรอบ";
+  }
   if (detections.status === "no_model") {
     return "ยังไม่ได้โหลดโมเดล — ภาพนี้ไม่ได้ผ่าน best.pt";
   }
@@ -2088,7 +1632,7 @@ function formatValue(value, fieldId, unit) {
 }
 
 function formatDms(value, degreeDigits, decimalPlaces) {
-  return DetectionMath.formatDms(value, degreeDigits, decimalPlaces).text;
+  return TelemetryFormat.formatDms(value, degreeDigits, decimalPlaces).text;
 }
 
 // One row per field per captured shot.
@@ -2169,7 +1713,7 @@ function csvCell(value) {
 }
 
 function buildDownloadName(extension) {
-  const base = (state.file?.name || "telemetry").replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "_");
+  const base = (state.video?.name || "telemetry").replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "_");
   return `${base}_ocr.${extension}`;
 }
 
@@ -2205,12 +1749,17 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
-ui.chooseVideoButton.addEventListener("click", () => ui.videoInput.click());
-// The browser's own fullscreen still works on the video element itself; the
-// overlay is a sibling of it rather than a child, so it does not come along.
-// Redraw whenever anything leaves fullscreen so the boxes match the new size.
-document.addEventListener("fullscreenchange", () => drawDetections());
-ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
+ui.videoSelect.addEventListener("change", () => selectVideo(ui.videoSelect.value));
+ui.viewOriginal.addEventListener("click", () => chooseView("original"));
+ui.viewRendered.addEventListener("click", () => chooseView("rendered"));
+ui.modelSelect.addEventListener("change", onRenderChoiceChange);
+for (const control of [ui.renderConfidence, ui.renderImageSize, ui.renderStride]) {
+  control.addEventListener("change", onRenderChoiceChange);
+}
+ui.renderButton.addEventListener("click", onRenderButton);
+ui.renderCancelButton.addEventListener("click", cancelRender);
+ui.manageModelsButton.addEventListener("click", openModelManager);
+ui.modelDialogClose.addEventListener("click", () => ui.modelDialog.close());
 ui.shotClearSelection.addEventListener("click", () => clearChosen());
 ui.shotDeleteSelection.addEventListener("click", () => deleteChosenShots());
 ui.shotImage.addEventListener("click", () => openShotOverlay());
@@ -2245,90 +1794,29 @@ ui.captureButton.addEventListener("keydown", (event) => {
 });
 ui.video.addEventListener("loadedmetadata", () => {
   ui.durationTime.textContent = formatTime(ui.video.duration);
-  ui.fileDetails.textContent = `${formatBytes(state.file.size)} · ${ui.video.videoWidth}×${ui.video.videoHeight} · ${formatTime(ui.video.duration)}`;
   updateCaptureAvailability();
   ui.resetButton.disabled = false;
-  drawDetections();
-  startFrameLoop();
-  startDetectionRenderLoop();
 });
-ui.video.addEventListener("loadeddata", async () => {
-  if (!state.detectorLoaded || !ui.detectionToggle.checked) return;
-  await resetDetectionTracker();
-  submitDetectionFrame(true);
-});
-ui.video.addEventListener("pause", () => {
-  updatePlaybackTime();
-  // Playing a video no longer starts OCR; capturing does.
-  if (ui.detectionToggle.checked) submitDetectionFrame(true);
-});
+ui.video.addEventListener("pause", updatePlaybackTime);
 ui.video.addEventListener("timeupdate", updatePlaybackTime);
-ui.video.addEventListener("seeked", async () => {
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  await resetDetectionTracker();
+ui.video.addEventListener("seeked", () => {
+  updatePlaybackTime();
+  // Temporal voting assumes consecutive frames; a jump starts it afresh.
   resetSession(false);
-  if (state.detectorLoaded) submitDetectionFrame(true);
 });
-ui.video.addEventListener("error", () => showToast("Browser ไม่สามารถเล่นวิดีโอนี้ได้ ลองใช้ MP4 (H.264) หรือ WebM"));
-ui.modelSelect.addEventListener("change", () => selectDetectionModel(ui.modelSelect.value));
-ui.detectionToggle.addEventListener("change", () => {
-  state.lastDetectionMs = -Infinity;
-  drawDetections();
-  if (ui.detectionToggle.checked && ui.video.readyState >= 2) submitDetectionFrame(true);
+ui.video.addEventListener("error", () => {
+  if (!ui.video.getAttribute("src")) return;
+  showToast(
+    state.view === "original"
+      ? "เบราว์เซอร์เล่นวิดีโอต้นฉบับนี้ไม่ได้ — ประมวลผลด้วย AI แล้วเล่นวิดีโอ AI ซึ่งเข้ารหัสเป็น H.264 เสมอ"
+      : "เล่นวิดีโอ AI ไม่ได้ — ลบผลนี้แล้วประมวลผลใหม่",
+  );
 });
-ui.detectionRate.addEventListener("change", () => { state.lastDetectionMs = -Infinity; });
-ui.modelConfidence.addEventListener("change", async () => {
-  const value = Math.min(1, Math.max(0.05, Number(ui.modelConfidence.value) || 0.45));
-  ui.modelConfidence.value = value.toFixed(2);
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  await resetDetectionTracker();
-  if (state.detectorLoaded && ui.video.readyState >= 2) submitDetectionFrame(true);
-});
-ui.modelImageSize.addEventListener("change", async () => {
-  // A deliberate choice wins over the trained-size default from then on.
-  state.detectionImageSizeTouched = true;
-  await applyImageSizeChange();
-});
-// Only changes what the overlay writes, so no tracker reset and no need to wait
-// for another detection result -- the render loop picks it up on the next frame.
-ui.trackIdToggle.addEventListener("change", () => drawDetections());
-ui.restartWorkerButton.addEventListener("click", restartDetectionWorker);
-ui.clearModelButton.addEventListener("click", clearDetectionModel);
 ui.resetButton.addEventListener("click", () => resetSession(true));
 ui.downloadJsonButton.addEventListener("click", downloadJsonl);
 ui.downloadCsvButton.addEventListener("click", downloadCsv);
 ui.clearLogButton.addEventListener("click", clearLog);
-
-for (const eventName of ["dragenter", "dragover"]) {
-  ui.videoStage.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    ui.videoStage.classList.add("is-dragging");
-  });
-}
-for (const eventName of ["dragleave", "drop"]) {
-  ui.videoStage.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    ui.videoStage.classList.remove("is-dragging");
-  });
-}
-ui.videoStage.addEventListener("drop", (event) => handleFile(event.dataTransfer.files[0]));
-// Wrapped, not passed directly: both callbacks supply an argument (an entries
-// array, an Event), which would land in drawDetections's renderNow parameter --
-// a default only applies to undefined -- and turn the fade arithmetic into NaN,
-// repainting expiring boxes at full opacity instead of fading them.
-if ("ResizeObserver" in window) new ResizeObserver(() => drawDetections()).observe(ui.videoStage);
-else window.addEventListener("resize", () => drawDetections());
-window.addEventListener("beforeunload", () => {
-  if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
-  if (state.fallbackTimer) window.clearInterval(state.fallbackTimer);
-  stopDetectionResultPolling();
-  stopModelStatusPolling();
-  if (state.detectionEncoder) state.detectionEncoder.terminate();
-  if (state.detectionRenderFrame !== null) window.cancelAnimationFrame(state.detectionRenderFrame);
-});
+window.addEventListener("beforeunload", () => stopRenderPoll());
 
 initializePwa();
-startDetectionRenderLoop();
 initialize();

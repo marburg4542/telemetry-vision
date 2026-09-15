@@ -217,7 +217,7 @@ def run_render(
                         tracker="botsort.yaml",
                     )
                     boxes = [_plain(item) for item in detections]
-                    marked = annotate_frame(frame, _with_track_ids(boxes), width, height)
+                    marked = annotate_frame(frame, with_track_ids(boxes), width, height)
                     if (out_width, out_height) != (width, height):
                         marked = marked[:out_height, :out_width]
                     encoder.write(marked)
@@ -691,7 +691,7 @@ def _plain(detection: Any) -> dict[str, Any]:
     }
 
 
-def _with_track_ids(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def with_track_ids(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     labelled = []
     for box in boxes:
         if box.get("track_id") is None:
