@@ -1,10 +1,10 @@
 # Codebase Walkthrough — telemetry-vision
 
 **เอกสารสรุปความเข้าใจซอร์สโค้ด** สำหรับผู้ที่กำลังจะเข้ามาพัฒนาต่อ
-อ้างอิงจากโค้ดที่ commit `c238deb` · เวอร์ชัน `0.5.0` · Python 3.10–3.12
+อ้างอิงจากโค้ดหลังถอดโหมดสตรีมออกจากหน้าเว็บ · เวอร์ชัน `0.5.0` · Python 3.10–3.12
 
-> เลขบรรทัดในเอกสารนี้อ้างจากไฟล์จริง ณ commit ข้างต้น หากแก้โค้ดแล้วเลขจะเลื่อน
-> แต่ชื่อฟังก์ชันและคลาสยังใช้ค้นหาได้ ส่วนตารางจำนวนบรรทัดในหัวข้อ 2.2
+> เลขบรรทัดในเอกสารนี้เป็นค่าโดยประมาณและจะเลื่อนเมื่อแก้โค้ด
+> ใช้ชื่อฟังก์ชันและคลาสค้นหาแทน ส่วนตารางจำนวนบรรทัดในหัวข้อ 2.2
 > สร้างจากไฟล์บนดิสก์จริง ไม่ได้พิมพ์มือ
 
 ---
@@ -51,7 +51,7 @@
 | Extra | ไลบรารี | ใช้ทำอะไร |
 |---|---|---|
 | `ocr` | **PaddleOCR** `>=3.7,<3.8` | รู้จำข้อความ ใช้เฉพาะโมดูล **recognition** (`PP-OCRv6_tiny_rec`) ไม่ใช้ส่วน text detection |
-| `web` | **aiohttp** `>=3.10,<4` | เว็บเซิร์ฟเวอร์แบบ async ทั้ง REST API และ MJPEG streaming |
+| `web` | **aiohttp** `>=3.10,<4` | เว็บเซิร์ฟเวอร์แบบ async สำหรับ REST API และ long-poll |
 | `ai` | **Ultralytics** `>=8.3,<9` | YOLOv8 ตรวจจับยานพาหนะ + ติดตามด้วย BoT-SORT |
 | `ai` | **dill**, **lap** | dill = serialize ของ Ultralytics · lap = Linear Assignment Problem สำหรับ tracker |
 | `report` | **pypdf**, **reportlab** | สร้างรายงาน PDF (อยู่ในแพ็กเกจ `vision_lab`) |
@@ -102,10 +102,10 @@ vision-lab     →  vision_lab.cli:main         ← เครื่องมื�
 ## 2.2 แผนผังไฟล์และความรับผิดชอบ
 
 ```
-src/telemetry_ocr/                       (24 ไฟล์ · 9,087 บรรทัด)
+src/telemetry_ocr/                       (23 ไฟล์ · 8,624 บรรทัด)
 │
 ├─ __main__.py            5    เรียก cli.main()
-├─ cli.py               500    ★ Entry point · argparse · เชื่อมทุกคำสั่งเข้ากับโมดูล
+├─ cli.py               522    ★ Entry point · argparse · เชื่อมทุกคำสั่งเข้ากับโมดูล
 ├─ errors.py             19    ชนิด exception ของโปรเจค
 │
 ├── ชั้นตั้งค่า ──────────────────────────────────────────────
@@ -116,7 +116,7 @@ src/telemetry_ocr/                       (24 ไฟล์ · 9,087 บรรท�
 ├─ ocr.py               167    ห่อ PaddleOCR · ซ่อน torch · recognizer หลายตัวขนานกัน
 ├─ validation.py        357    ★ ทำให้เป็นมาตรฐาน · regex · พิสัยค่า · ซ่อมข้อความที่อ่านผิด
 ├─ temporal.py          149    โหวตข้ามเฟรม (fast 2/3 · stable 3/5)
-├─ pipeline.py          753    ★ หัวใจ: VideoDecoder + TelemetryPipeline
+├─ pipeline.py          736    ★ หัวใจ: VideoDecoder + TelemetryPipeline
 ├─ output.py            107    TelemetryRecord + เขียน JSONL/CSV
 │
 ├── ชั้นตรวจจับวัตถุ (แยกโปรเซส) ────────────────────────────
@@ -126,24 +126,23 @@ src/telemetry_ocr/                       (24 ไฟล์ · 9,087 บรรท�
 │
 ├── ชั้นเซสชัน/บันทึกภาพ ──────────────────────────────────
 ├─ capture.py           408    รูปแบบเซสชันบนดิสก์ · เขียน/อ่าน manifest
-├─ capture_service.py   903    ★ CaptureSession · ensemble · วาดกรอบ · ตรวจสอบซ้ำ
+├─ capture_service.py   900    ★ CaptureSession · ensemble · วาดกรอบ · ตรวจสอบซ้ำ
 ├─ extract.py           168    OCR ย้อนหลังจากเซสชันที่บันทึกไว้
 │
-├── ชั้นสตรีมและเว็บ ─────────────────────────────────────
-├─ stream_service.py    327    เธรดจัดการ RTSP · เก็บเฟรมล่าสุด + ค่าที่อ่านได้
-├─ webapp.py          2,118    ★ ใหญ่ที่สุด: aiohttp app · 30 routes · middleware · state
+├── ชั้นเว็บ ─────────────────────────────────────
+├─ webapp.py          1,918    ★ ใหญ่ที่สุด: aiohttp app · 25 routes · middleware · state
 ├─ public_share.py     207    เผยแพร่ภาพชั่วคราวด้วย token (ให้ LINE ดึงได้)
 ├─ quick_tunnel.py     262    คุม cloudflared quick tunnel
 ├─ line_client.py      748    จัดรูปแบบข้อความ · แปลง DMS · push เข้า LINE
 │
 ├── เครื่องมือเสริม ────────────────────────────────────────
-├─ calibration.py      325    กวาดสูตรปรับปรุงภาพทุกแบบ เลือกที่ดีที่สุด
+├─ calibration.py      387    กวาดสูตรปรับปรุงภาพทุกแบบ เลือกที่ดีที่สุด
 ├─ preview.py           79    วาดกรอบ ROI ลงภาพเพื่อตรวจตำแหน่ง
 │
-└── web_static/                 (3,917 บรรทัด)
-   ├─ index.html       291    โครงหน้า
-   ├─ app.js         2,567    ★ ตรรกะหน้าเว็บทั้งหมด
-   ├─ app.css          799    สไตล์
+└── web_static/                 (3,646 บรรทัด)
+   ├─ index.html       277    โครงหน้า
+   ├─ app.js         2,334    ★ ตรรกะหน้าเว็บทั้งหมด
+   ├─ app.css          775    สไตล์
    ├─ detection-math.js 142   คณิตศาสตร์ letterbox/scale (แชร์กับเทสต์ Node)
    └─ service-worker.js  83   PWA offline shell
 
@@ -319,17 +318,16 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 > ทางเดียวที่ได้ผลคือ `CAP_PROP_*_TIMEOUT_MSEC` — ก่อนแก้เคยค้าง 4 นาทีเมื่อกล้องเงียบ
 
 ### `TelemetryPipeline.run(...) -> PipelineSummary` (บรรทัด 390)
-- **Input:** `video_path`, `jsonl_path`, `csv_path` + `max_seconds`, `on_frame`, `on_records`, `stop_event`
+- **Input:** `video_path`, `jsonl_path`, `csv_path` + `max_seconds`, `on_frame`, `stop_event`
 - **ทำอะไร:** ลูปหลักของโหมด `run` — ดึงเฟรมจาก decoder ตามอัตรา `ocr_hz`
   เรียก `process_frame` แล้วเขียนผลผ่าน `RecordWriter`
   - `on_frame` = ช่องให้ฝั่ง detection รับเฟรมเดียวกันไป **โดยที่โมดูลนี้ไม่ต้องรู้จัก torch**
-  - `on_records` = ช่องให้เว็บรับผลแบบเรียลไทม์ (สตรีมไม่มีจุดจบให้อ่านไฟล์ย้อน)
   - `stop_event` = ให้ผู้เรียกที่ไม่ใช่คอนโซลสั่งหยุดได้
 - **Output:** `PipelineSummary` (จำนวนเฟรม, latency, ฯลฯ)
 
 ### `TelemetryPipeline.process_frame(packet)` (บรรทัด 558)
 ห่อ `_process_frame_locked` ด้วย **`_RECOGNIZER_LOCK`** (บรรทัด 27)
-เพราะ PaddleOCR ไม่รับประกัน thread-safety และมีอย่างน้อยสองเธรดที่อยากใช้ (สตรีม + การบันทึกภาพ)
+เพราะ PaddleOCR ไม่รับประกัน thread-safety และมีอย่างน้อยสองเธรดที่อยากใช้ (การบันทึกภาพ + การตรวจซ้ำจากไฟล์ภาพ)
 
 ### `TelemetryPipeline._process_frame_locked(packet)` (บรรทัด 569) — **อ่านฟังก์ชันนี้ให้เข้าใจ**
 - **Input:** `FramePacket(frame, frame_index, source_time_ms, received_at)`
@@ -423,7 +421,7 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 > **`X-Telemetry-OCR` มีไว้ทำไม:** request ที่มี custom header จะไม่ใช่ CORS simple request
 > เบราว์เซอร์จึงต้องส่ง preflight มาก่อน และ guard จะปฏิเสธได้
 > ถ้าไม่มีชั้นนี้ เว็บใดก็ตามที่ผู้ใช้เปิดอยู่จะ POST ไปที่ `/api/detection/model` ได้
-> ซึ่งเป็นเส้นทางที่โหลดไฟล์ `.pt` ผ่าน `torch.load` (pickle)
+> ซึ่งเป็นเส้นทางที่สั่งให้โหลด checkpoint ผ่าน `torch.load` (pickle)
 >
 > **GET ไม่ต้องมี header โดยตั้งใจ** เพราะ `<img>` ส่ง custom header ไม่ได้ — ถ้าบังคับ ภาพในหน้าเว็บจะไม่ขึ้น
 
@@ -436,17 +434,12 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 | `GET /api/capture/image` | `capture_image` (1301) | ส่งภาพ (มี `annotated=1`, `thumb=1`) |
 | `DELETE /api/capture/shot` | `capture_discard` (1266) | ลบภาพและ record ที่เกี่ยวข้อง |
 | `POST /api/line/send` | `line_send` (1373) | ส่งเข้า LINE (rate limit 3 วิ · สูงสุด 4 ภาพ) |
-| `GET /api/stream/mjpeg` | `stream_mjpeg` (928) | ภาพสดแบบ `multipart/x-mixed-replace` |
-| `GET /api/stream/telemetry` | `stream_telemetry` (884) | long-poll ค่าที่อ่านได้ |
-| `POST /api/detection/model` | `upload_detection_model` (464) | อัปโหลด `.pt` แล้ว spawn worker |
+| `GET /api/detection/models` | `detection_models` | รายการโมเดลในทะเบียน `configs/paths.yaml` |
+| `POST /api/detection/model` | `select_detection_model` | เลือกโมเดลตามชื่อในทะเบียน แล้ว spawn worker |
 
-### `capture_shot(request)` (บรรทัด 1129) — เส้นทางที่ซับซ้อนที่สุด
-สองกรณีตามแหล่งวิดีโอ
-- **สตรีมกำลังรัน:** ใช้ `service.current_reading()` ดึงเฟรม+ค่าที่อ่านแล้วมาพร้อมกัน**ใต้ล็อกเดียว**
-  (ถ้าดึงแยกกัน จะได้เฟรมกับค่าที่คนละช่วงเวลา)
-- **ไฟล์ในเบราว์เซอร์:** รับ JPEG จาก body แล้ว OCR ที่นี่
-
-จากนั้นทั้งสองกรณี → `detect_on_frame` → `session.save` → `verify_shot` → `record_verification`
+### `capture_shot(request)` — เส้นทางที่ซับซ้อนที่สุด
+รับ JPEG ของเฟรมที่หน้าเว็บกำลังเล่นจาก body แล้ว OCR ที่นี่
+จากนั้น → `detect_on_frame` → `session.save` → `verify_shot` → `record_verification`
 
 ---
 
@@ -514,7 +507,7 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
 
 # 4. ลำดับการทำงานและการไหลของข้อมูล
 
-## 4.1 เส้นทางเว็บ + สตรีม RTSP (ที่ใช้งานจริงบ่อยที่สุด)
+## 4.1 เส้นทางเว็บ (ที่ใช้งานจริงบ่อยที่สุด)
 
 ```
 [1] ผู้ใช้รัน:  telemetry-ocr web --config configs/roi_calibrated_cuda.yaml
@@ -522,47 +515,26 @@ src/vision_lab/                          (9 ไฟล์ · 2,829 บรรท�
      └─► cli.py:main()
           ├─ load_config()            → AppConfig            [config.py]
           ├─ create_recognizer()      → PaddleRecognizer     [ocr.py]
-          └─ run_web_app()                                   [webapp.py:1600+]
-               └─ create_app() → aiohttp Application (30 routes)
+          └─ run_web_app()                                   [webapp.py]
+               ├─ load_model_choices() → ทะเบียน configs/paths.yaml   [vision_lab/paths.py]
+               └─ create_app() → aiohttp Application
+                    └─ on_startup: autoload_default_model() → โหลด default เบื้องหลัง
 
-[2] ผู้ใช้กด "เปิดสตรีม" บนหน้าเว็บ
-     │  POST /api/stream/start {url}
-     └─► stream_start()                                      [webapp.py:830]
-          └─ StreamService.start()                           [stream_service.py:112]
-               └─ เธรด _run() → TelemetryPipeline.run(stream_url, on_records=...)
+[2] หน้าเว็บเปิด → GET /api/detection/models → เติม dropdown โมเดล
+     ผู้ใช้เลือกไฟล์วิดีโอ → เล่นใน <video> บนเครื่อง (ไฟล์ไม่ถูกอัปโหลด)
 
-[3] วนซ้ำในเธรดสตรีม (~10 Hz)
-     VideoDecoder._run() ──► คิวขนาด 1 (drop_when_full)
-          │
-          ▼
-     TelemetryPipeline.process_frame(packet)     ← ล็อก _RECOGNIZER_LOCK
-          ├─ extract_roi()  × 11 ฟิลด์                       [preprocess.py:20]
-          ├─ apply_recipe() × 11                             [preprocess.py:39]
-          ├─ recognize_grouped() → PaddleOCR                 [pipeline.py:357]
-          ├─ validate_text() × 11                            [validation.py:36]
-          ├─ (ไม่ผ่าน?) → สูตรสำรอง → prefer_candidate()
-          └─ TemporalStabilizer.add()                        [temporal.py]
-                    │
-                    ▼
-          list[TelemetryRecord]
-                    │
-     ┌──────────────┼──────────────────┐
-     ▼              ▼                  ▼
-  JSONL/CSV   StreamService._handle_records()   on_frame → DetectionWorker.submit()
-             (เก็บ frame+snapshot คู่กัน)              │
-                    │                                  ▼
-                    │                         โปรเซสลูก: YOLOv8m + BoT-SORT
-                    │                                  │
-                    ▼                                  ▼
-     GET /api/stream/telemetry (long-poll) ◄──── GET /api/detection/result
-                    │
-                    ▼
-     app.js → renderTelemetryRows() + วาดกรอบบน canvas
+[3] ระหว่างวิดีโอเล่น (detection เท่านั้น ไม่มี OCR อัตโนมัติ)
+     requestVideoFrameCallback → ย่อเฟรม → POST /api/detection/frame
+          └─► DetectionWorker.submit() → โปรเซสลูก: YOLO + BoT-SORT
+     GET /api/detection/result (long-poll) → วาดกรอบบน canvas
 
 [4] ผู้ใช้กดปุ่ม Capture
-     │  POST /api/capture/shot
-     └─► capture_shot()                                      [webapp.py:1129]
-          ├─ service.current_reading() → (frame, snapshot)  ← ล็อกเดียว
+     │  POST /api/capture/shot   (body = JPEG เต็มเฟรมจาก <video>)
+     └─► capture_shot()                                      [webapp.py]
+          ├─ TelemetryPipeline.process_frame()   ← ล็อก _RECOGNIZER_LOCK
+          │    ├─ extract_roi() × 11 · apply_recipe() × 11
+          │    ├─ recognize_grouped() → PaddleOCR
+          │    └─ validate_text() → TemporalStabilizer.add()
           ├─ detect_on_frame(frame)    → YOLO 960px conf .25
           ├─ session.save(...)         → JPEG + .boxes.jpg + manifest
           └─ verify_shot(image_path, live_records, pipeline ใหม่)
@@ -623,7 +595,7 @@ output/sessions/<ชื่อ>/
 | ข้อห้าม | เหตุผล |
 |---|---|
 | **อย่า import torch ในโปรเซส `telemetry-ocr`** | cuDNN ชนกับ Paddle → `WinError 127` งาน YOLO ต้องอยู่ในโปรเซสลูกเท่านั้น |
-| **อย่าเรียก PaddleOCR โดยไม่ผ่าน `_RECOGNIZER_LOCK`** | ไม่ thread-safe และมีหลายเธรดเรียกจริง (สตรีม + capture) |
+| **อย่าเรียก PaddleOCR โดยไม่ผ่าน `_RECOGNIZER_LOCK`** | ไม่ thread-safe และมีหลายเธรดเรียกจริง (capture + การตรวจซ้ำจากไฟล์ภาพ) |
 | **อย่าถอด `X-Telemetry-OCR` guard ออกจาก POST/DELETE** | เปิดทางให้เว็บอื่นยิง `.pt` เข้ามาโหลดผ่าน pickle |
 | **อย่าบังคับ guard กับ GET** | `<img>` ส่ง custom header ไม่ได้ ภาพในหน้าเว็บจะหายหมด |
 | **อย่าเปลี่ยนเวอร์ชัน OpenCV** | ตรึงไว้ให้ contrib กับ standard ตรงกัน |
@@ -710,4 +682,5 @@ output/sessions/<ชื่อ>/
 
 **4. state ที่ไม่ถูกล้างตอนเปลี่ยนแหล่งข้อมูล** `handleFile` และ `enterStreamMode` หมุน
 `detectionSourceId` และ `detectionGeneration` แต่ `leaveStreamMode` ไม่ทำ — track id จาก
-กล้องจึงไหลไปทับวิดีโอ ทุกจุดที่เปลี่ยนแหล่งภาพต้องทำครบทั้งชุด
+กล้องจึงไหลไปทับวิดีโอ ทุกจุดที่เปลี่ยนแหล่งภาพต้องทำครบทั้งชุด (โหมดสตรีมถูกถอดออกจาก
+หน้าเว็บภายหลัง แต่หลักเดียวกันยังใช้กับ `handleFile` และการ seek)
