@@ -193,6 +193,21 @@ def find_ffmpeg() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def discard_partial(directory: Path) -> None:
+    """Remove what an unfinished render left behind.
+
+    Its .part files, then the folder itself if that emptied it -- otherwise every
+    cancelled or failed render leaves an empty folder in output/renders. A folder
+    that still holds a finished result is left alone: rmdir refuses it.
+    """
+    for name in (VIDEO_FILE, TRACKS_FILE):
+        # Windows refuses while ffmpeg still has the file open; nothing to add.
+        with suppress(OSError):
+            (directory / f"{name}.part").unlink(missing_ok=True)
+    with suppress(OSError):
+        directory.rmdir()
+
+
 def run_render(
     *,
     video: str,
@@ -219,6 +234,7 @@ def run_render(
 
     capture = cv2.VideoCapture(video)
     if not capture.isOpened():
+        discard_partial(out)
         raise RuntimeError(f"Cannot open video: {video}")
     started = time.perf_counter()
     index = -1
@@ -307,17 +323,18 @@ def run_render(
             finished = not was_cancelled
         finally:
             encoder.close(abort=not finished)
+    except BaseException:
+        discard_partial(out)
+        raise
     finally:
         capture.release()
 
     if was_cancelled:
-        video_part.unlink(missing_ok=True)
-        tracks_part.unlink(missing_ok=True)
+        discard_partial(out)
         publish({"kind": "cancelled"})
         return
     if written == 0:
-        video_part.unlink(missing_ok=True)
-        tracks_part.unlink(missing_ok=True)
+        discard_partial(out)
         raise RuntimeError("The video yielded no frames to render")
 
     os.replace(video_part, out / VIDEO_FILE)
@@ -582,6 +599,7 @@ class RenderManager:
     def shutdown(self, timeout: float = 10.0) -> None:
         with self._lock:
             handle = self._handle
+            job = self._job
             if self._cancel is not None:
                 self._cancel.set()
         if handle is None:
@@ -591,6 +609,8 @@ class RenderManager:
             _LOG.warning("Render process ignored cancellation; terminating it")
             handle.terminate()
             handle.join(2.0)
+            if job is not None:
+                discard_partial(self.directory(job["render_id"]))
 
     def renders(self, video_id: str | None = None) -> list[dict[str, Any]]:
         if not self.root.is_dir():
@@ -696,6 +716,9 @@ class RenderManager:
         if job["status"] not in _ACTIVE and self._handle is not None:
             self._handle.join(1.0)
             self._handle = None
+            if job["status"] != "complete":
+                # The render tidies up after itself, unless it died before it could.
+                discard_partial(self.directory(job["render_id"]))
 
     def _progress_put_back(self, message: dict[str, Any]) -> None:
         # Re-queued locally so the drain loop handles it like any other message.

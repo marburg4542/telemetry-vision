@@ -149,6 +149,8 @@ class RunRenderTests(unittest.TestCase):
         self.assertFalse((self.out / VIDEO_FILE).exists())
         self.assertFalse((self.out / TRACKS_FILE).exists())
         self.assertIsNone(read_meta(self.out))
+        # Not even the folder: output/renders would fill with empty ones.
+        self.assertFalse(self.out.exists())
 
     def test_odd_dimensions_are_cropped_for_the_encoder(self) -> None:
         odd = self.dir / "odd.avi"
@@ -163,6 +165,28 @@ class RunRenderTests(unittest.TestCase):
         broken.write_bytes(b"not a video")
         with self.assertRaises(RuntimeError):
             self.render(video=broken)
+        self.assertFalse(self.out.exists())
+
+    def test_a_render_that_fails_midway_leaves_no_folder_behind(self) -> None:
+        class FailingDetector(FakeDetector):
+            def track(self, frame, **kwargs):
+                if self.calls == 3:
+                    raise RuntimeError("CUDA out of memory")
+                return super().track(frame, **kwargs)
+
+        with self.assertRaises(RuntimeError):
+            run_render(
+                video=str(self.video),
+                output_dir=str(self.out),
+                settings=_asdict(None),
+                meta={"video": "flight.avi"},
+                detector=FailingDetector(),
+                encoder_factory=FakeEncoder,
+                publish=self.messages.append,
+                cancelled=lambda: False,
+            )
+        self.assertTrue(FakeEncoder.instances[0].closed_with_abort)
+        self.assertFalse(self.out.exists())
 
 
 def _asdict(settings):
@@ -272,12 +296,50 @@ class RenderManagerTests(unittest.TestCase):
         self.wait_for("complete")
 
     def test_a_render_can_be_cancelled(self) -> None:
-        self.start()
+        render_id = self.start()["render_id"]
         self.assertTrue(self.manager.cancel())
         self.gate.set()
         self.wait_for("cancelled")
         self.assertEqual(self.manager.renders(), [])
         self.assertFalse(self.manager.cancel())
+        self.assertFalse(self.manager.directory(render_id).exists())
+
+    def test_a_render_process_that_died_leaves_no_partial_files(self) -> None:
+        def launch(job):
+            # What a killed process leaves: a half-written video and no message.
+            output = Path(job["output_dir"])
+            output.mkdir(parents=True)
+            (output / f"{VIDEO_FILE}.part").write_bytes(b"half an mp4")
+            thread = threading.Thread(target=lambda: None)
+            thread.start()
+            thread.join()
+            handle = ThreadHandle(thread)
+            handle.exitcode = 1
+            return handle, queue.Queue(), threading.Event()
+
+        manager = RenderManager(self.dir / "renders", launcher=launch, ffmpeg="ffmpeg-for-tests")
+        settings = RenderSettings()
+        render_id = render_id_for("flight.avi", "best50", settings)
+        manager.start(
+            render_id=render_id,
+            video_id="flight.avi",
+            video_path=self.video,
+            model_name="best50",
+            model_label="models/yolo/best.pt",
+            model_path=self.model,
+            settings=settings,
+        )
+        self.assertEqual(manager.status()["status"], "error")
+        self.assertFalse(manager.directory(render_id).exists())
+
+    def test_a_failed_attempt_keeps_the_finished_result_it_shares_a_folder_with(self) -> None:
+        self.gate.set()
+        render_id = self.start()["render_id"]
+        self.wait_for("complete")
+        directory = self.manager.directory(render_id)
+        render_job.discard_partial(directory)
+        self.assertTrue((directory / VIDEO_FILE).is_file())
+        self.assertEqual(len(self.manager.renders()), 1)
 
     def test_a_replaced_video_or_checkpoint_makes_a_render_stale(self) -> None:
         self.gate.set()
