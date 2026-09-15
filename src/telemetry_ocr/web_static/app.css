@@ -827,7 +827,8 @@ summary:focus-visible, label:has(input:focus-visible) {
 
 @media (max-width: 620px) {
   .source-bar, .action-bar { flex-wrap: wrap; }
-  .video-select, .video-select select { min-width: 0; width: 100%; }
+  .video-select, .video-select select,
+  .model-select, .model-select select { min-width: 0; width: 100%; }
   .ai-row .primary-button { margin-left: 0; flex: 1 1 100%; }
   .model-item { flex-direction: column; align-items: stretch; }
   .playback-time { margin-left: 0; }
