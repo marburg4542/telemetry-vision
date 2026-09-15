@@ -81,3 +81,7 @@ Ultralytics/
 configs/quick-tunnel.enabled
 docs/*.docx
 docs/*.pdf
+
+# The web app's model registry changes for this machine. They name checkpoints
+# that live on this disk, which is why they are not the project's to track.
+configs/models.local.yaml

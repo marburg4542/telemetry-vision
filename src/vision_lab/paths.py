@@ -16,6 +16,9 @@ from typing import Any
 from telemetry_ocr.errors import ConfigError
 
 MANIFEST_RELATIVE_PATH = Path("configs") / "paths.yaml"
+# Written by the web app when models are added, removed or made the default.
+# Untracked: it describes this machine's checkpoints, not the project's.
+OVERLAY_RELATIVE_PATH = Path("configs") / "models.local.yaml"
 SUPPORTED_VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".avi", ".mkv"})
 
 
@@ -109,10 +112,20 @@ class ProjectPaths:
         return destination
 
 
-def load_paths(manifest: Path | None = None) -> ProjectPaths:
+def load_paths(
+    manifest: Path | None = None,
+    *,
+    root: Path | None = None,
+    overlay: bool = True,
+) -> ProjectPaths:
+    """Read configs/paths.yaml, with the app's model overlay merged in.
+
+    `overlay=False` gives the tracked base registry alone, which is what the
+    registry needs to tell a model the base declares from one the app added.
+    """
     import yaml
 
-    root = repo_root()
+    root = root.resolve() if root is not None else repo_root()
     manifest_path = manifest or root / MANIFEST_RELATIVE_PATH
     try:
         raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
@@ -138,6 +151,8 @@ def load_paths(manifest: Path | None = None) -> ProjectPaths:
         raise ConfigError(
             f"default_model {default_model!r} in {manifest_path} is not in the models table"
         )
+    if overlay:
+        models, default_model = _apply_overlay(root, models, default_model)
 
     return ProjectPaths(
         root=root,
@@ -146,6 +161,50 @@ def load_paths(manifest: Path | None = None) -> ProjectPaths:
         models=models,
         default_model=default_model,
     )
+
+
+def read_overlay(root: Path) -> dict[str, Any]:
+    """The app's model changes, or an empty overlay when there are none."""
+    import yaml
+
+    path = root / OVERLAY_RELATIVE_PATH
+    empty: dict[str, Any] = {"added": {}, "removed": [], "default": ""}
+    if not path.is_file():
+        return empty
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except OSError as exc:
+        raise ConfigError(f"Cannot read {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{path} is not valid YAML: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{path} must contain a mapping")
+    added = raw.get("added") or {}
+    removed = raw.get("removed") or []
+    if not isinstance(added, dict) or not isinstance(removed, list):
+        raise ConfigError(f"{path}: `added` must be a mapping and `removed` a list")
+    return {
+        "added": {str(name): str(value) for name, value in added.items()},
+        "removed": [str(name) for name in removed],
+        "default": str(raw.get("default") or "").strip(),
+    }
+
+
+def _apply_overlay(
+    root: Path, models: dict[str, Path], default_model: str
+) -> tuple[dict[str, Path], str]:
+    changes = read_overlay(root)
+    merged = {name: path for name, path in models.items() if name not in changes["removed"]}
+    # After the removals, so a base name that was removed and then re-added under
+    # the same name points at the file it was re-added with.
+    for name, value in changes["added"].items():
+        merged[name] = _anchor(root, value)
+    chosen = changes["default"] if changes["default"] in merged else default_model
+    if chosen not in merged:
+        # The default itself was removed: fall back to the first model left
+        # rather than to a name nothing resolves.
+        chosen = next(iter(merged), "")
+    return merged, chosen
 
 
 def _resolve_asset_root(root: Path, raw: dict[str, Any]) -> Path:
