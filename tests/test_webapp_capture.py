@@ -8,12 +8,9 @@ enough for `extract` to read the session back.
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import json
-import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -24,34 +21,6 @@ HAS_WEB_DEPS = bool(
     and importlib.util.find_spec("cv2")
     and importlib.util.find_spec("numpy")
 )
-
-STREAM_URL = "rtsp://camera.invalid/live"
-
-
-class _FakeCapture:
-    def __init__(self) -> None:
-        import numpy as np
-
-        self._frame = np.full((180, 320, 3), 70, dtype=np.uint8)
-
-    def isOpened(self) -> bool:
-        return True
-
-    def get(self, prop: int) -> float:
-        return 0.0
-
-    def set(self, prop: int, value: float) -> bool:
-        return True
-
-    def grab(self) -> bool:
-        time.sleep(0.005)
-        return True
-
-    def retrieve(self) -> tuple[bool, Any]:
-        return True, self._frame.copy()
-
-    def release(self) -> None:
-        return None
 
 
 class _FakeDetector:
@@ -149,21 +118,6 @@ class _FakeDetector:
         return None
 
 
-class _StreamCv2:
-    def __init__(self) -> None:
-        import cv2
-
-        self._cv2 = cv2
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._cv2, name)
-
-    def VideoCapture(
-        self, source: str, api: int | None = None, params: list[int] | None = None
-    ) -> _FakeCapture:
-        return _FakeCapture()
-
-
 @unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
 class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -175,10 +129,6 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         from telemetry_ocr.ocr import OCRResult
         from telemetry_ocr.webapp import GUARD_HEADER, create_app
 
-        self.cv2 = _StreamCv2()
-        patch = mock.patch.dict(sys.modules, {"cv2": self.cv2})
-        patch.start()
-        self.addCleanup(patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -207,7 +157,7 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
             create_app(
                 config,
                 FakeRecognizer(),
-                stream_output_dir=self.root,
+                output_dir=self.root,
                 detection_worker_factory=lambda: self.fake_detection_worker,
             )
         )
@@ -327,34 +277,6 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
             "/api/capture/shot?session=x&source_time_ms=0", data=self.jpeg
         )
         self.assertEqual(response.status, 403)
-
-    async def test_a_stream_shot_reuses_the_reading_it_already_made(self) -> None:
-        """Not a second OCR pass.
-
-        The stream is already reading these frames from its own thread. Running
-        the recognizer again here would put two threads inside PaddleOCR, which
-        is what the stream guard exists to prevent, and would answer slightly
-        differently for the same picture.
-        """
-        started = await self.client.post("/api/stream/start", json={"url": STREAM_URL})
-        self.assertEqual(started.status, 200)
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
-            body = await (await self.client.get("/api/stream/telemetry?wait_ms=1000")).json()
-            if body.get("revision", 0) >= 2:
-                break
-            await asyncio.sleep(0.05)
-
-        # No body: the server holds the frame, so the page has none to send.
-        response = await self.client.post(
-            "/api/capture/shot?session=streamshot&source_time_ms=0"
-        )
-        self.assertEqual(response.status, 200)
-        shot = await response.json()
-        self.assertTrue((self._dir("streamshot") / shot["image"]).is_file())
-        self.assertTrue(shot["records"])
-        self.assertEqual(shot["records"][0]["field_id"], "speed")
-        await self.client.post("/api/stream/stop")
 
     async def test_detection_runs_on_the_captured_frame(self) -> None:
         """Not on whatever result happened to be newest.

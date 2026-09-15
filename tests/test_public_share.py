@@ -149,7 +149,7 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.app = create_app(config, FakeRecognizer(), stream_output_dir=self.root)
+        self.app = create_app(config, FakeRecognizer(), output_dir=self.root)
         server = TestServer(self.app)
         self.client = TestClient(server, headers={GUARD_HEADER: "1"})
         await self.client.start_server()
@@ -181,7 +181,7 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
             "/",
             "/api/health",
             "/api/config",
-            "/api/stream/status",
+            "/api/detection/models",
             "/api/capture/status?session=s1",
             "/api/line/status",
             "/assets/app.js",
@@ -191,7 +191,7 @@ class PublicRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 403, f"{path} was reachable")
 
     async def test_mutating_endpoints_are_refused_from_outside(self) -> None:
-        for path in ("/api/session", "/api/stream/stop", "/api/line/send?session=s1"):
+        for path in ("/api/session", "/api/detection/model", "/api/line/send?session=s1"):
             with self.subTest(path=path):
                 response = await self.outside.post(path)
                 self.assertEqual(response.status, 403)

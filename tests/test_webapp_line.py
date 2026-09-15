@@ -12,9 +12,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
-import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -29,47 +27,6 @@ HAS_WEB_DEPS = bool(
 TOKEN = "secret-line-token-must-not-leak"
 
 
-class _FakeCapture:
-    def __init__(self) -> None:
-        import numpy as np
-
-        self._frame = np.full((180, 320, 3), 70, dtype=np.uint8)
-
-    def isOpened(self) -> bool:
-        return True
-
-    def get(self, prop: int) -> float:
-        return 0.0
-
-    def set(self, prop: int, value: float) -> bool:
-        return True
-
-    def grab(self) -> bool:
-        time.sleep(0.005)
-        return True
-
-    def retrieve(self) -> tuple[bool, Any]:
-        return True, self._frame.copy()
-
-    def release(self) -> None:
-        return None
-
-
-class _StreamCv2:
-    def __init__(self) -> None:
-        import cv2
-
-        self._cv2 = cv2
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._cv2, name)
-
-    def VideoCapture(
-        self, source: str, api: int | None = None, params: list[int] | None = None
-    ) -> _FakeCapture:
-        return _FakeCapture()
-
-
 @unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
 class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -82,10 +39,6 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         from telemetry_ocr.ocr import OCRResult
         from telemetry_ocr.webapp import GUARD_HEADER, create_app
 
-        self.cv2 = _StreamCv2()
-        patch = mock.patch.dict(sys.modules, {"cv2": self.cv2})
-        patch.start()
-        self.addCleanup(patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -153,7 +106,7 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
             # this class cannot collide on the real one, and so the suite never
             # fights whatever is already listening on this machine.
             create_app(
-                config, FakeRecognizer(), stream_output_dir=self.root, share_port=0
+                config, FakeRecognizer(), output_dir=self.root, share_port=0
             )
         )
         self.client = TestClient(server, headers={GUARD_HEADER: "1"})

@@ -79,19 +79,6 @@ try {
 }
 Set-Location -LiteralPath $projectDir
 
-# An optional camera to open at login. The whole point of the scheduled task is
-# that nobody has to be here, so if this file names a stream the server opens it
-# by itself and keeps it open -- no browser, no command. Blank lines and lines
-# starting with # are ignored so the file can explain itself.
-$streamFile = Join-Path $projectDir "configs\stream-url.txt"
-$streamUrl = $null
-if (Test-Path -LiteralPath $streamFile) {
-    $streamUrl = (Get-Content -LiteralPath $streamFile |
-        Where-Object { $_.Trim() -and -not $_.Trim().StartsWith("#") } |
-        Select-Object -First 1)
-    if ($streamUrl) { $streamUrl = $streamUrl.Trim() }
-}
-
 $arguments = @("web", "--config", $ocrConfig, "--host", "127.0.0.1", "--port", "8765")
 
 # A marker file rather than a flag baked into the scheduled task, so turning
@@ -101,12 +88,6 @@ $quickTunnelFlag = Join-Path $projectDir "configs\quick-tunnel.enabled"
 if (Test-Path -LiteralPath $quickTunnelFlag) {
     $arguments += "--quick-tunnel"
     Write-StartupLog "Quick tunnel enabled: capture images will be fetchable by LINE."
-}
-if ($streamUrl) {
-    $arguments += @("--stream", $streamUrl)
-    Write-StartupLog "Opening the configured stream: $streamUrl"
-} else {
-    Write-StartupLog "No stream configured ($streamFile); serving the file UI only."
 }
 
 Write-StartupLog "Starting the $($selected.Name) build: $ocrExe with $ocrConfig"

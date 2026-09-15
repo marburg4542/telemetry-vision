@@ -398,15 +398,6 @@ class TelemetryPipeline:
         # counted in. See _process_frame_locked for why the decoder's own frame
         # index is the wrong counter for this.
         self._ocr_turn = 0
-        # The decoder of the run in progress, or None between runs.
-        #
-        # Published because PipelineSummary only exists once run() has returned,
-        # and for a live stream that is never. Its reconnect and decode-failure
-        # counts are exactly the numbers an operator needs *while* the feed is
-        # up -- the difference between "OCR is struggling" and "the feed is
-        # unreliable" that the summary's own comment describes -- and the web UI
-        # was reporting a flat zero for both for the entire life of a stream.
-        self.decoder: VideoDecoder | None = None
 
     def run(
         self,
@@ -416,7 +407,6 @@ class TelemetryPipeline:
         *,
         max_seconds: float | None = None,
         on_frame: Callable[[FramePacket], None] | None = None,
-        on_records: Callable[[Sequence[TelemetryRecord], FramePacket], None] | None = None,
         stop_event: threading.Event | None = None,
     ) -> PipelineSummary:
         """Read a file or a live stream and write telemetry until it ends.
@@ -429,13 +419,9 @@ class TelemetryPipeline:
         is how the detection side gets the same frames without this module
         needing to know anything about torch.
 
-        on_records is called with what OCR made of that frame, already written.
-        A long-running stream has no end at which to read the file back, so a
-        caller that wants to show telemetry as it arrives has to be handed it.
-
-        stop_event lets a caller that is not a console -- a web server, say --
-        end the run. Passing one in also means the caller can stop a stream that
-        is blocked waiting for a camera that has gone quiet.
+        stop_event lets a caller that is not a console end the run. Passing one in
+        also means the caller can stop a stream that is blocked waiting for a
+        camera that has gone quiet.
         """
         runtime = self.config.runtime
         # A stream is warmed from its first delivered frame, so the camera is
@@ -448,7 +434,6 @@ class TelemetryPipeline:
         decoder = VideoDecoder(
             video_path, frame_queue, runtime.ocr_hz, runtime.realtime, stop_event
         )
-        self.decoder = decoder
         writer = RecordWriter(jsonl_path, csv_path)
         latencies: list[float] = []
         processed = 0
@@ -485,8 +470,6 @@ class TelemetryPipeline:
                     records, latency = self.process_frame(item)
                     for record in records:
                         writer.write(record)
-                    if on_records is not None:
-                        on_records(records, item)
                     processed += 1
                     emitted += len(records)
                     latencies.append(latency)

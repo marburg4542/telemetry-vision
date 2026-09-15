@@ -7,10 +7,6 @@ const ui = {
   chooseVideoButton: $("chooseVideoButton"),
   videoStage: $("videoStage"),
   video: $("sourceVideo"),
-  streamImage: $("streamImage"),
-  streamUrl: $("streamUrl"),
-  streamButton: $("streamButton"),
-  streamBadge: $("streamBadge"),
   captureButton: $("captureButton"),
   captureButtonText: $("captureButtonText"),
   captureStatus: $("captureStatus"),
@@ -18,11 +14,10 @@ const ui = {
   lineSendButton: $("lineSendButton"),
   lineSendButtonText: $("lineSendButtonText"),
   lineQuotaLabel: $("lineQuotaLabel"),
-  streamBadgeText: $("streamBadgeText"),
   dropState: $("dropState"),
   detectionOverlay: $("detectionOverlay"),
   detectionCanvas: $("detectionCaptureCanvas"),
-  modelInput: $("modelInput"),
+  modelSelect: $("modelSelect"),
   detectionToggle: $("detectionToggle"),
   detectionRate: $("detectionRate"),
   modelConfidence: $("modelConfidence"),
@@ -108,6 +103,8 @@ const state = {
   toastTimer: null,
   installPrompt: null,
   detectorLoaded: false,
+  // The registry the server offers: {name, label, available, default}.
+  detectionModels: [],
   detectionInFlight: false,
   detectionGeneration: 0,
   detectionModelGeneration: 0,
@@ -137,16 +134,6 @@ const state = {
   detectionLastResultMs: null,
   mediaClockMs: null,
   mediaClockWall: 0,
-  // Stream mode: the server holds the video and this page is a viewer. The
-  // clock is the server's elapsed source time, carried forward locally between
-  // updates the same way the video clock is between presented frames.
-  streamMode: false,
-  streamRunning: false,
-  streamRevision: 0,
-  streamPollToken: 0,
-  streamClockMs: null,
-  streamClockWall: 0,
-  streamRenderFrame: null,
   // Capture: one session per page load unless the operator is holding the
   // button down, in which case shots keep appending to the same one.
   captureSession: null,
@@ -313,6 +300,7 @@ function setModelStatus(text, isError = false) {
 
 async function initializeDetectionModel() {
   try {
+    await loadModelChoices();
     const payload = await jsonFetch("/api/detection/model");
     const wasReady = state.detectorLoaded;
     applyDetectionModelState(payload);
@@ -338,7 +326,10 @@ function applyDetectionModelState(payload) {
   ui.trackIdToggle.disabled = !state.detectorLoaded;
   ui.clearModelButton.disabled = !hasModel;
   ui.restartWorkerButton.hidden = !hasModel || !["error", "stopped"].includes(workerStatus);
-  ui.modelName.textContent = hasModel ? payload.filename : "ยังไม่ได้เลือกโมเดล";
+  ui.modelName.textContent = hasModel
+    ? (payload.model_name ? `${payload.model_name} · ${payload.filename}` : payload.filename)
+    : "ยังไม่ได้เลือกโมเดล";
+  syncModelSelect(payload.model_name || "", workerStatus === "loading");
   ui.detectionDropped.textContent = String(payload.dropped_frames || 0);
 
   if (workerStatus === "ready") {
@@ -375,7 +366,7 @@ function applyDetectionModelState(payload) {
     resetDetectionFrame();
   } else {
     stopModelStatusPolling();
-    setModelStatus("เลือกไฟล์ best.pt เพื่อวาดกรอบตรวจจับทับวิดีโอ");
+    setModelStatus("เลือกโมเดลจากรายการเพื่อวาดกรอบตรวจจับทับวิดีโอ");
     resetDetectionFrame();
   }
 }
@@ -462,14 +453,52 @@ function stopModelStatusPolling() {
   state.detectionModelPollTimer = null;
 }
 
-async function uploadDetectionModel(file) {
-  if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".pt")) {
-    setModelStatus("รองรับเฉพาะโมเดล Ultralytics YOLO นามสกุล .pt", true);
-    return;
+// The checkpoints the server offers, from configs/paths.yaml. Chosen by name
+// only: the page cannot hand the server a file to load, which keeps a pickle
+// from anywhere but this machine out of the detection process.
+async function loadModelChoices() {
+  const payload = await jsonFetch("/api/detection/models");
+  state.detectionModels = Array.isArray(payload.models) ? payload.models : [];
+  renderModelSelect();
+  syncModelSelect(payload.selected || "", false);
+}
+
+function renderModelSelect() {
+  const select = ui.modelSelect;
+  select.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = state.detectionModels.length
+    ? "— ไม่ใช้โมเดล —"
+    : "ไม่มีโมเดลใน configs/paths.yaml";
+  select.append(none);
+  for (const model of state.detectionModels) {
+    const option = document.createElement("option");
+    option.value = model.name;
+    const notes = [];
+    if (model.default) notes.push("ค่าเริ่มต้น");
+    // Listed rather than hidden: a registered checkpoint whose file has gone is
+    // worth seeing, because the fix is to put the file back.
+    if (!model.available) notes.push("ไม่พบไฟล์");
+    const suffix = notes.length ? ` (${notes.join(", ")})` : "";
+    option.textContent = `${model.name} · ${model.label}${suffix}`;
+    option.disabled = !model.available;
+    select.append(option);
   }
-  if (file.size > 256 * 1024 * 1024) {
-    setModelStatus("ไฟล์โมเดลต้องมีขนาดไม่เกิน 256 MB", true);
+}
+
+function syncModelSelect(selectedName, loading) {
+  const select = ui.modelSelect;
+  const known = [...select.options].some((option) => option.value === selectedName);
+  select.value = known ? selectedName : "";
+  // Held still while a model loads: a second choice mid-load would start a
+  // worker while the first one is still coming up.
+  select.disabled = loading || !state.detectionModels.length;
+}
+
+async function selectDetectionModel(name) {
+  if (!name) {
+    await clearDetectionModel();
     return;
   }
   const generation = ++state.detectionModelGeneration;
@@ -483,20 +512,26 @@ async function uploadDetectionModel(file) {
   ui.modelConfidence.disabled = true;
   ui.modelImageSize.disabled = true;
   ui.clearModelButton.disabled = true;
-  setModelStatus(`กำลังอัปโหลดและโหลด ${file.name}…`);
+  ui.modelSelect.disabled = true;
+  setModelStatus(`กำลังโหลด ${name}…`);
   try {
-    const form = new FormData();
-    form.append("model", file, file.name);
-    const payload = await jsonFetch("/api/detection/model", { method: "POST", body: form });
+    const payload = await jsonFetch("/api/detection/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
     if (generation !== state.detectionModelGeneration) return;
     applyDetectionModelState(payload);
   } catch (error) {
-    if (generation === state.detectionModelGeneration) {
+    if (generation !== state.detectionModelGeneration) return;
+    // Ask what the server actually holds rather than assuming nothing: a failed
+    // switch can leave the previous model loaded.
+    try {
+      applyDetectionModelState(await jsonFetch("/api/detection/model"));
+    } catch {
       applyDetectionModelState({ loaded: false });
-      setModelStatus(`โหลดโมเดลไม่สำเร็จ: ${error.message}`, true);
     }
-  } finally {
-    ui.modelInput.value = "";
+    setModelStatus(`โหลดโมเดลไม่สำเร็จ: ${error.message}`, true);
   }
 }
 
@@ -531,7 +566,6 @@ async function initialize() {
     renderTelemetryRows();
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
     initializeDetectionModel();
-    adoptRunningStream();
     checkLineConfigured();
   } catch (error) {
     setEngineStatus("error", "เชื่อมต่อ OCR ไม่สำเร็จ");
@@ -592,7 +626,6 @@ function renderTelemetryRows() {
 
 function handleFile(file) {
   if (!file) return;
-  if (state.streamMode) stopStream();
   if (!file.type.startsWith("video/") && !/\.(mp4|mov|avi|mkv|webm)$/i.test(file.name)) {
     showToast("กรุณาเลือกไฟล์วิดีโอ");
     return;
@@ -682,33 +715,29 @@ function startFrameLoop() {
   }
 }
 
-// Two possible pictures, one set of consumers. In stream mode the server owns
-// the video and the page shows an <img> fed by MJPEG, because no browser can
-// open RTSP. Everything that used to read the <video> directly asks here
-// instead, so detection, the overlay and the capture path stay identical
-// whichever source is on screen.
+// The picture detection, the overlay and capture read from. It is always the
+// <video> now that the page has no stream mode, but they ask through these
+// rather than naming the element, which left each of them unchanged by that.
 function sourceElement() {
-  return state.streamMode ? ui.streamImage : ui.video;
+  return ui.video;
 }
 
 function sourceWidth() {
-  return state.streamMode ? ui.streamImage.naturalWidth : ui.video.videoWidth;
+  return ui.video.videoWidth;
 }
 
 function sourceHeight() {
-  return state.streamMode ? ui.streamImage.naturalHeight : ui.video.videoHeight;
+  return ui.video.videoHeight;
 }
 
-// "There is a picture to read." An <img> reports naturalWidth only once it has
-// decoded something, which is the same guarantee readyState >= 2 gives.
+// "There is a picture to read."
 function sourceReady() {
-  return state.streamMode ? ui.streamImage.naturalWidth > 0 : ui.video.readyState >= 2;
+  return ui.video.readyState >= 2;
 }
 
-// "The picture is moving." A stream has no pause; it is either live or it is
-// not, and a stopped stream must stop detection exactly as a paused video does.
+// "The picture is moving."
 function sourceLive() {
-  return state.streamMode ? state.streamRunning : !(ui.video.paused || ui.video.ended);
+  return !(ui.video.paused || ui.video.ended);
 }
 
 function maybeSubmitDetection(sourceTimeMs) {
@@ -722,7 +751,7 @@ function maybeSubmitDetection(sourceTimeMs) {
   // so at 2x playback an unscaled comparison submitted twice as often and
   // oversubscribed the very worker the pacing exists to protect.
   const mediaInterval = detectionIntervalMs()
-    * (state.streamMode ? 1 : (ui.video.playbackRate || 1));
+    * (ui.video.playbackRate || 1);
   if (sourceTimeMs - state.lastDetectionMs < mediaInterval) return;
   submitDetectionFrame(false, sourceTimeMs);
 }
@@ -1072,13 +1101,6 @@ function formatMs(value) {
 // the exact presentation timestamp of the frame that was just shown; the clock
 // is carried forward from there at the current playback rate.
 function currentMediaTime() {
-  if (state.streamMode) {
-    // A live feed has no seekable timeline to read; the server's elapsed source
-    // time is the only clock both sides agree on, carried forward here between
-    // updates so the overlay can still compensate between them.
-    if (state.streamClockMs === null) return 0;
-    return state.streamClockMs + (performance.now() - state.streamClockWall);
-  }
   return projectMediaTime({
     clockMs: state.mediaClockMs,
     clockWallMs: state.mediaClockWall,
@@ -1397,240 +1419,6 @@ function drawDetections(renderNow = performance.now()) {
 
 
 // ---------------------------------------------------------------------------
-// Stream mode
-//
-// The server decodes the camera and runs OCR; this page shows the picture and
-// the numbers it is sent. Detection is unchanged -- frames are captured from
-// the <img> and posted to the endpoint the file path already uses, so YOLO
-// reaches a stream through code that is already tested.
-// ---------------------------------------------------------------------------
-
-async function toggleStream() {
-  if (state.streamMode) {
-    await stopStream();
-    return;
-  }
-  const url = ui.streamUrl.value.trim();
-  if (!url) {
-    showToast("ใส่ URL ของสตรีมก่อน เช่น rtsp://host:port/path");
-    ui.streamUrl.focus();
-    return;
-  }
-  await startStream(url);
-}
-
-async function startStream(url) {
-  ui.streamButton.disabled = true;
-  try {
-    await jsonFetch("/api/stream/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-  } catch (error) {
-    showToast(`เปิดสตรีมไม่สำเร็จ: ${error.message}`);
-    return;
-  } finally {
-    ui.streamButton.disabled = false;
-  }
-  enterStreamMode(url);
-}
-
-// Adopt a stream this page did not start.
-//
-// The server keeps reading its camera with no browser attached -- that is the
-// point of the auto-start -- so a page opened or reloaded afterwards finds a
-// stream already running. Without this it showed the file UI instead, the
-// picture never appeared, and pressing the stream button only produced "already
-// running". The capture button was unreachable for exactly the setup that
-// feature was built for.
-async function adoptRunningStream() {
-  try {
-    const status = await jsonFetch("/api/stream/status");
-    if (!status.running || !status.url) return;
-    ui.streamUrl.value = status.url;
-    enterStreamMode(status.url);
-    showToast(`กำลังแสดงสตรีมที่ server เปิดค้างไว้: ${status.url}`);
-  } catch {
-    // A server too old or too busy to answer is not a reason to hold up the
-    // rest of the page; the file UI still works.
-  }
-}
-
-function enterStreamMode(url) {
-  state.streamMode = true;
-  state.streamRunning = true;
-  state.streamRevision = 0;
-  state.streamClockMs = null;
-  // The file source has to stop before the stream takes over, or a video left
-  // playing underneath keeps posting frames to the OCR the server now owns.
-  ui.video.pause();
-  ui.video.hidden = true;
-  ui.streamImage.hidden = false;
-  ui.dropState.hidden = true;
-  ui.streamButton.textContent = "หยุดสตรีม";
-  ui.streamBadge.hidden = false;
-  ui.streamBadgeText.textContent = "LIVE";
-  ui.fileName.textContent = url;
-  ui.fileDetails.textContent = "server กำลังถอด telemetry จากสตรีมนี้";
-  // Cache-busted so a reconnect is never served the previous run's response.
-  ui.streamImage.src = `/api/stream/mjpeg?t=${Date.now()}`;
-
-  // A stream is a different source: the tracker must not carry identities over
-  // from whatever was on screen before it.
-  resetDetectionTracker();
-  state.detectionSourceId = globalThis.crypto?.randomUUID?.()
-    || `stream-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  resetDetectionFrame();
-  resetCurrentValues();
-  setEngineStatus("ready", `${state.config.model} · stream live`);
-  updateCaptureAvailability();
-  startStreamTelemetryPolling();
-  startStreamRenderLoop();
-}
-
-async function stopStream() {
-  ui.streamButton.disabled = true;
-  try {
-    await jsonFetch("/api/stream/stop", { method: "POST" });
-  } catch (error) {
-    showToast(`หยุดสตรีมไม่สำเร็จ: ${error.message}`);
-  } finally {
-    ui.streamButton.disabled = false;
-  }
-  leaveStreamMode();
-}
-
-function leaveStreamMode() {
-  state.streamMode = false;
-  state.streamRunning = false;
-  state.streamClockMs = null;
-  ++state.streamPollToken;
-  if (state.streamRenderFrame !== null) {
-    window.cancelAnimationFrame(state.streamRenderFrame);
-    state.streamRenderFrame = null;
-  }
-  // Dropping the src is what actually closes the MJPEG connection; leaving it
-  // in place holds the response open and the server keeps writing to it.
-  ui.streamImage.removeAttribute("src");
-  ui.streamImage.hidden = true;
-  ui.video.hidden = false;
-  ui.streamBadge.hidden = true;
-  ui.streamButton.textContent = "เปิดสตรีม";
-  if (!state.file) ui.dropState.hidden = false;
-  stopCaptureHold();
-
-  // Leaving a stream is a source change, exactly as entering one is.
-  //
-  // handleFile and enterStreamMode both do this; only this one did not, so
-  // stream -> stop -> back to the file posted the video's frames under the
-  // stream's source id. The server sees no change, never sets reset_tracker,
-  // and BoT-SORT carries identities from the camera straight onto the video --
-  // the failure the source/generation counters exist to prevent. The tracks
-  // were not cleared either, so the camera's last boxes kept being drawn over
-  // the video for as long as two unrelated clocks happened to agree.
-  resetDetectionTracker();
-  state.detectionSourceId = globalThis.crypto?.randomUUID?.()
-    || `file-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  ++state.detectionGeneration;
-  state.detectionSequence = 0;
-  state.detectionTracks.clear();
-  resetDetectionFrame();
-
-  updateCaptureAvailability();
-  drawDetections();
-}
-
-function startStreamRenderLoop() {
-  // requestVideoFrameCallback does not exist on an <img>, and MJPEG frames
-  // arrive without an event worth hooking, so the overlay is driven at display
-  // rate instead. That is the cadence the video path ends up at anyway.
-  const token = state.streamPollToken;
-  const tick = () => {
-    if (!state.streamMode || token !== state.streamPollToken) return;
-    maybeSubmitDetection(currentMediaTime());
-    drawDetections();
-    state.streamRenderFrame = window.requestAnimationFrame(tick);
-  };
-  state.streamRenderFrame = window.requestAnimationFrame(tick);
-}
-
-function startStreamTelemetryPolling() {
-  const token = ++state.streamPollToken;
-  (async () => {
-    while (state.streamMode && token === state.streamPollToken) {
-      let payload;
-      try {
-        const params = new URLSearchParams({
-          after_revision: String(state.streamRevision),
-          wait_ms: "5000",
-        });
-        payload = await jsonFetch(`/api/stream/telemetry?${params}`);
-      } catch (error) {
-        if (token !== state.streamPollToken) return;
-        setEngineStatus("error", "สตรีมขัดข้อง");
-        showToast(`อ่าน telemetry จากสตรีมไม่สำเร็จ: ${error.message}`);
-        // A failed poll must still pause before retrying. Without this a server
-        // that has gone away turns this into an unthrottled retry storm -- the
-        // same failure the detection poll was fixed for.
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        continue;
-      }
-      if (token !== state.streamPollToken) return;
-      applyStreamTelemetry(payload);
-      if (!payload.running) {
-        // The server stopped on its own -- an unreachable camera, or a feed that
-        // never came back. Say why rather than leaving a frozen picture.
-        showToast(payload.error
-          ? `สตรีมหยุด: ${payload.error}`
-          : "สตรีมหยุดแล้ว");
-        setEngineStatus("error", "สตรีมหยุด");
-        leaveStreamMode();
-        return;
-      }
-    }
-  })();
-}
-
-function applyStreamTelemetry(payload) {
-  const revision = Number(payload.revision);
-  // Recorded even when nothing else here uses the payload, for the same reason
-  // the detection revision is: a poll that forgets it asks for a revision the
-  // server has already passed and never blocks again.
-  if (Number.isFinite(revision)) state.streamRevision = revision;
-  state.streamRunning = Boolean(payload.running);
-  // Here rather than in the render loop. requestAnimationFrame does not run in
-  // a tab that is not being composited, which left the capture button disabled
-  // for a stream that was demonstrably working. This poll is driven by the
-  // server and keeps running wherever the tab is.
-  updateCaptureAvailability();
-  const sourceTimeMs = Number(payload.source_time_ms);
-  if (Number.isFinite(sourceTimeMs)) {
-    state.streamClockMs = sourceTimeMs;
-    state.streamClockWall = performance.now();
-  }
-  // The reading itself is not carried any further from here, and that is not an
-  // oversight to fix by adding a sink.
-  //
-  // It used to be mapped into record shape and pushed onto state.records, which
-  // no function ever read -- not the telemetry rows, which are painted only
-  // from the selected shot, and not the downloads, which now export the shots.
-  // So it was an array growing to 200,000 entries on a long stream to be read
-  // by nobody. The server writes the real record to
-  // output/stream-telemetry.jsonl as it goes; this page is a viewer, as the
-  // stream section of the README says.
-  //
-  // What the poll is still for is the clock above and the capture button below:
-  // a stream that is publishing is a stream a frame can be captured from.
-  if (Object.keys(payload.fields || {}).length) {
-    ui.streamBadgeText.textContent = `LIVE · ${Math.round(sourceTimeMs / 1000)}s`;
-  }
-}
-
-
-// ---------------------------------------------------------------------------
 // Capture
 //
 // Everything else here is for watching: it answers while the video plays and
@@ -1730,20 +1518,13 @@ async function takeCaptureShot() {
       session: captureSessionName(),
       source_time_ms: Math.max(0, currentMediaTime()).toFixed(3),
     });
-    // In stream mode the server already holds the frame and its reading, so
-    // sending one would be both wasteful and a different picture than the one
-    // it read. Only the file path has to post pixels.
-    let options = { method: "POST" };
-    if (!state.streamMode) {
-      params.set("session_id", state.sessionId);
-      params.set("source", state.file ? state.file.name : "browser");
-      const blob = await captureFullFrame();
-      options = {
-        method: "POST",
-        headers: { "Content-Type": "image/jpeg" },
-        body: blob,
-      };
-    }
+    params.set("session_id", state.sessionId);
+    params.set("source", state.file ? state.file.name : "browser");
+    const options = {
+      method: "POST",
+      headers: { "Content-Type": "image/jpeg" },
+      body: await captureFullFrame(),
+    };
     // The server does not answer until the frame has been saved, put through
     // best.pt and re-read from the file, so by the time this returns the shot
     // is finished rather than merely stored.
@@ -2430,7 +2211,6 @@ ui.chooseVideoButton.addEventListener("click", () => ui.videoInput.click());
 // Redraw whenever anything leaves fullscreen so the boxes match the new size.
 document.addEventListener("fullscreenchange", () => drawDetections());
 ui.videoInput.addEventListener("change", () => handleFile(ui.videoInput.files[0]));
-ui.streamButton.addEventListener("click", () => toggleStream());
 ui.shotClearSelection.addEventListener("click", () => clearChosen());
 ui.shotDeleteSelection.addEventListener("click", () => deleteChosenShots());
 ui.shotImage.addEventListener("click", () => openShotOverlay());
@@ -2463,19 +2243,6 @@ ui.captureButton.addEventListener("keydown", (event) => {
     requestCapture();
   }
 });
-ui.streamUrl.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") toggleStream();
-});
-// The MJPEG response is one long-lived request; if it fails the picture simply
-// stops, with nothing in the console to say why.
-ui.streamImage.addEventListener("error", () => {
-  if (state.streamMode) showToast("\u0e20\u0e32\u0e1e\u0e2a\u0e15\u0e23\u0e35\u0e21\u0e2b\u0e25\u0e38\u0e14 \u2014 \u0e01\u0e33\u0e25\u0e31\u0e07\u0e23\u0e2d\u0e15\u0e48\u0e2d\u0e43\u0e2b\u0e21\u0e48");
-});
-// Closing the tab deliberately does NOT stop the stream. The server is the one
-// reading the camera and writing the telemetry file, and an auto-started server
-// is expected to keep doing that with no browser open at all. A beacon could not
-// have stopped it anyway: sendBeacon cannot set the guard header, so the request
-// would be refused.
 ui.video.addEventListener("loadedmetadata", () => {
   ui.durationTime.textContent = formatTime(ui.video.duration);
   ui.fileDetails.textContent = `${formatBytes(state.file.size)} · ${ui.video.videoWidth}×${ui.video.videoHeight} · ${formatTime(ui.video.duration)}`;
@@ -2504,7 +2271,7 @@ ui.video.addEventListener("seeked", async () => {
   if (state.detectorLoaded) submitDetectionFrame(true);
 });
 ui.video.addEventListener("error", () => showToast("Browser ไม่สามารถเล่นวิดีโอนี้ได้ ลองใช้ MP4 (H.264) หรือ WebM"));
-ui.modelInput.addEventListener("change", () => uploadDetectionModel(ui.modelInput.files[0]));
+ui.modelSelect.addEventListener("change", () => selectDetectionModel(ui.modelSelect.value));
 ui.detectionToggle.addEventListener("change", () => {
   state.lastDetectionMs = -Infinity;
   drawDetections();

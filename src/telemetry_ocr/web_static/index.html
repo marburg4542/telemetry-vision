@@ -12,7 +12,7 @@
     <title>Telemetry OCR — Flight Data Lab</title>
     <meta
       name="description"
-      content="เล่นวิดีโอต้นฉบับและอ่าน flight telemetry แบบ realtime ด้วย PaddleOCR บนเครื่อง"
+      content="เล่นวิดีโอต้นฉบับและอ่าน flight telemetry ด้วย PaddleOCR บนเครื่อง"
     />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/icons/icon-192.png" sizes="192x192" />
@@ -42,22 +42,10 @@
 
       <main class="workspace">
         <section class="video-column" aria-label="วิดีโอต้นฉบับ">
-          <!-- Where the video comes from. Two ways in, side by side, because
-               neither is the default: a file for checking a recording, a stream
-               for watching one. -->
+          <!-- Where the video comes from: a file on this machine, played in the
+               browser. The file itself never reaches the server; the detector
+               and a capture send only the frames they need. -->
           <div class="source-bar">
-            <label class="stream-field" for="streamUrl">
-              <span class="visually-hidden">RTSP URL</span>
-              <input
-                id="streamUrl"
-                type="url"
-                inputmode="url"
-                spellcheck="false"
-                placeholder="rtsp://host:port/path"
-                aria-label="RTSP URL"
-              />
-            </label>
-            <button class="ghost-button" id="streamButton" type="button">เปิดสตรีม</button>
             <label class="file-button" for="videoInput">
               <span>เลือกวิดีโอ</span>
               <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" />
@@ -66,10 +54,6 @@
 
           <div class="video-stage" id="videoStage">
             <video id="sourceVideo" controls playsinline preload="metadata"></video>
-            <!-- The live source. An <img> on a multipart/x-mixed-replace
-                 response stays current with no polling loop and no script,
-                 which is the whole reason the stream is served this way. -->
-            <img id="streamImage" alt="ภาพสดจากสตรีม" hidden />
             <canvas id="detectionOverlay" class="detection-overlay" aria-hidden="true"></canvas>
             <div class="drop-state" id="dropState">
               <h3>เลือกไฟล์เที่ยวบินเพื่อเริ่ม</h3>
@@ -79,9 +63,6 @@
               </button>
             </div>
             <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
-            <div class="stream-badge" id="streamBadge" hidden>
-              <span></span> <span id="streamBadgeText">LIVE</span>
-            </div>
 
             <!-- A chosen capture at the size the video plays at, inside the
                  stage so it covers exactly the area the video occupies. The
@@ -146,9 +127,13 @@
                   <span class="toggle-track"><span></span></span>
                   <span>แสดงกรอบตรวจจับ</span>
                 </label>
-                <label class="model-file-button" for="modelInput">
-                  เลือกไฟล์ .pt
-                  <input id="modelInput" type="file" accept=".pt,application/octet-stream" />
+                <!-- Filled from the server's registry. There is no file picker:
+                     the page names a checkpoint, it never sends one. -->
+                <label class="field-control model-select" for="modelSelect">
+                  <span>โมเดล</span>
+                  <select id="modelSelect" disabled>
+                    <option value="">กำลังอ่านรายการโมเดล…</option>
+                  </select>
                 </label>
                 <button class="ghost-button" id="restartWorkerButton" type="button" hidden>
                   Restart worker
@@ -194,13 +179,14 @@
               </div>
 
               <p class="model-status" id="modelStatus">
-                เลือกไฟล์ <code>best.pt</code> เพื่อวาดกรอบตรวจจับทับวิดีโอ
+                เลือกโมเดลจากรายการเพื่อวาดกรอบตรวจจับทับวิดีโอ
               </p>
-              <!-- Kept in view rather than behind a tooltip: a .pt is a pickle
-                   and loading one runs code. That is not a footnote. -->
+              <!-- Kept in view rather than behind a tooltip. A checkpoint is a
+                   pickle and loading one runs code, so what may be loaded is
+                   decided by configs/paths.yaml on this machine, not by a page. -->
               <p class="model-warning">
-                โหลดเฉพาะไฟล์ <strong>.pt</strong> ที่เชื่อถือได้ — checkpoint ของ PyTorch
-                รันโค้ดได้ตอนโหลด ไฟล์ถูกเก็บชั่วคราวและลบเมื่อปิด server
+                รายการมาจาก <code>configs/paths.yaml</code> — checkpoint ของ PyTorch
+                รันโค้ดได้ตอนโหลด ใส่ในทะเบียนเฉพาะไฟล์ที่เชื่อถือได้
               </p>
 
               <div class="metrics" aria-label="สถานะ Object Detection">

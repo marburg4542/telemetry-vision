@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import tempfile
 import time
 import uuid
 import webbrowser
@@ -38,10 +37,22 @@ class BrowserSession:
 @dataclass(slots=True)
 class DetectionState:
     worker: DetectionWorker
-    temp_dir: tempfile.TemporaryDirectory[str]
     model_path: Path | None = None
+    # The registry name the checkpoint was chosen by, e.g. "best50".
+    model_name: str | None = None
     filename: str | None = None
     size_bytes: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ModelChoice:
+    """One checkpoint the page may load, as configs/paths.yaml names it."""
+
+    name: str
+    path: Path
+    # Repository-relative where possible, for display. The absolute path stays
+    # on the server.
+    label: str
 
 
 _LOG = logging.getLogger(__name__)
@@ -91,11 +102,6 @@ _LINE_MIN_INTERVAL_S = 3.0
 # window in which a send from somewhere else goes unnoticed.
 _LINE_QUOTA_TTL_S = 300.0
 
-# How often the supervisor re-checks a configured stream. Long enough that an
-# unreachable camera costs one connection attempt every half minute rather than
-# a tight loop, short enough that a camera coming up is picked up promptly.
-_STREAM_SUPERVISOR_INTERVAL_S = 30.0
-
 
 def create_app(
     config: AppConfig,
@@ -103,13 +109,14 @@ def create_app(
     *,
     static_dir: str | Path | None = None,
     max_sessions: int = 4,
-    stream_url: str | None = None,
-    stream_output_dir: str | Path = "output",
+    output_dir: str | Path = "output",
     share_port: int = DEFAULT_SHARE_PORT,
     quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
     allowed_hosts: Iterable[str] = (),
     detection_worker_factory: Callable[[], DetectionWorker] | None = None,
+    models: Iterable[ModelChoice] = (),
+    default_model: str | None = None,
 ) -> Any:
     try:
         from aiohttp import web
@@ -241,8 +248,13 @@ def create_app(
                 {"error": f"OCR request failed: {type(exc).__name__}"}, status=500
             )
 
-    stream_output_dir = Path(stream_output_dir)
-    model_upload_limit = 256 * 1024**2
+    output_dir = Path(output_dir)
+    # The largest body any endpoint takes is a captured full frame: a JPEG of up
+    # to 4096x2160 at q95. This was 256 MB while it also had to admit an uploaded
+    # checkpoint. Models are chosen from the registry now, nothing needs a body
+    # anywhere near that, and a smaller cap is less a stray request can make
+    # this process buffer.
+    request_body_limit = 32 * 1024**2
     detection_frame_limit = 8 * 1024**2
     sessions_key = web.AppKey("sessions", dict)
     ocr_lock_key = web.AppKey("ocr_lock", asyncio.Lock)
@@ -269,10 +281,6 @@ def create_app(
         # an error.
         "task": None,
     }
-    # The server-side stream, when one is running. `ready` follows the same
-    # replace-on-notify idiom as the pump above, for the same reason: it is set
-    # from the service's own threads by way of the loop, and replacing it wakes
-    # every waiter exactly once with no window between a set and a clear.
     # Open capture sessions, by name. Held for the life of the server so that
     # pressing the button repeatedly appends to one recording rather than
     # reopening a directory and re-reading its numbering every time.
@@ -301,7 +309,7 @@ def create_app(
 
     # Tokens for images LINE is allowed to fetch. Created only when a send needs
     # one, and expiring on their own.
-    share_store = ShareStore(Path(stream_output_dir) / "sessions")
+    share_store = ShareStore(Path(output_dir) / "sessions")
     # Started only when something needs it: an application that never sends a
     # picture should not have a second listener open for no reason.
     share_state: dict[str, Any] = {"server": None, "tunnel": None}
@@ -326,14 +334,21 @@ def create_app(
         # Starting it blocks for as long as cloudflared takes to be given an
         # address, so it happens off the loop.
         return await asyncio.to_thread(tunnel.start)
-    stream_state: dict[str, Any] = {
-        "service": None,
-        "ready": asyncio.Event(),
-        "loop": None,
-        "supervisor": None,
-    }
+    # The checkpoints the page may choose from, by registry name. Loading is only
+    # ever by name: a path from the browser is never opened, so the only files
+    # this process unpickles are the ones paths.yaml already lists.
+    model_choices = {choice.name: choice for choice in models}
+    if default_model is not None and default_model not in model_choices:
+        _LOG.warning(
+            "default_model %r is not in the model registry; not loading it", default_model
+        )
+        default_model = None
+    # One model change at a time. A selection, a clear, a restart and the startup
+    # load all start or stop the same worker process.
+    model_lock = asyncio.Lock()
+    model_state: dict[str, Any] = {"autoload": None}
     app = web.Application(
-        client_max_size=model_upload_limit,
+        client_max_size=request_body_limit,
         middlewares=[
             guard_middleware,
             cors_middleware,
@@ -346,7 +361,6 @@ def create_app(
     app[max_sessions_key] = max_sessions
     app[detection_state_key] = DetectionState(
         worker=(detection_worker_factory or ProcessDetectionWorker)(),
-        temp_dir=tempfile.TemporaryDirectory(prefix="telemetry-ocr-model-"),
     )
     # A capture takes the detector for itself while it runs. One at a time, and
     # the live overlay stands down for the duration -- see detect_on_frame.
@@ -448,21 +462,6 @@ def create_app(
         return web.json_response({"reset": True})
 
     async def recognize_frame(request: Any) -> Any:
-        # One recognizer, one process. The stream service calls it from its own
-        # thread, outside this loop's lock, so letting a second tab post frames
-        # at the same time would mean two threads inside PaddleOCR at once.
-        service = stream_state["service"]
-        if service is not None and service.running:
-            return web.json_response(
-                {
-                    "error": (
-                        "A live stream is using OCR. Stop the stream to run OCR "
-                        "on a file in this tab."
-                    ),
-                    "stream": service.status(),
-                },
-                status=409,
-            )
         session = get_session(request)
         source_time_ms = float(request.query.get("source_time_ms", "nan"))
         frame_index = int(request.query.get("frame_index", "-1"))
@@ -512,79 +511,113 @@ def create_app(
         else:
             payload["filename"] = state.filename or payload.get("filename")
         payload["size_bytes"] = state.size_bytes
+        payload["model_name"] = state.model_name
         return payload
 
     async def detection_model_status(_: Any) -> Any:
         return web.json_response(detection_status_payload())
 
-    async def upload_detection_model(request: Any) -> Any:
-        if not request.content_type.startswith("multipart/"):
-            raise ValueError("Model upload must use multipart/form-data")
-        reader = await request.multipart()
-        model_field = None
-        while True:
-            field = await reader.next()
-            if field is None:
-                break
-            if field.name == "model":
-                model_field = field
-                break
-        if model_field is None or not model_field.filename:
-            raise ValueError("Select an Ultralytics YOLO .pt model")
-        filename = Path(model_field.filename).name
-        if Path(filename).suffix.lower() != ".pt":
-            raise ValueError("Only Ultralytics YOLO .pt models are supported")
-
+    def model_list_payload() -> dict[str, Any]:
         state = app[detection_state_key]
-        temp_dir = Path(state.temp_dir.name)
-        model_path = temp_dir / f"{uuid.uuid4().hex}.pt"
-        written = 0
-        try:
-            with model_path.open("wb") as handle:
-                while True:
-                    chunk = await model_field.read_chunk(size=1024**2)
-                    if not chunk:
-                        break
-                    written += len(chunk)
-                    if written > model_upload_limit:
-                        raise ValueError("Model file exceeds the 256 MB limit")
-                    handle.write(chunk)
-            if written == 0:
-                raise ValueError("Model file is empty")
-            previous_path = state.model_path
+        listed = []
+        for choice in model_choices.values():
+            present = choice.path.is_file()
+            listed.append(
+                {
+                    "name": choice.name,
+                    "label": choice.label,
+                    "available": present,
+                    "size_bytes": choice.path.stat().st_size if present else 0,
+                    "default": choice.name == default_model,
+                }
+            )
+        return {"models": listed, "default": default_model, "selected": state.model_name}
+
+    async def detection_models(_: Any) -> Any:
+        return web.json_response(model_list_payload())
+
+    async def load_model(choice: ModelChoice) -> None:
+        state = app[detection_state_key]
+        async with model_lock:
             # Spawning the worker process is slow enough to stall every other
             # request, including the OCR frames the page is still sending.
             async with pump_paused():
-                await asyncio.to_thread(state.worker.start, model_path, filename)
-            state.model_path = model_path
-            state.filename = filename
-            state.size_bytes = written
-            if previous_path is not None and previous_path != model_path:
-                previous_path.unlink(missing_ok=True)
-        except Exception:
-            if state.model_path != model_path:
-                model_path.unlink(missing_ok=True)
-            raise
+                await asyncio.to_thread(state.worker.start, choice.path, choice.path.name)
+            state.model_path = choice.path
+            state.model_name = choice.name
+            state.filename = choice.path.name
+            state.size_bytes = choice.path.stat().st_size
+
+    async def select_detection_model(request: Any) -> Any:
+        """Load a checkpoint by its registry name.
+
+        By name and never by path or upload. This endpoint used to accept an
+        uploaded .pt, which is a pickle that runs code as it loads. Now the page
+        can only point at an entry already in configs/paths.yaml, so what this
+        process unpickles is decided on this machine rather than in a request.
+        """
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise ValueError('Send the choice as JSON: {"name": "best50"}') from exc
+        name = str(body.get("name", "")).strip() if isinstance(body, dict) else ""
+        choice = model_choices.get(name)
+        if choice is None:
+            known = ", ".join(model_choices) or "none are registered"
+            raise ValueError(f"Unknown model {name!r}; choose one of: {known}")
+        if not choice.path.is_file():
+            raise ValueError(
+                f"Model {name!r} is registered but its file is missing: {choice.label}"
+            )
+        await load_model(choice)
         return web.json_response(detection_status_payload(), status=202)
 
     async def clear_detection_model(_: Any) -> Any:
         state = app[detection_state_key]
-        async with pump_paused():
-            await asyncio.to_thread(state.worker.stop)
-        if state.model_path is not None:
-            state.model_path.unlink(missing_ok=True)
-        state.model_path = None
-        state.filename = None
-        state.size_bytes = 0
+        async with model_lock:
+            async with pump_paused():
+                await asyncio.to_thread(state.worker.stop)
+            # Forgotten, never deleted. When checkpoints were uploaded this
+            # unlinked a copy in a temporary directory. The path is now the
+            # registry's own file, and unlinking it would remove best.pt from
+            # models/yolo the first time anyone pressed the button.
+            state.model_path = None
+            state.model_name = None
+            state.filename = None
+            state.size_bytes = 0
         return web.json_response(detection_status_payload())
 
     async def restart_detection_worker(_: Any) -> Any:
         state = app[detection_state_key]
         if state.model_path is None:
             return web.json_response({"error": "No YOLO model is available"}, status=409)
-        async with pump_paused():
+        async with model_lock, pump_paused():
             await asyncio.to_thread(state.worker.restart)
         return web.json_response(detection_status_payload(), status=202)
+
+    async def autoload_default_model() -> None:
+        """Load the registry's default in the background once the server is up.
+
+        In the background so a fifty-megabyte checkpoint and a CUDA context do
+        not hold up the page, or the OCR it can already serve. A failure is
+        logged and leaves detection unloaded rather than stopping the server,
+        because detection is the optional half of the page.
+        """
+        if default_model is None:
+            return
+        choice = model_choices[default_model]
+        if not choice.path.is_file():
+            _LOG.warning(
+                "Default model %s is registered but missing: %s", choice.name, choice.label
+            )
+            return
+        try:
+            _LOG.info("Loading the default model %s (%s)", choice.name, choice.label)
+            await load_model(choice)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOG.exception("Could not load the default model %s", choice.name)
 
     async def reset_detection(request: Any) -> Any:
         source_id = _source_id(request.query.get("source_id", ""))
@@ -774,54 +807,9 @@ def create_app(
         finally:
             pump_state["task"] = asyncio.create_task(pump_detection_results(None))
 
-    async def supervise_stream(_: Any) -> None:
-        """Keep the configured stream running, without needing anyone present.
-
-        The point of an auto-started server is that nobody has to be. A camera is
-        rarely up at the moment Windows logs in, and a stream can drop for longer
-        than the decoder's own backoff covers, so one attempt at startup would
-        leave a server that looks healthy and is reading nothing.
-
-        Deliberately not infinitely eager: the retry interval is long enough that
-        an unreachable camera costs one connection attempt every half minute
-        rather than a tight loop against a host that is not answering.
-        """
-        from .stream_service import StreamService
-
-        assert stream_url is not None  # only scheduled when one is configured
-        while True:
-            service = stream_state["service"]
-            if service is None or not service.running:
-                if service is not None and service.status()["error"]:
-                    _LOG.warning(
-                        "Configured stream is down (%s); retrying",
-                        service.status()["error"],
-                    )
-                try:
-                    started = StreamService(
-                        web_config,
-                        recognizer,
-                        stream_url,
-                        jsonl_path=stream_output_dir / "stream-telemetry.jsonl",
-                        csv_path=stream_output_dir / "stream-telemetry.csv",
-                        on_update=notify_stream,
-                    )
-                    stream_state["service"] = started
-                    started.start()
-                    _LOG.info("Started the configured stream: %s", stream_url)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _LOG.exception("Could not start the configured stream")
-            await asyncio.sleep(_STREAM_SUPERVISOR_INTERVAL_S)
-
     async def start_pump(_: Any) -> None:
         pump_state["task"] = asyncio.create_task(pump_detection_results(None))
-        # Captured here so the stream service, which lives on its own threads,
-        # has a loop to hand its notifications back to.
-        stream_state["loop"] = asyncio.get_running_loop()
-        if stream_url:
-            stream_state["supervisor"] = asyncio.create_task(supervise_stream(None))
+        model_state["autoload"] = asyncio.create_task(autoload_default_model())
 
     async def cleanup(_: Any) -> None:
         # First: it holds a child process, and leaving cloudflared running after
@@ -832,19 +820,13 @@ def create_app(
         server = share_state["server"]
         if server is not None:
             await server.stop()
-        supervisor = stream_state["supervisor"]
-        if supervisor is not None:
-            # Before the stop below, or it would helpfully start a replacement
-            # for the stream that is being shut down.
-            supervisor.cancel()
-            with suppress(asyncio.CancelledError):
-                await supervisor
-        service = stream_state["service"]
-        if service is not None:
-            # First, so the camera is released and the OCR thread is idle before
-            # anything it shares is torn down underneath it.
-            await asyncio.to_thread(service.stop)
-            stream_state["ready"].set()
+        autoload = model_state["autoload"]
+        if autoload is not None:
+            # Waited for rather than cancelled. Cancelling abandons the thread
+            # inside worker.start(), which can finish spawning the YOLO process
+            # after the stop below has already run -- a child nothing stops.
+            with suppress(Exception):
+                await autoload
         pump = pump_state["task"]
         if pump is not None:
             pump.cancel()
@@ -858,169 +840,7 @@ def create_app(
 
         await asyncio.to_thread(close_ensemble)
         state = app[detection_state_key]
-        try:
-            await asyncio.to_thread(state.worker.stop)
-        finally:
-            # Without the finally a failing stop() stranded the uploaded
-            # checkpoint — up to 256 MB — and its directory for good.
-            state.temp_dir.cleanup()
-
-    def wake_stream_waiters() -> None:
-        stream_state["ready"].set()
-        stream_state["ready"] = asyncio.Event()
-
-    def notify_stream() -> None:
-        """Called from the service's threads, so it may not touch the loop."""
-        loop = stream_state["loop"]
-        if loop is None:
-            return
-        with suppress(RuntimeError):
-            loop.call_soon_threadsafe(wake_stream_waiters)
-
-    def current_stream() -> Any:
-        service = stream_state["service"]
-        if service is None:
-            raise web.HTTPNotFound(text="No stream has been started")
-        return service
-
-    async def stream_start(request: Any) -> Any:
-        from .stream_service import StreamService
-
-        body = await request.json()
-        url = str(body.get("url", "")).strip()
-        if not url:
-            raise ValueError("A stream URL is required")
-        existing = stream_state["service"]
-        if existing is not None and existing.running:
-            raise ValueError(
-                "A stream is already running. Stop it before starting another: "
-                "one camera at a time, since they share this process's OCR."
-            )
-        if existing is not None:
-            # A finished service is not restartable, and leaving it in place
-            # would report the previous run's error against the new URL.
-            await asyncio.to_thread(existing.stop)
-        service = StreamService(
-            web_config,
-            recognizer,
-            url,
-            jsonl_path=stream_output_dir / "stream-telemetry.jsonl",
-            csv_path=stream_output_dir / "stream-telemetry.csv",
-            on_update=notify_stream,
-        )
-        stream_state["service"] = service
-        service.start()
-        return web.json_response({"started": True, "status": service.status()})
-
-    async def stream_stop(_: Any) -> Any:
-        supervisor = stream_state["supervisor"]
-        if supervisor is not None:
-            # Stopping means stopping. Leaving the supervisor running would have
-            # it restart the stream within the interval, which reads as the
-            # button not working.
-            supervisor.cancel()
-            with suppress(asyncio.CancelledError):
-                await supervisor
-            stream_state["supervisor"] = None
-        service = stream_state["service"]
-        if service is None:
-            return web.json_response({"stopped": False, "reason": "no stream"})
-        # stop() waits on a decoder that may be blocked on a silent camera until
-        # its read timeout expires, so it cannot run on the loop.
-        await asyncio.to_thread(service.stop)
-        wake_stream_waiters()
-        return web.json_response({"stopped": True, "status": service.status()})
-
-    async def stream_status(_: Any) -> Any:
-        service = stream_state["service"]
-        if service is None:
-            return web.json_response({"running": False, "url": None, "error": None})
-        return web.json_response(service.status())
-
-    async def stream_telemetry(request: Any) -> Any:
-        service = current_stream()
-        after_revision = _non_negative_int(
-            request.query.get("after_revision", "0"), "after_revision"
-        )
-        # Longer than the detection cap because this waits on an event rather
-        # than spinning: an idle stream should cost one held connection, not a
-        # poll every second.
-        wait_ms = min(_non_negative_int(request.query.get("wait_ms", "0"), "wait_ms"), 5000)
-        if wait_ms:
-            deadline = time.monotonic() + wait_ms / 1000.0
-            while service.snapshot().revision <= after_revision and service.running:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                ready = stream_state["ready"]
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(ready.wait(), remaining)
-        snapshot = service.snapshot()
-        return web.json_response(
-            {
-                "running": service.running,
-                "revision": snapshot.revision,
-                "source_time_ms": snapshot.source_time_ms,
-                "frame_index": snapshot.frame_index,
-                "latency_ms": snapshot.latency_ms,
-                "fields": snapshot.fields,
-                "error": service.status()["error"],
-            }
-        )
-
-    async def stream_frame(_: Any) -> Any:
-        service = current_stream()
-        payload, revision = service.preview()
-        if payload is None:
-            # 202: the stream exists but has not produced a picture yet, which
-            # is different from there being no stream at all.
-            return web.json_response({"error": "No frame yet"}, status=202)
-        return web.Response(
-            body=payload,
-            content_type="image/jpeg",
-            headers={"Cache-Control": "no-store", "X-Stream-Revision": str(revision)},
-        )
-
-    async def stream_mjpeg(request: Any) -> Any:
-        """The preview as one long-lived response the browser renders natively.
-
-        An <img> pointed at this needs no polling loop, no canvas and no
-        JavaScript to stay current, which is what keeps the request rate at one
-        per stream instead of one per frame -- the failure this codebase has
-        already been bitten by once.
-        """
-        service = current_stream()
-        response = web.StreamResponse(
-            headers={
-                "Content-Type": "multipart/x-mixed-replace; boundary=frame",
-                "Cache-Control": "no-store",
-            }
-        )
-        await response.prepare(request)
-        sent_revision = 0
-        try:
-            while True:
-                service = stream_state["service"]
-                if service is None or not service.running:
-                    break
-                payload, revision = service.preview()
-                if payload is None or revision <= sent_revision:
-                    ready = stream_state["ready"]
-                    with suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(ready.wait(), 1.0)
-                    continue
-                sent_revision = revision
-                await response.write(
-                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                    + str(len(payload)).encode("ascii")
-                    + b"\r\n\r\n"
-                    + payload
-                    + b"\r\n"
-                )
-        except (ConnectionResetError, ConnectionAbortedError):
-            # The viewer closed the tab. Normal, and not worth a stack trace.
-            pass
-        return response
+        await asyncio.to_thread(state.worker.stop)
 
     async def detect_on_frame(frame: Any) -> dict[str, Any] | None:
         """Run the detector on this exact frame and wait for the answer.
@@ -1166,18 +986,17 @@ def create_app(
 
         return verify
 
-    def capture_session_for(name: str, source: str, is_stream: bool = False) -> Any:
+    def capture_session_for(name: str, source: str) -> Any:
         from .capture_service import CaptureSession
 
         existing = capture_sessions.get(name)
         if existing is not None:
             return existing
         session = CaptureSession(
-            stream_output_dir / "sessions",
+            output_dir / "sessions",
             name,
             source,
             [field.field_id for field in web_config.fields],
-            is_stream=is_stream,
         )
         capture_sessions[name] = session
         return session
@@ -1185,13 +1004,8 @@ def create_app(
     async def capture_shot(request: Any) -> Any:
         """Keep this frame and what it says.
 
-        Two sources, because two different things own the video. A running
-        stream is already being read by this process, so the reading it has just
-        published is reused: recognising the frame again would put a second
-        thread inside PaddleOCR, which is the collision the stream guard exists
-        to prevent, and would answer slightly differently for the same picture.
-        A file playing in the browser is not being read by anyone until asked,
-        so the posted frame is recognised here.
+        The page posts the frame from the video it is playing. Nothing else is
+        reading that video, so the frame is recognised here, as it is kept.
         """
         name = (request.query.get("session") or "").strip()
         if not name:
@@ -1199,44 +1013,6 @@ def create_app(
         source_time_ms = float(request.query.get("source_time_ms", "0"))
         if not 0 <= source_time_ms < 86_400_000:
             raise ValueError("source_time_ms is outside the supported range")
-
-        service = stream_state["service"]
-        if service is not None and service.running:
-            # One call, one lock: see StreamService.current_reading.
-            frame, snapshot = service.current_reading()
-            if frame is None:
-                return web.json_response(
-                    {"error": "The stream has not produced a frame yet"}, status=409
-                )
-            records = [
-                {
-                    "source_time_ms": snapshot.source_time_ms,
-                    "frame_index": snapshot.frame_index,
-                    "field_id": field_id,
-                    "value": item.get("value"),
-                    "raw_text": item.get("raw_text"),
-                    "confidence": item.get("confidence"),
-                    "confirmed": item.get("confirmed"),
-                    "preprocess_variant": item.get("preprocess_variant", ""),
-                    "latency_ms": snapshot.latency_ms,
-                }
-                for field_id, item in snapshot.fields.items()
-            ]
-            session = capture_session_for(name, service.url, is_stream=True)
-            detected = await detect_on_frame(frame)
-            boxes, box_source = _boxes_of(detected)
-            shot = await asyncio.to_thread(
-                session.save,
-                frame,
-                snapshot.source_time_ms,
-                records,
-                summarise_detections(detected),
-                shot_verifier(records),
-                boxes,
-                box_source,
-            )
-            session.record_verification(shot)
-            return web.json_response(asdict(shot))
 
         browser_session = app[sessions_key].get(request.query.get("session_id", ""))
         if browser_session is None:
@@ -1272,7 +1048,7 @@ def create_app(
     def open_session(name: str) -> Any:
         """The session by that name, reopened from disk if this run did not make it."""
         session = capture_sessions.get(name)
-        if session is None and (stream_output_dir / "sessions" / name).is_dir():
+        if session is None and (output_dir / "sessions" / name).is_dir():
             session = capture_session_for(name, "reopened")
         return session
 
@@ -1637,19 +1413,14 @@ def create_app(
     app.router.add_post("/api/session", create_session)
     app.router.add_post("/api/session/{session_id}/reset", reset_session)
     app.router.add_post("/api/session/{session_id}/frame", recognize_frame)
+    app.router.add_get("/api/detection/models", detection_models)
     app.router.add_get("/api/detection/model", detection_model_status)
-    app.router.add_post("/api/detection/model", upload_detection_model)
+    app.router.add_post("/api/detection/model", select_detection_model)
     app.router.add_delete("/api/detection/model", clear_detection_model)
     app.router.add_post("/api/detection/restart", restart_detection_worker)
     app.router.add_post("/api/detection/reset", reset_detection)
     app.router.add_post("/api/detection/frame", detect_frame)
     app.router.add_get("/api/detection/result", latest_detection_result)
-    app.router.add_post("/api/stream/start", stream_start)
-    app.router.add_post("/api/stream/stop", stream_stop)
-    app.router.add_get("/api/stream/status", stream_status)
-    app.router.add_get("/api/stream/telemetry", stream_telemetry)
-    app.router.add_get("/api/stream/frame.jpg", stream_frame)
-    app.router.add_get("/api/stream/mjpeg", stream_mjpeg)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
     app.router.add_get("/api/capture/shots", capture_shots)
@@ -1662,6 +1433,31 @@ def create_app(
     app.on_startup.append(start_pump)
     app.on_cleanup.append(cleanup)
     return app
+
+
+def load_model_choices() -> tuple[list[ModelChoice], str | None]:
+    """The checkpoints configs/paths.yaml registers, for the page to offer.
+
+    Read through vision_lab.paths, which parses YAML and imports no ML framework:
+    the rule this process lives by is that torch never loads in it. A registry
+    that cannot be read leaves the page with no models rather than stopping the
+    server, because detection is the optional half of the page.
+    """
+    try:
+        from vision_lab.paths import load_paths
+
+        paths = load_paths()
+    except Exception as exc:
+        _LOG.warning("Model registry unavailable, so no models are offered: %s", exc)
+        return [], None
+    choices = []
+    for name, path in paths.models.items():
+        try:
+            label = path.relative_to(paths.root).as_posix()
+        except ValueError:
+            label = str(path)
+        choices.append(ModelChoice(name=name, path=path, label=label))
+    return choices, (paths.default_model or None)
 
 
 def configure_logging(log_dir: Path | str | None = DEFAULT_LOG_DIR) -> Path | None:
@@ -1723,11 +1519,12 @@ def run_web_app(
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = False,
-    stream_url: str | None = None,
     share_port: int = DEFAULT_SHARE_PORT,
     quick_tunnel: bool = False,
     allowed_origins: Iterable[str] = (),
     log_dir: Path | str | None = DEFAULT_LOG_DIR,
+    models: Iterable[ModelChoice] | None = None,
+    default_model: str | None = None,
 ) -> None:
     try:
         from aiohttp import web
@@ -1736,10 +1533,13 @@ def run_web_app(
             "The web UI requires aiohttp; install the project with `pip install -e .[web]`."
         ) from exc
     log_path = configure_logging(log_dir)
+    if models is None:
+        models, default_model = load_model_choices()
     app = create_app(
         config,
         recognizer,
-        stream_url=stream_url,
+        models=models,
+        default_model=default_model,
         share_port=share_port,
         quick_tunnel=quick_tunnel,
         allowed_origins=allowed_origins,

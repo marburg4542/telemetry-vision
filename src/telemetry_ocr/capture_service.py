@@ -8,14 +8,8 @@ This is the other half. A shot writes the picture to disk and the telemetry
 beside it, in the session format `extract` already understands, so a value can
 always be checked against the exact frame it was read from.
 
-Where the telemetry comes from depends on who is holding the video:
-
-- a live stream is already being read by the server, so a shot reuses the
-  reading it has just produced. Running OCR again would put a second thread
-  inside PaddleOCR, which is the collision the stream lock exists to prevent,
-  and would produce a slightly different answer for the same frame.
-- a file playing in the browser is not being read by anyone until asked, so the
-  posted frame is recognised here.
+The page posts the frame from the video it is playing. Nothing else is reading
+that video, so the frame is recognised when the shot is taken.
 """
 
 from __future__ import annotations
@@ -332,7 +326,7 @@ class CaptureSession:
     """
 
     def __init__(
-        self, root: Path, name: str, source: str, field_ids: list[str], is_stream: bool = False
+        self, root: Path, name: str, source: str, field_ids: list[str]
     ) -> None:
         if not _SAFE_NAME.match(name):
             # ValueError rather than TelemetryOCRError: this is the caller's
@@ -349,7 +343,10 @@ class CaptureSession:
         self._next_index = self._resume_index()
         self.info = SessionInfo(
             source=source,
-            is_stream=is_stream,
+            # The page captures only from a file it is playing. The field stays in
+            # the format because `telemetry-ocr capture` still records streams,
+            # and extract reads sessions of both kinds.
+            is_stream=False,
             started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             # Shots are taken by hand, so there is no rate to declare. Zero says
             # that plainly rather than implying a cadence nothing enforced.

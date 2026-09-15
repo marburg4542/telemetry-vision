@@ -38,7 +38,7 @@
 * { box-sizing: border-box; }
 
 /* Ahead of every rule below, and !important on purpose. `hidden` is how the
-   page hides the stream image, the overlay, the install button and the restart
+   page hides the overlay, the install button and the restart
    button, and any later `display:` on a class those elements also carry would
    silently override the attribute -- which is how a Restart worker button that
    is meant to appear only when the worker has died ends up on screen always. */
@@ -156,7 +156,7 @@ summary:focus-visible, label:has(input:focus-visible) {
 /* ---------------------------------------------------------------- buttons */
 
 .primary-button, .secondary-button, .ghost-button, .file-button,
-.model-file-button, .capture-button, .line-button {
+.capture-button, .line-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -180,15 +180,14 @@ summary:focus-visible, label:has(input:focus-visible) {
   border-color: var(--blue-hover);
 }
 
-.ghost-button, .secondary-button, .model-file-button {
+.ghost-button, .secondary-button {
   min-height: 34px;
   padding: 0 13px;
   font-size: 13px;
   color: var(--text);
 }
 .ghost-button:hover:not(:disabled),
-.secondary-button:hover:not(:disabled),
-.model-file-button:hover { background: var(--surface-sunken); border-color: var(--blue-line); }
+.secondary-button:hover:not(:disabled) { background: var(--surface-sunken); border-color: var(--blue-line); }
 
 .text-button, .link-button {
   border: 0;
@@ -201,7 +200,7 @@ summary:focus-visible, label:has(input:focus-visible) {
 .text-button:hover:not(:disabled), .link-button:hover { color: var(--blue); }
 .link-button.is-danger { color: var(--danger); }
 
-.file-button input, .model-file-button input { display: none; }
+.file-button input { display: none; }
 
 /* ---------------------------------------------------------------- source */
 
@@ -212,17 +211,6 @@ summary:focus-visible, label:has(input:focus-visible) {
   gap: 8px;
   margin-bottom: 12px;
 }
-.stream-field { flex: 1 1 auto; min-width: 0; display: block; }
-.stream-field input {
-  width: 100%;
-  min-height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-}
-.stream-field input::placeholder { color: #9aabbb; }
-.stream-field input:focus { background: var(--surface); }
 
 /* ---------------------------------------------------------------- stage */
 
@@ -240,7 +228,7 @@ summary:focus-visible, label:has(input:focus-visible) {
      white mat around a frame changes how its exposure reads. */
   background: #0d1620;
 }
-.video-stage video, .video-stage img#streamImage {
+.video-stage video {
   max-width: 100%;
   max-height: 100%;
   width: auto;
@@ -272,26 +260,6 @@ summary:focus-visible, label:has(input:focus-visible) {
 }
 .drop-state p { color: #8ea3b6; font-size: 13px; max-width: 34ch; }
 
-.stream-badge {
-  position: absolute;
-  top: 12px; left: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 11px;
-  border-radius: 999px;
-  background: rgba(18, 102, 209, .92);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .06em;
-}
-.stream-badge > span:first-child {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: #fff;
-  animation: pulse 1.3s ease-in-out infinite;
-}
 
 .capture-flash {
   position: absolute;
@@ -460,6 +428,8 @@ summary:focus-visible, label:has(input:focus-visible) {
   font-size: 12px;
 }
 .field-control input[type="number"] { width: 68px; }
+/* Registry names and their paths, so wider than the other settings. */
+.model-select select { min-width: 240px; max-width: 100%; }
 .check-control input { accent-color: var(--blue); }
 
 .toggle-control { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; }
@@ -484,6 +454,12 @@ summary:focus-visible, label:has(input:focus-visible) {
 
 .model-status { font-size: 12px; color: var(--muted); }
 .model-status.is-error { color: var(--danger); }
+.model-warning code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .7);
+  font-size: 11px;
+}
 .model-status code {
   padding: 1px 5px;
   border-radius: 4px;

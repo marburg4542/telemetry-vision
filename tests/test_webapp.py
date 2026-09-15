@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
 import importlib.util
+import tempfile
 import time
 import unittest
 from dataclasses import asdict
+from pathlib import Path
 
 HAS_WEB_DEPS = bool(
     importlib.util.find_spec("aiohttp")
@@ -123,6 +125,22 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 worker_self.drain_calls = getattr(worker_self, "drain_calls", 0) + 1
 
         self.fake_detection_worker = FakeDetectionWorker()
+        self.FakeDetectionWorker = FakeDetectionWorker
+        self.FakeRecognizer = FakeRecognizer
+
+        from telemetry_ocr.webapp import ModelChoice
+
+        # A registry with one checkpoint on disk and one whose file has gone.
+        self.models_dir = tempfile.TemporaryDirectory()
+        models_root = Path(self.models_dir.name)
+        self.best_path = models_root / "best.pt"
+        self.best_path.write_bytes(b"fake-yolo-checkpoint")
+        self.registry = [
+            ModelChoice("best50", self.best_path, "models/yolo/best.pt"),
+            ModelChoice(
+                "run7", models_root / "gone.pt", "runs/visdrone_custom_7th/weights/best.pt"
+            ),
+        ]
 
         config = AppConfig(
             runtime=RuntimeConfig(enable_fallback=False, confidence_threshold=0.8),
@@ -146,12 +164,14 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+        self.config = config
         server = TestServer(
             create_app(
                 config,
                 FakeRecognizer(),
                 allowed_origins={"https://marburg4542.github.io"},
                 detection_worker_factory=lambda: self.fake_detection_worker,
+                models=self.registry,
             )
         )
         # The real page sends the guard header on every API call, so the default
@@ -168,6 +188,12 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.raw_client.close()
         await self.client.close()
+        self.models_dir.cleanup()
+
+    async def _select(self, name, *, client=None, headers=None):
+        return await (client or self.client).post(
+            "/api/detection/model", json={"name": name}, headers=headers
+        )
 
     async def test_page_health_config_and_frame_session(self):
         page = await self.client.get("/")
@@ -250,7 +276,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         page = await self.client.get("/")
         page_text = await page.text()
         self.assertIn('rel="manifest"', page_text)
-        self.assertIn('id="modelInput"', page_text)
+        self.assertIn('id="modelSelect"', page_text)
         self.assertIn('id="detectionOverlay"', page_text)
         self.assertIn("/service-worker.js", await (await self.client.get("/assets/app.js")).text())
 
@@ -270,7 +296,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker.headers.get("Service-Worker-Allowed"), "/")
         self.assertIn("telemetry-ocr-pwa", await worker.text())
 
-    async def test_yolo_model_upload_detection_and_clear(self):
+    async def test_yolo_model_select_detection_and_clear(self):
         unloaded = await self.client.get("/api/detection/model")
         unloaded_payload = await unloaded.json()
         self.assertFalse(unloaded_payload["loaded"])
@@ -282,17 +308,13 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(no_model.status, 409)
 
-        form = self.FormData()
-        form.add_field(
-            "model",
-            b"fake-yolo-checkpoint",
-            filename="best.pt",
-            content_type="application/octet-stream",
-        )
-        uploaded = await self.client.post("/api/detection/model", data=form)
-        self.assertEqual(uploaded.status, 202)
-        upload_payload = await uploaded.json()
+        selected = await self._select("best50")
+        self.assertEqual(selected.status, 202)
+        upload_payload = await selected.json()
         self.assertEqual(upload_payload["filename"], "best.pt")
+        self.assertEqual(upload_payload["model_name"], "best50")
+        # The registry's own file, not a copy somewhere temporary.
+        self.assertEqual(self.loaded_model_paths[0], self.best_path)
         self.assertEqual(upload_payload["classes"], ["aircraft"])
         self.assertEqual(upload_payload["tracker"], "BoT-SORT")
         self.assertEqual(upload_payload["device"], "cpu")
@@ -344,7 +366,10 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         cleared = await self.client.delete("/api/detection/model")
         self.assertEqual(cleared.status, 200)
         self.assertFalse((await cleared.json())["loaded"])
-        self.assertFalse(self.loaded_model_paths[0].exists())
+        # Clearing forgets the model and must never delete the checkpoint. The
+        # upload path unlinked its temporary copy here; the same line against a
+        # registry file would remove best.pt from models/yolo.
+        self.assertTrue(self.best_path.is_file(), "clearing deleted the registry checkpoint")
 
     async def test_a_cleared_model_stops_being_reported_as_present(self):
         """The worker keeps the name on purpose; the payload must not repeat it.
@@ -352,19 +377,15 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         stop() deliberately retains _filename so restart() has something to
         reopen. The payload used to read `state.filename or worker filename`,
         and after clearing, state.filename is None -- so the `or` fell through
-        to the name of the checkpoint that had just been deleted. The page then
+        to the name of the checkpoint that had just been cleared. The page then
         showed it as loaded, offered "Restart worker", and that answered 409
         forever because model_path really was gone. Reloading showed the same.
         """
-        form = self.FormData()
-        form.add_field(
-            "model", b"fake", filename="best.pt", content_type="application/octet-stream"
-        )
-        loaded = await (await self.client.post("/api/detection/model", data=form)).json()
+        loaded = await (await self._select("best50")).json()
         self.assertEqual(loaded["filename"], "best.pt")
 
         cleared = await (await self.client.delete("/api/detection/model")).json()
-        self.assertIsNone(cleared["filename"], "the deleted checkpoint is still named")
+        self.assertIsNone(cleared["filename"], "the cleared checkpoint is still named")
         self.assertFalse(cleared["loaded"])
         self.assertEqual(cleared["size_bytes"], 0)
 
@@ -379,11 +400,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
 
     async def _load_model_and_submit(self, source_id, generation, sequence):
         if not self.loaded_model_paths:
-            form = self.FormData()
-            form.add_field(
-                "model", b"fake", filename="best.pt", content_type="application/octet-stream"
-            )
-            await self.client.post("/api/detection/model", data=form)
+            await self._select("best50")
         response = await self.client.post(
             f"/api/detection/frame?source_id={source_id}&generation={generation}"
             f"&sequence={sequence}&source_time_ms=500&confidence=0.4&iou=0.5&image_size=640",
@@ -513,17 +530,96 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 400)
 
-    async def test_yolo_upload_rejects_non_pt_files(self):
+    async def test_only_a_registered_present_model_can_be_loaded(self):
+        """The page names a checkpoint; it cannot supply one.
+
+        A .pt is a pickle that runs code as it loads, so what this process will
+        unpickle has to be decided on this machine. Anything that is not a
+        registry name with a file behind it is refused before the worker runs.
+        """
+        unknown = await self._select("best99")
+        self.assertEqual(unknown.status, 400)
+        self.assertIn("best50", (await unknown.json())["error"])
+
+        missing = await self._select("run7")
+        self.assertEqual(missing.status, 400)
+        self.assertIn("missing", (await missing.json())["error"])
+
+        # A path is not a name, however it is spelled.
+        for name in (str(self.best_path), "../models/yolo/best.pt", "best.pt"):
+            with self.subTest(name=name):
+                self.assertEqual((await self._select(name)).status, 400)
+
+        # And an upload is no longer understood at all.
         form = self.FormData()
         form.add_field(
-            "model",
-            b"not-a-model",
-            filename="best.onnx",
-            content_type="application/octet-stream",
+            "model", b"payload", filename="evil.pt", content_type="application/octet-stream"
         )
-        response = await self.client.post("/api/detection/model", data=form)
-        self.assertEqual(response.status, 400)
-        self.assertIn(".pt", (await response.json())["error"])
+        upload = await self.client.post("/api/detection/model", data=form)
+        self.assertEqual(upload.status, 400)
+
+        self.assertEqual(self.loaded_model_paths, [])
+
+    async def test_the_model_list_is_the_registry(self):
+        listed = await (await self.client.get("/api/detection/models")).json()
+        by_name = {model["name"]: model for model in listed["models"]}
+        self.assertEqual(set(by_name), {"best50", "run7"})
+        self.assertTrue(by_name["best50"]["available"])
+        self.assertFalse(by_name["run7"]["available"])
+        self.assertEqual(by_name["best50"]["label"], "models/yolo/best.pt")
+        # Labels only: the absolute path stays on the server.
+        self.assertNotIn(str(self.best_path), str(listed))
+        self.assertIsNone(listed["selected"])
+
+        await self._select("best50")
+        listed = await (await self.client.get("/api/detection/models")).json()
+        self.assertEqual(listed["selected"], "best50")
+
+    async def _start_app(self, **options):
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from telemetry_ocr.webapp import GUARD_HEADER, create_app
+
+        worker = self.FakeDetectionWorker()
+        app = create_app(
+            self.config,
+            self.FakeRecognizer(),
+            detection_worker_factory=lambda: worker,
+            models=self.registry,
+            **options,
+        )
+        client = TestClient(TestServer(app), headers={GUARD_HEADER: "1"})
+        await client.start_server()
+        return client, worker
+
+    async def test_the_default_model_loads_itself_after_startup(self):
+        """Nothing to choose after a restart, and the page is not held up for it."""
+        client, worker = await self._start_app(default_model="best50")
+        try:
+            status = {}
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                status = await (await client.get("/api/detection/model")).json()
+                if status.get("model_name") == "best50":
+                    break
+                await asyncio.sleep(0.02)
+            self.assertEqual(status.get("model_name"), "best50")
+            self.assertEqual(worker.path, self.best_path)
+        finally:
+            await client.close()
+
+    async def test_a_default_whose_file_is_missing_leaves_detection_unloaded(self):
+        # Logged and skipped. The server stays up, because detection is the
+        # optional half of the page.
+        client, worker = await self._start_app(default_model="run7")
+        try:
+            await asyncio.sleep(0.2)
+            status = await (await client.get("/api/detection/model")).json()
+            self.assertIsNone(status["model_name"])
+            self.assertIsNone(worker.path)
+            self.assertEqual((await client.get("/api/health")).status, 200)
+        finally:
+            await client.close()
 
     async def test_api_allows_loopback_and_configured_cors_origins(self):
         response = await self.client.options(
@@ -575,16 +671,13 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_mutating_api_requires_the_guard_header(self):
-        """A cross-origin multipart upload must never reach the .pt loader.
+        """A foreign page must not be able to make this server load a model.
 
-        multipart/form-data is CORS-safelisted, so without a header that forces a
-        preflight any page the user has open could POST a pickle-backed model.
+        Loading is by registry name now, but it still starts a process that
+        unpickles a checkpoint, so it stays behind the header that forces a
+        preflight a foreign origin cannot pass.
         """
-        form = self.FormData()
-        form.add_field(
-            "model", b"payload", filename="evil.pt", content_type="application/octet-stream"
-        )
-        blocked = await self.raw_client.post("/api/detection/model", data=form)
+        blocked = await self._select("best50", client=self.raw_client)
         self.assertEqual(blocked.status, 403)
         self.assertIn("X-Telemetry-OCR", (await blocked.json())["error"])
         self.assertEqual(self.loaded_model_paths, [])
@@ -604,12 +697,8 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created.status, 403)
         self.assertEqual((await created.json())["error"], "Origin is not allowed")
 
-        form = self.FormData()
-        form.add_field(
-            "model", b"payload", filename="evil.pt", content_type="application/octet-stream"
-        )
-        upload = await self.client.post("/api/detection/model", data=form, headers=evil)
-        self.assertEqual(upload.status, 403)
+        chosen = await self._select("best50", headers=evil)
+        self.assertEqual(chosen.status, 403)
         self.assertEqual(self.loaded_model_paths, [])
 
     async def test_rejects_a_rebound_host_header(self):

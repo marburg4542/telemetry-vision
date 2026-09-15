@@ -157,13 +157,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port for the image-only server the tunnel points at",
     )
     web.add_argument(
-        "--stream",
-        help=(
-            "Open this stream on startup and keep it open, so an auto-started "
-            "server needs no one present. Retried every 30s while it is down"
-        ),
-    )
-    web.add_argument(
         "--open-browser",
         action="store_true",
         help="Open the web UI in the default browser after the OCR server starts",
@@ -410,15 +403,12 @@ def main(argv: list[str] | None = None) -> int:
             if not 1 <= args.port <= 65535:
                 parser.error("--port must be between 1 and 65535")
             recognizer = create_recognizer(config.runtime)
-            if args.stream and not is_stream_source(args.stream):
-                parser.error("--stream must be a URL such as rtsp://host:554/path")
             run_web_app(
                 config,
                 recognizer,
                 host=args.host,
                 port=args.port,
                 open_browser=args.open_browser,
-                stream_url=args.stream,
                 share_port=args.share_port,
                 quick_tunnel=args.quick_tunnel,
                 allowed_origins=args.allow_origin,

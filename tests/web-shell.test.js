@@ -84,7 +84,7 @@ test("the capture thumbnail is sized by the button, not by a child image", () =>
 
 test("hidden wins over any display a class also sets", () => {
   /*
-   * The stream image, the enlarged-shot overlay, the install button and the
+   * The enlarged-shot overlay, the install button and the
    * Restart worker button are all hidden with the attribute and shown by script.
    * Every one of them also carries a class, and a `display:` on that class beats
    * the user-agent's `[hidden]` rule -- which is how a button that should appear
@@ -137,25 +137,29 @@ test("the downloads export the same thing the buttons are enabled by", () => {
   }
 });
 
-test("leaving a stream rotates the detection source like entering one does", () => {
+test("the page has no stream mode left", () => {
+  // Removed from the web app by decision: the page plays a file. The CLI still
+  // reads rtsp:// through `telemetry-ocr run` and `capture`, which is a separate
+  // process and not this page.
+  for (const needle of ["/api/stream", "streamMode", "streamImage", "startStream"]) {
+    assert.ok(!appJs.includes(needle), `app.js still refers to ${needle}`);
+  }
+  for (const needle of ["streamUrl", "streamButton", "streamBadge", "rtsp://"]) {
+    assert.ok(!indexHtml.includes(needle), `index.html still carries ${needle}`);
+  }
+});
+
+test("a model is named from the registry, never sent as a file", () => {
   /*
-   * handleFile and enterStreamMode both reset the tracker, mint a new source id
-   * and bump the generation. leaveStreamMode did none of it, so stream -> stop
-   * -> file posted the video's frames under the stream's source id: the server
-   * saw no change, never set reset_tracker, and BoT-SORT carried track
-   * identities from the camera onto the video.
+   * A .pt is a pickle that runs code as it loads. The page used to upload one.
+   * It now offers only the checkpoints configs/paths.yaml lists, by name, so
+   * what the detection process unpickles is decided on this machine.
    */
-  const fn = appJs.match(/function leaveStreamMode\(\)\s*\{[\s\S]*?\n\}/);
-  assert.ok(fn, "leaveStreamMode() is missing");
-  const body = fn[0];
-  assert.match(body, /resetDetectionTracker\(\)/, "the tracker must be reset");
-  assert.match(body, /state\.detectionSourceId\s*=/, "a new source id must be minted");
-  assert.match(body, /\+\+state\.detectionGeneration/, "the generation must advance");
-  assert.match(
-    body,
-    /state\.detectionTracks\.clear\(\)/,
-    "stale boxes must not be left to draw over the video"
-  );
+  assert.match(indexHtml, /<select[^>]*id="modelSelect"/, "the model dropdown is missing");
+  assert.doesNotMatch(indexHtml, /type="file"[^>]*\.pt/, "a .pt file picker is back");
+  assert.doesNotMatch(appJs, /new FormData\(/, "app.js builds a multipart upload again");
+  assert.match(appJs, /\/api\/detection\/models/, "the page no longer reads the registry");
+  assert.match(appJs, /JSON\.stringify\(\{ name \}\)/, "a model is not chosen by name");
 });
 
 test("the service worker cache turns over when the shell changes", () => {
