@@ -63,9 +63,10 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         # Set, so renders run straight through unless a test holds them.
         self.render_gate = threading.Event()
         self.render_gate.set()
+        self.render_entered = threading.Event()
         self.renders = RenderManager(
             self.root / "renders",
-            launcher=thread_launcher(self.render_gate),
+            launcher=thread_launcher(self.render_gate, self.render_entered),
             ffmpeg="ffmpeg-for-tests",
         )
 
@@ -350,10 +351,20 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(render["current"])
         self.assertEqual(render["model"], "best50")
 
-        played = await self.client.get(
-            f"/api/renders/video?{urlencode({'render': render['render_id']})}"
-        )
-        self.assertEqual(played.status, 200)
+        self.assertEqual(render["status"], "complete")
+        query = urlencode({"render": render["render_id"]})
+        stream = await (await self.client.get(f"/api/renders/stream?{query}")).json()
+        self.assertTrue(stream["complete"])
+        run = stream["runs"][0]
+        for file in ("init.mp4", run["segments"][0]["file"]):
+            params = urlencode({"render": render["render_id"], "run": run["run"], "file": file})
+            segment = await self.client.get(f"/api/renders/segment?{params}")
+            self.assertEqual(segment.status, 200)
+        for run_name, file in (("..", "init.mp4"), (run["run"], "../meta.json")):
+            params = urlencode({"render": render["render_id"], "run": run_name, "file": file})
+            self.assertEqual((await self.client.get(f"/api/renders/segment?{params}")).status, 404)
+        # Only renders from before segments are played as one file.
+        self.assertEqual((await self.client.get(f"/api/renders/video?{query}")).status, 404)
 
         # The same files and settings again: played, not rendered twice.
         again = await self.client.post("/api/renders", json=self._render_request())
@@ -367,17 +378,28 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await (await self.client.get("/api/renders")).json())["renders"], [])
         self.assertTrue(self.video.is_file(), "deleting a render deleted the video")
 
-    async def test_a_second_render_waits_and_the_first_can_be_cancelled(self):
+    async def test_a_second_render_waits_and_a_cancelled_one_continues(self):
         self.render_gate.clear()
         first = await self.client.post("/api/renders", json=self._render_request())
         self.assertEqual(first.status, 202)
         busy = await self.client.post("/api/renders", json=self._render_request(stride=2))
         self.assertEqual(busy.status, 409)
+        self.assertTrue(await asyncio.to_thread(self.render_entered.wait, 5))
         cancelled = await self.client.delete("/api/renders/current")
         self.assertTrue((await cancelled.json())["cancelled"])
         self.render_gate.set()
-        await self._wait_for_render("cancelled")
-        self.assertEqual((await (await self.client.get("/api/renders")).json())["renders"], [])
+        job = await self._wait_for_render("cancelled")
+        self.assertTrue(job["kept"])
+        listed = (await (await self.client.get("/api/renders")).json())["renders"]
+        self.assertEqual(
+            [(item["status"], item["current"]) for item in listed], [("partial", True)]
+        )
+
+        # Kept to watch, and started again it carries on rather than starting over.
+        again = await self.client.post("/api/renders", json=self._render_request())
+        self.assertEqual(again.status, 202)
+        job = await self._wait_for_render("complete")
+        self.assertGreater(job["start_frame"], 0)
 
     async def test_a_render_needs_a_registered_model_file_and_offered_settings(self):
         for body in (
@@ -400,6 +422,12 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 query = urlencode({"render": render})
                 played = await self.client.get(f"/api/renders/video?{query}")
                 self.assertIn(played.status, (400, 404))
+                streamed = await self.client.get(f"/api/renders/stream?{query}")
+                self.assertIn(streamed.status, (400, 404))
+                segment = await self.client.get(
+                    f"/api/renders/segment?{query}&run=run-000&file=init.mp4"
+                )
+                self.assertIn(segment.status, (400, 404))
                 deleted = await self.client.delete(f"/api/renders?{query}")
                 self.assertIn(deleted.status, (200, 400, 404))
         self.assertTrue(self.best_path.is_file())

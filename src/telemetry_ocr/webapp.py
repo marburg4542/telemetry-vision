@@ -27,13 +27,16 @@ from .ocr import Recognizer
 from .pipeline import FramePacket, TelemetryPipeline
 from .public_share import DEFAULT_SHARE_PORT, ShareServer, ShareStore
 from .render_job import (
-    VIDEO_FILE,
+    LEGACY_FORMAT,
+    LEGACY_VIDEO_FILE,
     RenderBusy,
     RenderManager,
     RenderSettings,
     RenderUnavailable,
     is_current,
+    made_from,
     read_meta,
+    render_format,
     render_id_for,
     with_track_ids,
 )
@@ -571,8 +574,13 @@ def create_app(
             "duration_ms": meta.get("duration_ms"),
             "elapsed_s": meta.get("elapsed_s"),
             "created_at": meta.get("created_at"),
-            # False once the video or the checkpoint has been replaced since.
-            "current": is_current(meta, video.path if video else None, model_path),
+            "format": render_format(meta),
+            # "complete", "partial" (stopped, can continue) or "running".
+            "status": meta.get("status"),
+            "processed_ms": meta.get("processed_ms"),
+            # False once the video or the checkpoint has been replaced since: a
+            # finished render is then out of date, and a partial one starts over.
+            "current": made_from(meta, video.path if video else None, model_path),
         }
 
     def collect_renders(video_id: str | None) -> list[dict[str, Any]]:
@@ -615,13 +623,19 @@ def create_app(
         )
         settings.validate()
         render_id = render_id_for(video.id, entry.name, settings)
-        if not body.get("force"):
+        # Without force, a partial render of the same files carries on from where
+        # it stopped; with it, whatever is there is made again from the start.
+        fresh = bool(body.get("force"))
+        if not fresh:
             directory = renders.directory(render_id)
             meta = read_meta(directory)
             if (
                 meta is not None
-                and (directory / VIDEO_FILE).is_file()
                 and is_current(meta, video.path, entry.path)
+                and (
+                    render_format(meta) != LEGACY_FORMAT
+                    or (directory / LEGACY_VIDEO_FILE).is_file()
+                )
             ):
                 # Already made from these exact files: play it rather than spend
                 # half an hour of GPU making it again.
@@ -638,6 +652,7 @@ def create_app(
                 model_label=entry.label,
                 model_path=entry.path,
                 settings=settings,
+                fresh=fresh,
             )
         except RenderBusy as exc:
             return web.json_response({"error": str(exc), "job": renders.status()}, status=409)
@@ -652,23 +667,47 @@ def create_app(
         cancelled = await asyncio.to_thread(renders.cancel)
         return web.json_response({"cancelled": cancelled, "job": renders.status()})
 
-    def finished_render(render_id: str) -> tuple[Path, dict[str, Any]]:
+    def render_not_found() -> web.HTTPNotFound:
+        return web.HTTPNotFound(
+            text=json.dumps({"error": "ไม่พบผลการประมวลผลนี้"}),
+            content_type="application/json",
+        )
+
+    def legacy_video(render_id: str) -> Path:
         directory = renders.directory(render_id.strip())
         meta = read_meta(directory)
-        if (
-            meta is None
-            or meta.get("status") != "complete"
-            or not (directory / VIDEO_FILE).is_file()
-        ):
-            raise web.HTTPNotFound(
-                text=json.dumps({"error": "ไม่พบผลการประมวลผลนี้"}),
-                content_type="application/json",
-            )
-        return directory, meta
+        path = directory / LEGACY_VIDEO_FILE
+        if meta is None or meta.get("status") != "complete" or not path.is_file():
+            raise render_not_found()
+        return path
 
     async def render_video(request: Any) -> Any:
-        directory, _ = await asyncio.to_thread(finished_render, request.query.get("render", ""))
-        return web.FileResponse(directory / VIDEO_FILE, headers={"Cache-Control": "no-cache"})
+        """A render made before segments: one finished MP4, played as a file."""
+        path = await asyncio.to_thread(legacy_video, request.query.get("render", ""))
+        return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+
+    async def render_stream(request: Any) -> Any:
+        """A render's finished segments, which the page polls while the render grows."""
+        render_id = (request.query.get("render") or "").strip()
+        index = await asyncio.to_thread(renders.stream, render_id)
+        if index is None:
+            raise render_not_found()
+        return web.json_response(index, headers={"Cache-Control": "no-store"})
+
+    async def render_segment(request: Any) -> Any:
+        """One init or media segment. Only names a render writes are served."""
+        path = await asyncio.to_thread(
+            renders.segment_path,
+            (request.query.get("render") or "").strip(),
+            request.query.get("run", ""),
+            request.query.get("file", ""),
+        )
+        if path is None:
+            raise render_not_found()
+        # The same names come back when a render is made again, so never cached.
+        return web.FileResponse(
+            path, headers={"Cache-Control": "no-cache", "Content-Type": "video/mp4"}
+        )
 
     async def delete_render(request: Any) -> Any:
         render_id = (request.query.get("render") or "").strip()
@@ -783,7 +822,8 @@ def create_app(
         page. What the page shows may be the rendered video, whose boxes sit over
         the OSD digits OCR reads; the original never has anything drawn on it.
         The boxes come from the render's own record of that frame, so the marked
-        copy matches the video on screen without asking the model again.
+        copy matches the video on screen without asking the model again -- also
+        while the render is still being made, for the frames it has got to.
         """
         from .capture_service import DetectionSummary
 
@@ -806,7 +846,11 @@ def create_app(
         meta: dict[str, Any] | None = None
         if render_id:
             meta = read_meta(renders.directory(render_id))
-            if meta is None or meta.get("status") != "complete" or meta.get("video") != video.id:
+            if (
+                meta is None
+                or meta.get("status") not in {"complete", "partial", "running"}
+                or meta.get("video") != video.id
+            ):
                 raise ValueError("ผลการประมวลผลนี้ไม่ใช่ของวิดีโอที่เลือก")
         fps = float((meta or {}).get("source_fps") or video.fps)
         stride = int((meta or {}).get("stride") or 1)
@@ -830,7 +874,11 @@ def create_app(
             summary = DetectionSummary("no_render")
         else:
             detections = await asyncio.to_thread(renders.detections_at, render_id, frame_index)
-            summary = summarise_boxes(detections)
+            if detections is None and meta.get("status") != "complete":
+                # A render still being made, or stopped, that has not got this far.
+                summary = DetectionSummary("not_processed")
+            else:
+                summary = summarise_boxes(detections)
             if detections:
                 boxes = with_track_ids(detections)
                 box_source = (int(frame.shape[1]), int(frame.shape[0]))
@@ -1228,6 +1276,8 @@ def create_app(
     app.router.add_get("/api/renders/current", render_status)
     app.router.add_delete("/api/renders/current", cancel_render)
     app.router.add_get("/api/renders/video", render_video)
+    app.router.add_get("/api/renders/stream", render_stream)
+    app.router.add_get("/api/renders/segment", render_segment)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
     app.router.add_get("/api/capture/shots", capture_shots)
@@ -1504,7 +1554,7 @@ def _thumbnail_of(path: Path, cache_dir: Path) -> Path | None:
 
 
 def _shot_stage(shot: Any) -> str:
-    """How far a capture got: "ready", "no_render", "no_model" or "no_result".
+    """How far a capture got: "ready", "no_render", "not_processed", "no_model" or "no_result".
 
     Kept as three words rather than a boolean because they are fixed in three
     different places. "no_model" means best.pt was never loaded, "no_result"
@@ -1514,8 +1564,9 @@ def _shot_stage(shot: Any) -> str:
     """
     status = getattr(getattr(shot, "detections", None), "status", "")
     # "no_render": taken from a video that had not been run through a model.
+    # "not_processed": the render had not got to that frame yet.
     # "no_model" is kept for sessions recorded before renders existed.
-    if status in {"no_render", "no_model", "no_result"}:
+    if status in {"no_render", "not_processed", "no_model", "no_result"}:
         return status
     return "ready"
 

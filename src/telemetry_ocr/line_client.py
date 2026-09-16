@@ -327,6 +327,8 @@ def describe_detections(summary: Any) -> str:
     status = getattr(summary, "status", "unknown")
     if status == "no_render":
         return "ตรวจจับ: ยังไม่ได้ประมวลผลวิดีโอด้วย AI"
+    if status == "not_processed":
+        return "ตรวจจับ: ยังประมวลผลไม่ถึงเฟรมนี้"
     if status == "no_model":
         return "ตรวจจับ: ยังไม่ได้โหลดโมเดล"
     if status == "no_result":
