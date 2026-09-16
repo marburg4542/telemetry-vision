@@ -226,8 +226,12 @@ async def render_for_the_pictures(cdp: Cdp) -> str:
     finished = await cdp.js("Boolean(matchingRender())")
     if finished:
         # A finished render is already there to photograph playing, so the
-        # in-progress pictures are taken of a throwaway at another setting.
-        await cdp.js("renderStride.value = '3'; renderStride.dispatchEvent(new Event('change'))")
+        # in-progress pictures are taken of a throwaway at another confidence --
+        # not another stride, which the panel in those pictures would show.
+        await cdp.js(
+            "renderConfidence.value = '0.50';"
+            " renderConfidence.dispatchEvent(new Event('change'))"
+        )
     await cdp.js("renderButton.click()")
     await cdp.wait_for(
         "state.renderJob && state.renderJob.status === 'running' && state.renderProcessedS > 6",
@@ -247,26 +251,38 @@ async def render_for_the_pictures(cdp: Cdp) -> str:
     await shot(cdp, "05b-render-partial", "#aiPanel")
 
     await click_render_action(cdp, render_id, "ทำต่อ")
-    await cdp.wait_for(
-        "state.renders.some((render) => render.render_id === "
-        f"{json.dumps(render_id)} && render.status === 'complete')",
-        timeout=1800, label="the render to finish",
-    )
-    if finished:
-        await cdp.js("renderStride.value = '2'; renderStride.dispatchEvent(new Event('change'))")
-        await asyncio.sleep(1)
-        # Only ever the one this run started: the settings it was made at are
-        # the ones set above, and nothing else here renders at them.
-        await cdp.js(
-            "(async () => {"
-            f"  const params = new URLSearchParams({{ render: {json.dumps(render_id)} }});"
-            "  await fetch(`/api/renders?${params}`,"
-            "    { method: 'DELETE', headers: { 'X-Telemetry-OCR': '1' } });"
-            "  await refreshRenders();"
-            "})()"
+    if not finished:
+        await cdp.wait_for(
+            "state.renders.some((render) => render.render_id === "
+            f"{json.dumps(render_id)} && render.status === 'complete')",
+            timeout=1800, label="the render to finish",
         )
-        return await cdp.js("(matchingRender() || {}).render_id || ''")
-    return render_id
+        return render_id
+
+    # The throwaway was only ever for the pictures: let it prove it continues,
+    # then stop it and take it away again.
+    await cdp.wait_for(
+        "state.renderJob && state.renderJob.status === 'running'",
+        timeout=300, label="the continued render",
+    )
+    await cdp.js("renderCancelButton.click()")
+    await cdp.wait_for(
+        "state.renderJob && state.renderJob.status === 'cancelled'",
+        timeout=120, label="the throwaway to stop",
+    )
+    await cdp.js(
+        "renderConfidence.value = '0.45'; renderConfidence.dispatchEvent(new Event('change'))"
+    )
+    await cdp.js(
+        "(async () => {"
+        f"  const params = new URLSearchParams({{ render: {json.dumps(render_id)} }});"
+        "  await fetch(`/api/renders?${params}`,"
+        "    { method: 'DELETE', headers: { 'X-Telemetry-OCR': '1' } });"
+        "  await refreshRenders();"
+        "})()"
+    )
+    await asyncio.sleep(1)
+    return await cdp.js("(matchingRender() || {}).render_id || ''")
 
 
 async def main() -> None:
@@ -321,20 +337,34 @@ async def main() -> None:
                         " modelSelect.dispatchEvent(new Event('change'))"
                     )
                 await cdp.wait_for("state.video && sourceVideo.readyState >= 2", label="the video")
-                await seek(cdp, 5)
-                await shot(cdp, "02-original")
 
                 render_id = await render_for_the_pictures(cdp)
                 times = box_times(render_id)
                 print("moments with boxes:", times)
 
-                await cdp.js("viewRendered.click()")
+                # The button plays the finished render when nothing is on screen;
+                # when the render just made is already showing, it is the switch.
+                await cdp.js(
+                    "if (state.activeRender) viewRendered.click(); else renderButton.click()"
+                )
                 await cdp.wait_for(
                     "state.view === 'rendered' && sourceVideo.readyState >= 2", label="the AI video"
                 )
                 await seek(cdp, times[0])
                 await shot(cdp, "03-ai-video")
                 await shot(cdp, "04-ai-panel", "#aiPanel")
+
+                await cdp.js("viewOriginal.click()")
+                await cdp.wait_for(
+                    "state.view === 'original' && sourceVideo.readyState >= 2", label="the original"
+                )
+                await seek(cdp, times[0])
+                await shot(cdp, "02-original")
+                await cdp.js("viewRendered.click()")
+                await cdp.wait_for(
+                    "state.view === 'rendered' && sourceVideo.readyState >= 2", label="the AI video"
+                )
+                await seek(cdp, times[0])
 
                 await cdp.js("manageModelsButton.click()")
                 await cdp.wait_for(
