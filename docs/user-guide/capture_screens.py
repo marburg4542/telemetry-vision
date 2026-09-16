@@ -39,6 +39,10 @@ from vision_lab.report import find_browser
 APP = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765/"
 VIDEO = sys.argv[2] if len(sys.argv) > 2 else "clip-60s.mp4"
 MODEL = sys.argv[3] if len(sys.argv) > 3 else ""
+# "static" leaves the two pictures of a render in progress alone and takes
+# only the ones a finished render can pose for, which needs no GPU -- what to
+# pass when the machine is busy rendering something of its own.
+STATIC = len(sys.argv) > 4 and sys.argv[4] == "static"
 OUT = Path(__file__).resolve().parent / "assets" / "screens"
 RENDERS = ROOT / "output" / "renders"
 PORT = 9333
@@ -218,6 +222,13 @@ def box_times(render_id: str, fallback=(19.8, 17.6, 5.0)) -> tuple[float, ...]:
 
 
 async def render_for_the_pictures(cdp: Cdp) -> str:
+    if STATIC:
+        render_id = await cdp.js("(matchingRender() || {}).render_id || ''")
+        if not render_id:
+            raise SystemExit("static mode needs a finished render for these settings")
+        print("static: keeping the pictures of a render in progress as they are")
+        return render_id
+
     """Render the clip, photographing it being made, cancelled and continued.
 
     Returns the render id, and whether it was made only for the pictures -- in
@@ -234,8 +245,8 @@ async def render_for_the_pictures(cdp: Cdp) -> str:
         )
     await cdp.js("renderButton.click()")
     await cdp.wait_for(
-        "state.renderJob && state.renderJob.status === 'running' && state.renderProcessedS > 6",
-        timeout=300, label="the first segments of the render",
+        "state.renderJob && state.renderJob.status === 'running' && state.renderProcessedS > 12",
+        timeout=600, label="enough of the render to photograph",
     )
     await asyncio.sleep(2)
     await shot(cdp, "05-render-progress", "#aiPanel")
