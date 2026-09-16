@@ -31,6 +31,9 @@ const ui = {
   renderStatus: $("renderStatus"),
   renderList: $("renderList"),
   renderWait: $("renderWait"),
+  aiPanel: $("aiPanel"),
+  aiToggle: $("aiToggle"),
+  aiToggleHint: $("aiToggleHint"),
   modelDialog: $("modelDialog"),
   modelDialogClose: $("modelDialogClose"),
   registeredModels: $("registeredModels"),
@@ -122,6 +125,8 @@ const state = {
   renderStream: null,
   renderProcessedS: 0,
   attached: "",
+  // Folded away to give the video the height. Remembered per browser.
+  aiCollapsed: false,
   // Capture: one session per page load unless the operator is holding the
   // button down, in which case shots keep appending to the same one.
   captureSession: null,
@@ -594,6 +599,56 @@ function matchingRender(statuses = ["complete"]) {
   )) || null;
 }
 
+const AI_COLLAPSED_KEY = "telemetry-ocr.ai-collapsed";
+
+function restoreAiPanel() {
+  let collapsed = false;
+  try {
+    collapsed = window.localStorage.getItem(AI_COLLAPSED_KEY) === "1";
+  } catch (error) {
+    // Private windows refuse storage; the panel simply opens each time.
+  }
+  setAiCollapsed(collapsed, false);
+}
+
+function setAiCollapsed(collapsed, remember = true) {
+  state.aiCollapsed = collapsed;
+  ui.aiPanel.classList.toggle("is-collapsed", collapsed);
+  ui.aiToggle.setAttribute("aria-expanded", String(!collapsed));
+  ui.aiToggle.title = collapsed ? "แสดงแผงประมวลผลด้วย AI" : "ซ่อนแผงเพื่อให้วิดีโอใหญ่ขึ้น";
+  updateAiHint();
+  if (!remember) return;
+  try {
+    window.localStorage.setItem(AI_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch (error) {
+    // Nothing to do: the choice just does not survive this page.
+  }
+}
+
+// The one line the header keeps when the panel is folded: what is running, or
+// what would run if the button were pressed.
+function updateAiHint() {
+  if (!state.aiCollapsed) {
+    ui.aiToggleHint.textContent = "";
+    return;
+  }
+  const job = state.renderJob;
+  if (job && RENDER_ACTIVE.has(job.status)) {
+    const percent = job.total ? Math.min(100, (job.done / job.total) * 100) : 0;
+    const parts = [job.model, `${percent.toFixed(1)}%`];
+    if (Number.isFinite(job.eta_s)) parts.push(`เหลืออีกราว ${formatDuration(job.eta_s)}`);
+    ui.aiToggleHint.textContent = parts.join(" · ");
+    return;
+  }
+  const model = selectedModel();
+  ui.aiToggleHint.textContent = model ? `${model.name} · ${strideLabel()}` : "ยังไม่มีโมเดลที่ใช้ได้";
+}
+
+function strideLabel() {
+  const stride = renderSettings().stride;
+  return stride > 1 ? `ทุก ${stride} เฟรม` : "ทุกเฟรม";
+}
+
 function isRenderingNow(renderId) {
   const job = state.renderJob;
   return Boolean(job && RENDER_ACTIVE.has(job.status) && job.render_id === renderId);
@@ -815,6 +870,7 @@ function applyRenderJob(job) {
     if (state.video && state.video.id === current.video) refreshRenders();
   }
   updateRenderControls();
+  updateAiHint();
 }
 
 function scheduleRenderPoll() {
@@ -852,10 +908,14 @@ function updateRenderControls() {
 
 function describeRenderChoice() {
   if (state.renderJob && RENDER_ACTIVE.has(state.renderJob.status)) {
-    // The bar above says how far along it is; this says what is on screen.
+    // The bar above says how far along it is; this says what is on screen --
+    // which may be a render finished earlier, not the one being made.
     if (state.view === "rendered" && state.activeRender) {
+      const watching = state.activeRender.render_id === state.renderJob.render_id;
       setRenderStatus(
-        `กำลังดูวิดีโอ AI ระหว่างประมวลผล · ประมวลผลถึง ${formatTime(state.renderProcessedS)}`,
+        watching
+          ? `กำลังดูวิดีโอ AI ระหว่างประมวลผล · ประมวลผลถึง ${formatTime(state.renderProcessedS)}`
+          : `กำลังแสดงวิดีโอ AI จาก ${state.activeRender.model} ที่ประมวลผลไว้แล้ว`,
       );
     }
     return;
@@ -903,6 +963,7 @@ function describeRenderChoice() {
 function onRenderChoiceChange() {
   updateRenderControls();
   describeRenderChoice();
+  updateAiHint();
 }
 
 function formatDate(value) {
@@ -926,6 +987,7 @@ async function initialize() {
     const session = await jsonFetch("/api/session", { method: "POST" });
     state.sessionId = session.session_id;
     renderTelemetryRows();
+    restoreAiPanel();
     setEngineStatus("ready", `${state.config.model} พร้อมใช้งาน`);
     initializeLibrary();
     checkLineConfigured();
@@ -1933,6 +1995,7 @@ ui.modelSelect.addEventListener("change", onRenderChoiceChange);
 for (const control of [ui.renderConfidence, ui.renderImageSize, ui.renderStride]) {
   control.addEventListener("change", onRenderChoiceChange);
 }
+ui.aiToggle.addEventListener("click", () => setAiCollapsed(!state.aiCollapsed));
 ui.renderButton.addEventListener("click", onRenderButton);
 ui.renderCancelButton.addEventListener("click", cancelRender);
 ui.manageModelsButton.addEventListener("click", openModelManager);

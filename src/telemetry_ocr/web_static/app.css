@@ -390,6 +390,42 @@ summary:focus-visible, label:has(input:focus-visible) {
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
 }
+/* Collapsed: everything but the header goes, and the video stage -- which is
+   flex: 1 in the same column -- takes the height back. */
+.ai-panel.is-collapsed > :not(.ai-toggle) { display: none; }
+.ai-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--blue);
+  cursor: pointer;
+  text-align: left;
+}
+.ai-toggle:hover .ai-toggle-label { text-decoration: underline; }
+.ai-caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+.ai-panel.is-collapsed .ai-caret { transform: rotate(0deg); }
+.ai-toggle-hint {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .ai-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .ai-row .primary-button { margin-left: auto; min-height: 32px; }
 

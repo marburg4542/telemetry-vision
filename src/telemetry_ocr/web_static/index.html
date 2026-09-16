@@ -113,6 +113,16 @@
                boxes get onto the picture now, rather than a setting behind a
                disclosure. -->
           <section class="ai-panel" id="aiPanel" aria-label="ประมวลผลด้วย AI">
+            <!-- Folded away when the picture matters more than the controls. What
+                 the render is doing stays on this line, so collapsing it does not
+                 hide whether anything is running. -->
+            <button class="ai-toggle" id="aiToggle" type="button" aria-expanded="true"
+                    aria-controls="aiPanel">
+              <span class="ai-caret" aria-hidden="true"></span>
+              <span class="ai-toggle-label">ประมวลผลด้วย AI</span>
+              <span class="ai-toggle-hint" id="aiToggleHint"></span>
+            </button>
+
             <div class="ai-row">
               <label class="field-control model-select" for="modelSelect">
                 <span>โมเดล</span>
