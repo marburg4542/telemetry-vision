@@ -175,11 +175,25 @@ test("the page plays what the model rendered and draws no boxes itself", () => {
   }
   assert.doesNotMatch(indexHtml, /detection-math\.js|<canvas/, "the overlay canvas is back");
   assert.match(appJs, /\/api\/renders/, "the page no longer starts or plays renders");
+  // Watched while it is made: neither Chrome nor Edge plays a playlist that is
+  // still growing, so the page feeds the segments to Media Source itself.
+  assert.match(appJs, /\/api\/renders\/stream/, "the page waits for a render to finish again");
+  assert.match(appJs, /TelemetryRenderPlayer/, "nothing plays the segments");
+  assert.match(indexHtml, /render-player\.js/, "the segment player is not loaded");
   assert.match(appJs, /\/api\/videos\/source/, "the original is no longer served by the server");
   // A capture reads its frame on the server, from the original; it posts no picture.
   const capture = appJs.match(/async function takeCaptureShot\(\)\s*\{[\s\S]*?\n\}/);
   assert.ok(capture, "takeCaptureShot() is missing");
   assert.doesNotMatch(capture[0], /body:/, "a capture uploads the frame again");
+});
+
+test("every script the page loads is cached by the service worker", () => {
+  // A script in the markup but not in the shell is fetched from the network on
+  // an installed copy, and the page is broken exactly when the server is not up.
+  const sw = read("service-worker.js");
+  for (const src of matchAll(indexHtml, /<script src="([^"]+)"/g)) {
+    assert.ok(sw.includes(src), `${src} is not in the service worker shell`);
+  }
 });
 
 test("the service worker cache turns over when the shell changes", () => {

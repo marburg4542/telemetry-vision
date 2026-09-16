@@ -19,6 +19,7 @@
     <link rel="apple-touch-icon" href="/assets/icons/icon-192.png" />
     <link rel="stylesheet" href="/assets/app.css" />
     <script src="/assets/format.js" defer></script>
+    <script src="/assets/render-player.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -67,6 +68,10 @@
               <p id="emptyStateText">เลือกจากรายการ วิดีโอ ด้านบน</p>
             </div>
             <div class="capture-flash" id="captureFlash" aria-hidden="true"></div>
+
+            <!-- A render is watched while it is made, so the picture stops where
+                 the model has got to. Said, rather than looking stuck. -->
+            <div class="render-wait" id="renderWait" hidden>กำลังประมวลผลส่วนถัดไป…</div>
 
             <!-- A chosen capture at the size the video plays at, inside the
                  stage so it covers exactly the area the video occupies. -->
@@ -135,8 +140,10 @@
               <label class="field-control" for="renderStride">
                 <span>ประมวลผล</span>
                 <select id="renderStride">
-                  <option value="1" selected>ทุกเฟรม</option>
-                  <option value="2">ทุก 2 เฟรม</option>
+                  <option value="1">ทุกเฟรม</option>
+                  <!-- Default: at every second frame the renderer keeps up with
+                       the video, so watching it is near enough live. -->
+                  <option value="2" selected>ทุก 2 เฟรม</option>
                   <option value="3">ทุก 3 เฟรม</option>
                 </select>
               </label>

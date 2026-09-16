@@ -32,6 +32,10 @@ jobs:
       # when a redesign renames an id or styles an element that is not there:
       # the page still loads and renders the wrong thing.
       - run: node --test tests/web-shell.test.js
+      # Which segment of a render holds a moment, what to fetch and what to drop.
+      # Wrong answers here look like a video that stalls or seeks to the wrong
+      # place, with nothing in any log to say why.
+      - run: node --test tests/render-player.test.js
 
   lint:
     runs-on: ubuntu-latest

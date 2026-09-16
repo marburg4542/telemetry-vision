@@ -415,6 +415,18 @@ summary:focus-visible, label:has(input:focus-visible) {
 .check-control input { accent-color: var(--blue); }
 
 .render-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--blue); }
+.render-wait {
+  position: absolute;
+  left: 50%;
+  bottom: 58px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(12, 32, 60, 0.82);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
 .render-bar {
   position: relative;
   flex: 1 1 auto;

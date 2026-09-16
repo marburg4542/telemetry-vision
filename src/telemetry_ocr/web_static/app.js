@@ -30,6 +30,7 @@ const ui = {
   renderCancelButton: $("renderCancelButton"),
   renderStatus: $("renderStatus"),
   renderList: $("renderList"),
+  renderWait: $("renderWait"),
   modelDialog: $("modelDialog"),
   modelDialogClose: $("modelDialogClose"),
   registeredModels: $("registeredModels"),
@@ -116,6 +117,11 @@ const state = {
   // which is what the time estimate is made from. null until there is one.
   renderSpeed: null,
   renderSpeedAt: "",
+  // The Media Source player a segmented render is watched through, how far that
+  // render has got, and what the <video> currently has attached.
+  renderStream: null,
+  renderProcessedS: 0,
+  attached: "",
   // Capture: one session per page load unless the operator is holding the
   // button down, in which case shots keep appending to the same one.
   captureSession: null,
@@ -534,15 +540,21 @@ async function refreshRenders({ autoplay = false } = {}) {
   rememberRenderSpeed(state.renders);
   state.ffmpeg = Boolean(payload.ffmpeg);
   applyRenderJob(payload.job);
-  const stillThere = state.activeRender && state.renders.some(
+  const listed = state.activeRender && state.renders.find(
     (render) => render.render_id === state.activeRender.render_id,
   );
-  if (state.activeRender && !stillThere) {
+  if (listed) {
+    // The listed copy carries how far it has got, which the list and the status
+    // line report while it is being made.
+    state.activeRender = listed;
+  } else if (state.activeRender && !isRenderingNow(state.activeRender.render_id)) {
+    // Deleted, or never written: a render being made is not listed until its
+    // first segment exists, and dropping it then would close what is playing.
     state.activeRender = null;
     showView("original");
   }
   if (autoplay) {
-    const match = matchingRender();
+    const match = matchingRender(["complete", "running"]);
     if (match) {
       state.activeRender = match;
       showView("rendered");
@@ -566,18 +578,32 @@ function rememberRenderSpeed(renders) {
   }
 }
 
-// A render made from these files, with the model and settings chosen above.
-function matchingRender() {
+// A render of these files with the model and settings chosen above, in one of
+// the states asked for: finished, stopped partway, or being made right now.
+function matchingRender(statuses = ["complete"]) {
   const model = selectedModel();
   if (!state.video || !model) return null;
   const wanted = renderSettings();
   return state.renders.find((render) => (
     render.current
+    && statuses.includes(render.status || "complete")
     && render.model === model.name
     && Number(render.settings.confidence).toFixed(2) === wanted.confidence.toFixed(2)
     && Number(render.settings.image_size) === wanted.image_size
     && Number(render.stride) === wanted.stride
   )) || null;
+}
+
+function isRenderingNow(renderId) {
+  const job = state.renderJob;
+  return Boolean(job && RENDER_ACTIVE.has(job.status) && job.render_id === renderId);
+}
+
+// How much of the video a render has been through, 0 to 100.
+function renderPercent(render) {
+  const duration = Number(render.duration_ms) || Number(state.video?.duration_ms) || 0;
+  if (!duration) return 0;
+  return Math.min(100, Math.round((Number(render.processed_ms) || 0) / duration * 100));
 }
 
 function renderRenderList() {
@@ -603,9 +629,7 @@ function renderRenderList() {
     const meta = document.createElement("small");
     meta.className = "render-item-meta";
     meta.classList.toggle("is-stale", !render.current);
-    meta.textContent = render.current
-      ? `${playing ? "กำลังเล่น · " : ""}สร้างเมื่อ ${formatDate(render.created_at)}`
-      : "วิดีโอหรือโมเดลเปลี่ยนไปหลังประมวลผล — ควรประมวลผลใหม่";
+    meta.textContent = describeRender(render, playing);
     const actions = document.createElement("span");
     actions.className = "render-item-actions";
     const play = document.createElement("button");
@@ -618,15 +642,35 @@ function renderRenderList() {
       showView("rendered");
       describeRenderChoice();
     });
+    actions.append(play);
+    // A render that stopped partway carries on from where it got to, which is
+    // what makes cancelling safe on a video that takes half an hour.
+    if (render.status === "partial" && render.current) {
+      const resume = document.createElement("button");
+      resume.type = "button";
+      resume.className = "link-button";
+      resume.textContent = "ทำต่อ";
+      resume.disabled = Boolean(state.renderJob && RENDER_ACTIVE.has(state.renderJob.status));
+      resume.addEventListener("click", () => startRender(render));
+      actions.append(resume);
+    }
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "link-button is-danger";
     remove.textContent = "ลบ";
     remove.addEventListener("click", () => deleteRender(render));
-    actions.append(play, remove);
+    actions.append(remove);
     row.append(text, meta, actions);
     ui.renderList.append(row);
   }
+}
+
+function describeRender(render, playing) {
+  if (!render.current) return "วิดีโอหรือโมเดลเปลี่ยนไปหลังประมวลผล — ควรประมวลผลใหม่";
+  const prefix = playing ? "กำลังเล่น · " : "";
+  if (render.status === "running") return `${prefix}กำลังประมวลผล ${renderPercent(render)}%`;
+  if (render.status === "partial") return `${prefix}ประมวลผลไว้ ${renderPercent(render)}% · หยุดไว้`;
+  return `${prefix}สร้างเมื่อ ${formatDate(render.created_at)}`;
 }
 
 async function deleteRender(render) {
@@ -649,25 +693,34 @@ async function deleteRender(render) {
 }
 
 async function onRenderButton() {
-  const match = matchingRender();
+  const match = matchingRender(["complete", "running"]);
   if (match) {
     state.activeRender = match;
     showView("rendered");
     describeRenderChoice();
     return;
   }
-  await startRender();
+  await startRender(matchingRender(["partial"]));
 }
 
-async function startRender() {
-  const model = selectedModel();
+// Starts a render, or continues one that stopped partway, and shows it at once:
+// the picture follows the model rather than waiting for the whole file.
+async function startRender(resume = null) {
+  const model = resume ? { name: resume.model } : selectedModel();
   if (!state.video || !model) return;
+  const settings = resume
+    ? {
+      confidence: Number(resume.settings.confidence),
+      image_size: Number(resume.settings.image_size),
+      stride: Number(resume.stride),
+    }
+    : renderSettings();
   ui.renderButton.disabled = true;
   try {
     const payload = await jsonFetch("/api/renders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: state.video.id, model: model.name, ...renderSettings() }),
+      body: JSON.stringify({ video: state.video.id, model: model.name, ...settings }),
     });
     if (payload.existing) {
       await refreshRenders();
@@ -678,10 +731,27 @@ async function startRender() {
       describeRenderChoice();
       return;
     }
-    setRenderStatus(
-      `เริ่มประมวลผล ${state.video.name} ด้วย ${model.name} — ระหว่างรอดูต้นฉบับได้ตามปกติ`,
-    );
     applyRenderJob(payload.job);
+    const job = payload.job || {};
+    state.activeRender = {
+      render_id: job.render_id,
+      model: model.name,
+      settings,
+      stride: settings.stride,
+      format: "hls",
+      status: "running",
+      current: true,
+      duration_ms: state.video.duration_ms,
+      processed_ms: resume ? Number(resume.processed_ms) || 0 : 0,
+    };
+    setRenderStatus(
+      `${resume ? "ทำต่อ" : "เริ่มประมวลผล"} ${state.video.name} ด้วย ${model.name}`
+      + " — ดูส่วนที่ประมวลผลแล้วได้เลยระหว่างรอ",
+    );
+    // A continued render picks up a few seconds before where it stopped, so the
+    // join is watched rather than jumped over.
+    showView("rendered", resume ? Math.max(0, (Number(resume.processed_ms) || 0) / 1000 - 5) : 0, true);
+    await refreshRenders();
   } catch (error) {
     if (error.payload?.job) applyRenderJob(error.payload.job);
     setRenderStatus(`เริ่มประมวลผลไม่สำเร็จ: ${error.message}`, true);
@@ -732,12 +802,16 @@ function applyRenderJob(job) {
     if (current.status === "complete") {
       setRenderStatus(`ประมวลผล ${current.video} ด้วย ${current.model} เสร็จแล้ว`);
       showToast("ประมวลผลวิดีโอด้วย AI เสร็จแล้ว");
-      if (state.video && state.video.id === current.video) refreshRenders({ autoplay: true });
     } else if (current.status === "error") {
       setRenderStatus(`ประมวลผลไม่สำเร็จ: ${current.error || "ไม่ทราบสาเหตุ"}`, true);
     } else if (current.status === "cancelled") {
-      setRenderStatus("ยกเลิกการประมวลผลแล้ว");
+      setRenderStatus(
+        current.kept
+          ? "ยกเลิกแล้ว — ส่วนที่ประมวลผลไว้ยังดูได้ กด ทำต่อ เพื่อทำส่วนที่เหลือ"
+          : "ยกเลิกการประมวลผลแล้ว",
+      );
     }
+    if (state.video && state.video.id === current.video) refreshRenders();
   }
   updateRenderControls();
 }
@@ -763,17 +837,28 @@ function stopRenderPoll() {
 function updateRenderControls() {
   const busy = Boolean(state.renderJob && RENDER_ACTIVE.has(state.renderJob.status));
   const model = selectedModel();
-  const match = matchingRender();
+  const match = matchingRender(["complete", "running"]);
+  const partial = matchingRender(["partial"]);
   const playingMatch = Boolean(
     match && state.view === "rendered" && state.activeRender?.render_id === match.render_id,
   );
-  ui.renderButton.textContent = match ? "เล่นวิดีโอ AI" : "ประมวลผลด้วย AI";
+  ui.renderButton.textContent = match
+    ? "เล่นวิดีโอ AI"
+    : partial ? `ทำต่อจาก ${renderPercent(partial)}%` : "ประมวลผลด้วย AI";
   ui.renderButton.disabled = !state.video || !model || playingMatch
     || (!match && (busy || state.ffmpeg === false));
 }
 
 function describeRenderChoice() {
-  if (state.renderJob && RENDER_ACTIVE.has(state.renderJob.status)) return;
+  if (state.renderJob && RENDER_ACTIVE.has(state.renderJob.status)) {
+    // The bar above says how far along it is; this says what is on screen.
+    if (state.view === "rendered" && state.activeRender) {
+      setRenderStatus(
+        `กำลังดูวิดีโอ AI ระหว่างประมวลผล · ประมวลผลถึง ${formatTime(state.renderProcessedS)}`,
+      );
+    }
+    return;
+  }
   if (!state.video) {
     setRenderStatus("เลือกวิดีโอและโมเดล แล้วกดประมวลผลด้วย AI");
     return;
@@ -784,23 +869,32 @@ function describeRenderChoice() {
     return;
   }
   const match = matchingRender();
+  const partial = matchingRender(["partial"]);
   if (match && state.view === "rendered" && state.activeRender?.render_id === match.render_id) {
     setRenderStatus(`กำลังแสดงวิดีโอ AI จาก ${match.model} · สลับเป็นต้นฉบับได้ที่ปุ่มด้านบน`);
   } else if (state.view === "rendered" && state.activeRender) {
-    setRenderStatus(`กำลังแสดงวิดีโอ AI จาก ${state.activeRender.model} (ค่าไม่ตรงกับที่ตั้งไว้ด้านบน)`);
+    const upto = state.activeRender.status === "complete"
+      ? ""
+      : ` · ประมวลผลไว้ถึง ${formatTime(state.renderProcessedS)}`;
+    setRenderStatus(`กำลังแสดงวิดีโอ AI จาก ${state.activeRender.model}${upto}`);
   } else if (match) {
     setRenderStatus(`มีวิดีโอ AI จาก ${match.model} ที่ค่านี้แล้ว — กด เล่นวิดีโอ AI`);
+  } else if (partial) {
+    setRenderStatus(
+      `ประมวลผล ${partial.model} ที่ค่านี้ไว้ ${renderPercent(partial)}% แล้วหยุดไว้`
+      + " — กด ทำต่อ เพื่อทำส่วนที่เหลือ",
+    );
   } else if (state.ffmpeg === false) {
     setRenderStatus("ไม่พบ ffmpeg บนเครื่องนี้ จึงประมวลผลวิดีโอใหม่ไม่ได้ (ยังเล่นผลที่มีอยู่ได้)", true);
   } else {
     const frames = Number(state.video.frames) / renderSettings().stride;
     const estimate = state.renderSpeed && frames
-      ? `ใช้เวลาประมาณ ${formatDuration(frames / state.renderSpeed)}`
+      ? `ทั้งไฟล์ใช้เวลาประมาณ ${formatDuration(frames / state.renderSpeed)}`
         + ` (จากความเร็วครั้งล่าสุด ${state.renderSpeed.toFixed(1)} เฟรม/วินาที)`
       : "ใช้เวลานานกว่าความยาววิดีโอ";
     setRenderStatus(
       `ยังไม่ได้ประมวลผล ${state.video.name} ด้วย ${model.name} ที่ค่านี้ · ${estimate}`
-      + " ระหว่างรอดูต้นฉบับได้",
+      + " · ดูส่วนที่ประมวลผลแล้วได้ทันทีระหว่างรอ",
     );
   }
 }
@@ -899,6 +993,8 @@ async function selectVideo(videoId) {
   renderRenderList();
   if (!video) {
     state.view = "original";
+    state.attached = "";
+    closeRenderPlayer();
     ui.video.removeAttribute("src");
     ui.video.load();
     ui.dropState.hidden = false;
@@ -924,16 +1020,53 @@ async function selectVideo(videoId) {
   await refreshRenders({ autoplay: true });
 }
 
-function sourceUrl(view) {
-  if (view === "rendered" && state.activeRender) {
-    return `/api/renders/video?${new URLSearchParams({ render: state.activeRender.render_id })}`;
+// A render is segments the server keeps adding to while it works, not a file
+// that exists once it is finished, so it is played through Media Source instead
+// of by pointing the <video> at a URL. Renders made before segments are one MP4
+// and still play that way.
+function attachedKey(view) {
+  if (view === "rendered" && state.activeRender) return `render:${state.activeRender.render_id}`;
+  return `video:${state.video.id}`;
+}
+
+function renderPlayer() {
+  if (!state.renderStream) {
+    state.renderStream = TelemetryRenderPlayer.create(ui.video, {
+      fetchIndex: (render) => jsonFetch(`/api/renders/stream?${new URLSearchParams({ render })}`),
+      segmentUrl: (render, run, file) => (
+        `/api/renders/segment?${new URLSearchParams({ render, run, file })}`
+      ),
+      onState: applyStreamState,
+    });
   }
-  return `/api/videos/source?${new URLSearchParams({ video: state.video.id })}`;
+  return state.renderStream;
+}
+
+function closeRenderPlayer() {
+  if (state.renderStream) state.renderStream.close();
+  state.renderProcessedS = 0;
+  ui.renderWait.hidden = true;
+}
+
+function applyStreamState(streamState) {
+  if (streamState.error) {
+    ui.renderWait.hidden = true;
+    setRenderStatus(`เล่นวิดีโอ AI ไม่ได้: ${streamState.error}`, true);
+    return;
+  }
+  state.renderProcessedS = Number(streamState.processedS) || 0;
+  // Said on the picture: stopping at the frame the model has reached is waiting,
+  // and without a word for it, it looks like a video that has hung.
+  ui.renderWait.hidden = !streamState.waiting;
+  if (streamState.clamped) {
+    showToast(`ยังประมวลผลไม่ถึงตรงนั้น — กลับมาที่ ${formatTime(state.renderProcessedS)}`);
+  }
+  if (state.view === "rendered") describeRenderChoice();
 }
 
 // Swaps what the <video> plays and keeps the moment on screen. The original and
 // its render share one timeline, so switching is a comparison, not a restart.
-function showView(view, atSeconds = null) {
+function showView(view, atSeconds = null, play = null) {
   if (!state.video) return;
   const target = view === "rendered" && state.activeRender ? "rendered" : "original";
   state.view = target;
@@ -943,15 +1076,29 @@ function showView(view, atSeconds = null) {
   ui.viewOriginal.setAttribute("aria-pressed", String(target === "original"));
   ui.viewRendered.setAttribute("aria-pressed", String(target === "rendered"));
   renderRenderList();
-  const url = sourceUrl(target);
-  if (ui.video.getAttribute("src") === url) return;
+  const key = attachedKey(target);
+  if (state.attached === key && atSeconds === null) return;
   const resumeAt = atSeconds ?? (ui.video.currentTime || 0);
-  const resume = !ui.video.paused && !ui.video.ended;
+  const resume = play ?? (!ui.video.paused && !ui.video.ended);
+  state.attached = key;
+  const render = state.activeRender;
+  if (target === "rendered" && render && render.format !== "mp4") {
+    ui.renderWait.hidden = false;
+    renderPlayer().open(render.render_id, {
+      startAt: resumeAt,
+      autoplay: resume,
+      durationMs: state.video.duration_ms,
+    });
+    return;
+  }
+  closeRenderPlayer();
   ui.video.addEventListener("loadedmetadata", () => {
     if (resumeAt > 0) ui.video.currentTime = Math.min(resumeAt, ui.video.duration || resumeAt);
     if (resume) ui.video.play().catch(() => {});
   }, { once: true });
-  ui.video.src = url;
+  ui.video.src = target === "rendered"
+    ? `/api/renders/video?${new URLSearchParams({ render: render.render_id })}`
+    : `/api/videos/source?${new URLSearchParams({ video: state.video.id })}`;
   ui.video.load();
 }
 
@@ -1435,7 +1582,9 @@ function buildShotThumb(shot) {
   if (shot.stage && shot.stage !== "ready") {
     const badge = document.createElement("span");
     badge.className = "shot-thumb-badge";
-    badge.textContent = { no_render: "ไม่มี AI", no_model: "ไม่มีโมเดล" }[shot.stage]
+    badge.textContent = {
+      no_render: "ไม่มี AI", not_processed: "ยังไม่ถึง", no_model: "ไม่มีโมเดล",
+    }[shot.stage]
       || "โมเดลไม่ตอบ";
     card.append(badge);
   }
@@ -1509,6 +1658,9 @@ function describeShotDetections(detections) {
   if (!detections) return "";
   if (detections.status === "no_render") {
     return "ยังไม่ได้ประมวลผลด้วย AI — ภาพนี้ไม่มีกรอบ";
+  }
+  if (detections.status === "not_processed") {
+    return "ยังประมวลผลไม่ถึงเฟรมนี้ — ภาพนี้ยังไม่มีกรอบ";
   }
   if (detections.status === "no_model") {
     return "ยังไม่ได้โหลดโมเดล — ภาพนี้ไม่ได้ผ่าน best.pt";
