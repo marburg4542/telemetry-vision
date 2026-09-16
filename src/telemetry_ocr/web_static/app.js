@@ -1162,6 +1162,9 @@ function showView(view, atSeconds = null, play = null) {
   state.attached = key;
   const render = state.activeRender;
   if (target === "rendered" && render && render.format !== "mp4") {
+    // Cleared before the new render reports its own: left alone, the line below
+    // the panel keeps saying how far the render just left behind had got.
+    state.renderProcessedS = 0;
     ui.renderWait.hidden = false;
     renderPlayer().open(render.render_id, {
       startAt: resumeAt,
