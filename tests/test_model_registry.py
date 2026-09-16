@@ -123,6 +123,17 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertFalse(listed["spare"].available)
         self.assertEqual(listed["primary"].label, "models/yolo/best.pt")
 
+    def test_models_are_listed_default_first_then_by_the_numbers_in_their_names(self) -> None:
+        # Plain text order puts a tenth training run between the first and the
+        # second, which is where nobody looks for it.
+        self.registry.add(self.candidate("runs/exp_2/weights/best.pt").id, "run_10th")
+        self.registry.add(self.candidate("runs/exp_2/weights/last.pt").id, "run_9th")
+        self.registry.add(self.candidate("models/yolo/extra.pt").id, "run_2nd")
+        self.assertEqual(
+            [entry.name for entry in self.registry.entries()],
+            ["primary", "run_2nd", "run_9th", "run_10th", "spare"],
+        )
+
     def test_the_base_registry_alone_ignores_the_overlay(self) -> None:
         self.registry.remove("spare")
         self.assertIn("spare", paths.load_paths(overlay=False).models)

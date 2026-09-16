@@ -1,0 +1,34 @@
+# BoT-SORT settings for the renders this project makes.
+#
+# Ultralytics' own defaults with one change: ReID is on, using the detector's
+# own backbone features ("auto"), so a vehicle that goes behind a tree is
+# matched back to its own number by how it looks and not only by where the
+# motion model expected it to be. It costs no second model: the features are
+# already computed by the detection pass.
+#
+# Everything else is left at the Ultralytics default deliberately -- these
+# thresholds were tuned against MOT benchmarks, and there is nothing in this
+# project's footage measured well enough to argue with them yet.
+
+tracker_type: botsort
+
+track_high_thresh: 0.25 # first-stage match threshold
+track_low_thresh: 0.1 # second stage, for the detections the first pass left
+new_track_thresh: 0.25 # a detection above this with no match starts a track
+# Frames a lost track is kept for. At "every 2nd frame" this is 30 processed
+# frames, which is two seconds of a 30 fps video.
+track_buffer: 30
+match_thresh: 0.8 # association cost threshold
+fuse_score: True # weigh detection confidence into the match cost
+
+# The camera pans constantly on this footage, so the tracker has to know how
+# much of the movement between two frames was the camera's own. sparseOptFlow
+# tracks corner features and fits an affine transform; it is the cheapest of
+# the methods offered and the only one that keeps up at 1080p.
+gmc_method: sparseOptFlow
+
+# ReID: appearance matching on top of motion.
+with_reid: True
+model: auto # the detector's backbone features, not a second network
+proximity_thresh: 0.5 # boxes must overlap at least this much to be compared
+appearance_thresh: 0.8 # and look at least this alike to be joined

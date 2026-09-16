@@ -137,6 +137,19 @@ class RunRenderTests(unittest.TestCase):
         # Where the time went, so a slow render says which stage to fix.
         self.assertEqual(set(meta["stages_ms"]), {"decode", "track", "draw", "encode"})
 
+    def test_the_tracker_is_this_project_s_settings_with_reid_on(self) -> None:
+        # Ultralytics' defaults track by motion alone, so a vehicle that goes
+        # behind a tree comes back as a new number. The file shipped here turns
+        # appearance matching on, which is the whole reason it exists.
+        detector = FakeDetector()
+        self.render(detector=detector)
+        self.assertTrue(detector.tracker.endswith("botsort.yaml"), detector.tracker)
+        settings = Path(detector.tracker)
+        self.assertTrue(settings.is_file(), "the render asked for a file that is not there")
+        text = settings.read_text(encoding="utf-8")
+        self.assertIn("with_reid: True", text)
+        self.assertIn("model: auto", text)
+
     def test_a_stride_keeps_every_nth_frame_and_halves_the_rate(self) -> None:
         self.render(RenderSettings(stride=2))
         self.assertEqual([line["frame_index"] for line in self.lines()], list(range(0, FRAMES, 2)))

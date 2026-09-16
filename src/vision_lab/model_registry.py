@@ -67,6 +67,15 @@ class Candidate:
     suggested_name: str
 
 
+def natural_key(name: str) -> list[Any]:
+    """Sort key that reads runs of digits as numbers: run2 before run10."""
+    return [
+        int(part) if part.isdigit() else part.lower()
+        for part in re.split(r"(\d+)", name)
+        if part
+    ]
+
+
 class ModelRegistry:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or repo_root()).resolve()
@@ -75,6 +84,13 @@ class ModelRegistry:
     # -- reading ----------------------------------------------------------------
 
     def entries(self) -> list[ModelEntry]:
+        """Every registered checkpoint: the default first, then by name.
+
+        By name means by the numbers in it, so a tenth training run sorts after
+        the ninth rather than between the first and the second -- which is where
+        plain text order put "visdrone_custom_10th", and where nobody looked
+        for it.
+        """
         paths = load_paths(root=self.root)
         listed = []
         for name, path in paths.models.items():
@@ -93,6 +109,7 @@ class ModelRegistry:
                     default=name == paths.default_model,
                 )
             )
+        listed.sort(key=lambda entry: (not entry.default, natural_key(entry.name)))
         return listed
 
     def get(self, name: str) -> ModelEntry | None:

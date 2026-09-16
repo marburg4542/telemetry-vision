@@ -14,6 +14,14 @@ version: 1
 # Overridable with the TELEMETRY_VISION_ASSETS environment variable.
 asset_root: ../object_detection
 
+# The folder the web app lists in its video dropdown. Relative to the
+# repository root (absolute paths are allowed), and overridable with the
+# TELEMETRY_OCR_VIDEOS environment variable. Separate from asset_dirs.videos
+# below, which is where the CLI's dataset work reads the original footage from:
+# the app is used by operators who copy in the clip they want to look at, and
+# asking them to put it in the training corpus was the wrong place for it.
+video_dir: videos
+
 asset_dirs:
   videos: data
   frames: dataset_frames

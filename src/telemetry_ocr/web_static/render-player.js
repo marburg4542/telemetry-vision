@@ -17,6 +17,14 @@
   const AHEAD_S = 30; // fetched past the playhead
   const BEHIND_S = 60; // kept behind it; a 25-minute render will not fit whole
   const EDGE_S = 0.3; // this close to the front counts as waiting at it
+  // How much has to be ready before playback starts, and before it starts again
+  // after catching the front. The renderer is slower than playback -- a heavy
+  // model at every frame renders about six frames a second against the thirty a
+  // second the picture is played at -- so the choice is not whether to wait but
+  // whether to wait a moment every two seconds or once for a stretch that then
+  // plays without stopping. These are the second.
+  const START_BUFFER_S = 10;
+  const HOLD_BUFFER_S = 15;
   const POLL_MS = 2000;
   const MIME = 'video/mp4; codecs="avc1.640029"';
   const INIT_FILE = "init.mp4";
@@ -87,10 +95,40 @@
     return Math.max(0, processed - 0.5);
   }
 
+  // Playback waits for this much to be ready: less at the start, where the
+  // first picture matters more, than when it catches up mid-video.
+  function bufferTarget(started) {
+    return started ? HOLD_BUFFER_S : START_BUFFER_S;
+  }
+
+  function readyToPlay(ahead, target, complete) {
+    return Boolean(complete) || ahead >= target;
+  }
+
+  // Seconds of waiting before that much is ready, at the rate the render is
+  // going -- video-seconds produced per second of waiting. null when unknown.
+  function estimateWait(ahead, target, rate) {
+    if (!(rate > 0)) return null;
+    return Math.max(0, (target - ahead) / rate);
+  }
+
+  // How long playback will then run before it reaches the front again. A render
+  // producing faster than one video-second per second never does.
+  function estimatePlayback(ahead, rate) {
+    if (!(rate >= 0)) return null;
+    return rate >= 1 ? Infinity : ahead / (1 - rate);
+  }
+
   const api = {
     AHEAD_S,
     BEHIND_S,
     EDGE_S,
+    START_BUFFER_S,
+    HOLD_BUFFER_S,
+    bufferTarget,
+    readyToPlay,
+    estimateWait,
+    estimatePlayback,
     flattenSegments,
     processedUntil,
     segmentAt,
@@ -121,12 +159,16 @@
       this.started = false;
       this.quotaKey = "";
       this.resumeAtFront = false;
+      this.rateSamples = [];
       this.listeners = [
         ["timeupdate", () => {
           this.holdAtFront();
           this.pump();
         }],
-        ["waiting", () => this.pump()],
+        ["waiting", () => {
+          this.holdAtFront();
+          this.pump();
+        }],
         ["seeking", () => this.onSeek()],
       ];
     }
@@ -166,6 +208,7 @@
       this.initRun = null;
       this.started = false;
       this.resumeAtFront = false;
+      this.rateSamples = [];
     }
 
     onSourceOpen() {
@@ -199,6 +242,7 @@
         if (this.closed) return;
         this.index = index;
         this.segments = flattenSegments(index);
+        this.noteRate(index.processed_ms);
         if (!this.duration && Number(index.duration_ms) > 0) {
           this.duration = Number(index.duration_ms) / 1000;
         }
@@ -317,9 +361,12 @@
       }
     }
 
-    // Playback starts once there is something to show, at the moment asked for.
+    // Playback starts once enough is ready to play for a while, at the moment
+    // asked for. A finished render is ready by definition.
     begin() {
       if (this.started || this.closed) return;
+      const complete = Boolean(this.index && this.index.complete);
+      if (!readyToPlay(this.ahead(), bufferTarget(false), complete)) return;
       this.started = true;
       const wanted = clampSeek(this.startAt, processedUntil(this.segments), false);
       if (wanted > 0.05) this.video.currentTime = wanted;
@@ -337,22 +384,52 @@
       }
     }
 
-    // Chrome runs the clock on past the end of what is buffered instead of
-    // stopping there, so the picture freezes at the frame the model has reached
-    // while the time reads on to the end of the video. Playback is held at the
-    // front instead, and let go again when the next segments arrive.
+    // How fast the render is producing video, in video-seconds per second of
+    // waiting, from the last few polls rather than from the whole run: a render
+    // that was competing with something else for the GPU should not hold that
+    // against its estimate for the next wait.
+    noteRate(processedMs) {
+      const processed = Number(processedMs) / 1000;
+      if (!Number.isFinite(processed)) return;
+      this.rateSamples.push([Date.now() / 1000, processed]);
+      if (this.rateSamples.length > 6) this.rateSamples.shift();
+    }
+
+    rate() {
+      if (this.rateSamples.length < 2) return 0;
+      const [firstAt, firstProcessed] = this.rateSamples[0];
+      const [lastAt, lastProcessed] = this.rateSamples[this.rateSamples.length - 1];
+      const elapsed = lastAt - firstAt;
+      return elapsed > 0 ? Math.max(0, (lastProcessed - firstProcessed) / elapsed) : 0;
+    }
+
+    ahead() {
+      const from = this.started ? this.video.currentTime || 0 : this.startAt;
+      return Math.max(0, processedUntil(this.segments) - from);
+    }
+
+    // Stop when the playhead reaches the frame the renderer has got to.
+    //
+    // Left alone, Chrome does one of two unhelpful things there: it plays each
+    // new segment the instant it lands, which is a second of video every three
+    // seconds of watching, or it runs the clock on past the end of the buffer
+    // while the picture stands still. Stopping deliberately and letting a
+    // stretch build up plays that stretch in one piece instead.
     holdAtFront() {
       if (this.closed || !this.started || (this.index && this.index.complete)) return;
-      const front = Math.max(0, processedUntil(this.segments) - 0.05);
-      if (this.video.currentTime <= front + EDGE_S) return;
+      const front = processedUntil(this.segments);
+      if (this.video.currentTime < front - EDGE_S) return;
       this.resumeAtFront = this.resumeAtFront || !this.video.paused;
       this.video.pause();
-      this.video.currentTime = front;
+      if (this.video.currentTime > front) {
+        this.video.currentTime = Math.max(0, front - 0.05);
+      }
     }
 
     resumeIfWaiting() {
       if (!this.resumeAtFront) return;
-      if (processedUntil(this.segments) < this.video.currentTime + 0.5) return;
+      const complete = Boolean(this.index && this.index.complete);
+      if (!readyToPlay(this.ahead(), bufferTarget(true), complete)) return;
       this.resumeAtFront = false;
       this.video.play().catch(() => {});
     }
@@ -375,12 +452,22 @@
       if (this.closed) return;
       const processed = processedUntil(this.segments);
       const complete = Boolean(this.index && this.index.complete);
+      const ahead = this.ahead();
+      const rate = this.rate();
+      const target = bufferTarget(this.started);
+      // Waiting means the picture is stopped on purpose: either it has not
+      // started because too little is ready, or it caught the renderer up.
+      const atFront = this.started && this.position() >= processed - EDGE_S;
+      const waiting = !complete && (atFront || !readyToPlay(ahead, target, complete));
       this.onState({
         processedS: processed,
         complete,
-        // At the front with more still to come: the picture stops here until
-        // the renderer gets further, which is a wait, not a fault.
-        waiting: !complete && this.started && this.position() >= processed - EDGE_S,
+        started: this.started,
+        waiting,
+        aheadS: ahead,
+        rate,
+        waitS: waiting ? estimateWait(ahead, target, rate) : null,
+        playS: waiting ? estimatePlayback(target, rate) : null,
       });
     }
   }

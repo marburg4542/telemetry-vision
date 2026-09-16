@@ -1411,12 +1411,9 @@ def _load_registry_and_videos() -> tuple[Any, Path | None]:
     except Exception as exc:
         _LOG.warning("configs/paths.yaml unavailable, so no models or videos are offered: %s", exc)
         return None, None
-    video_dir: Path | None
-    try:
-        video_dir = paths.asset_dir("videos")
-    except Exception as exc:
-        _LOG.warning("No video folder is configured: %s", exc)
-        video_dir = None
+    video_dir = paths.video_dir
+    if not video_dir.is_dir():
+        _LOG.warning("The video folder %s does not exist yet, so no videos are listed", video_dir)
     return ModelRegistry(paths.root), video_dir
 
 

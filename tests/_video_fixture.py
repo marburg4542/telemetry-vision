@@ -145,6 +145,7 @@ class FakeDetector:
         self.gate = gate
         self.entered = entered
         self.brightness: list[float] = []
+        self.tracker = ""  # the settings file the render asked for
 
     def track(self, frame: Any, *, confidence: float, iou: float, image_size: int, tracker: str):
         from telemetry_ocr.detection import Detection
@@ -154,6 +155,7 @@ class FakeDetector:
         if self.gate is not None:
             self.gate.wait(5)
         self.calls += 1
+        self.tracker = tracker
         self.brightness.append(float(frame.mean()))
         x = float(self.calls)
         return [Detection(x, 2.0, x + 10.0, 12.0, 0.9, 0, "car", 7)]

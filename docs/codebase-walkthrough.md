@@ -375,6 +375,10 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 | `detections_at(render_id, frame_index)` | กรอบของเฟรมหนึ่งจาก `tracks.jsonl` ผ่าน `TrackIndex` (byte offset) |
 | `shutdown()` | ยกเลิกและ terminate ลูกตอนปิด server |
 
+### `tracker_config()`
+คืน path ของ [configs/botsort.yaml](configs/botsort.yaml) ถ้ามี — ค่าเริ่มต้นของ Ultralytics
+บวก ReID จาก feature ของ detector เอง ซึ่งเป็นสิ่งที่ทำให้วัตถุที่ถูกบังกลับมาพร้อมเลขเดิม
+
 ### `choose_encoder(ffmpeg)` · `FfmpegEncoder`
 ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม จากนั้น `FfmpegEncoder` รัน
 ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย `-f hls -hls_time 2 -hls_segment_type fmp4` บังคับ keyframe ทุก
@@ -384,7 +388,8 @@ ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย 
 > กับ tracker จนเหลือ 5 เฟรม/วินาที NVENC พาไปที่ 16 เฟรม/วินาทีบนเครื่องเดียวกัน
 
 ### `video_library.py` — `VideoLibrary` · `SourceFrames`
-รายการวิดีโอใต้ `asset_dirs.videos` อ้างด้วย path สัมพัทธ์ (ไม่รับ path จาก request ตรงๆ) และอ่าน
+รายการวิดีโอใต้ `video_dir` (ค่าเริ่มต้น `videos/` ในโปรเจกต์ · env `TELEMETRY_OCR_VIDEOS`)
+อ้างด้วย path สัมพัทธ์ (ไม่รับ path จาก request ตรงๆ) และอ่าน
 เฟรมต้นฉบับทีละเฟรมให้ Capture โดยเปิดไฟล์ค้างไว้ ข้ามไปข้างหน้าไม่เกิน 30 เฟรมด้วยการอ่านต่อแทนการ seek
 
 ## 3.7b `detection_worker.py` — worker แบบสดสำหรับ CLI

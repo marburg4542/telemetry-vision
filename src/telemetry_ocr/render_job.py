@@ -152,6 +152,19 @@ def is_current(meta: dict[str, Any], video_path: Path | None, model_path: Path |
     return meta.get("status") == "complete" and made_from(meta, video_path, model_path)
 
 
+def tracker_config() -> str:
+    """The tracker settings a render uses: this project's, or Ultralytics' own.
+
+    configs/botsort.yaml turns ReID on, which is what keeps a vehicle's number
+    through the seconds it spends behind a tree: without it the tracker has only
+    where the motion model expected the vehicle to be, and a long occlusion ends
+    as a new number. Falling back to the bare name keeps a checkout without that
+    file rendering rather than failing.
+    """
+    candidate = Path(__file__).resolve().parents[2] / "configs" / "botsort.yaml"
+    return str(candidate) if candidate.is_file() else "botsort.yaml"
+
+
 def read_playlist(path: Path) -> list[tuple[str, float]]:
     """The finished segments an HLS playlist lists, in order, with their lengths.
 
@@ -423,6 +436,7 @@ def run_render(
         if start_frame:
             capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         index = start_frame - 1
+        tracker = tracker_config()
         encoder = encoder_factory(run_dir, out_width, out_height, out_fps)
         publish(
             {"kind": "started", "start_frame": start_frame, "run": run_dir.name, "total": total}
@@ -453,7 +467,7 @@ def run_render(
                         confidence=options.confidence,
                         iou=options.iou,
                         image_size=options.image_size,
-                        tracker="botsort.yaml",
+                        tracker=tracker,
                     )
                     tracked = time.perf_counter()
                     boxes = [_plain(item, track_offset) for item in detections]

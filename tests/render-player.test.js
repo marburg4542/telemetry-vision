@@ -4,7 +4,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const player = require("../src/telemetry_ocr/web_static/render-player.js");
-const { flattenSegments, processedUntil, segmentAt, nextSegment, staleRanges, clampSeek } = player;
+const {
+  flattenSegments, processedUntil, segmentAt, nextSegment, staleRanges, clampSeek,
+  bufferTarget, readyToPlay, estimateWait, estimatePlayback, START_BUFFER_S, HOLD_BUFFER_S,
+} = player;
 
 // What the server sends for a render that was stopped after six seconds and
 // continued: two runs, the second starting where the first left off.
@@ -121,6 +124,29 @@ test("a seek past what is rendered lands at the front", () => {
   assert.equal(clampSeek(30, 60, true), 30, "a finished render seeks anywhere");
   assert.equal(clampSeek(5, 0, false), 0, "nothing rendered yet");
   assert.equal(clampSeek(9.4, 9.5, false), 9, "right at the front counts as past it");
+});
+
+test("playback waits for a stretch worth playing, not for the first segment", () => {
+  // The renderer is slower than playback, so releasing at the first segment
+  // means stopping again two seconds later, over and over.
+  assert.equal(bufferTarget(false), START_BUFFER_S, "the first play waits for the start buffer");
+  assert.equal(bufferTarget(true), HOLD_BUFFER_S, "catching up waits for more, not less");
+  assert.equal(readyToPlay(2, HOLD_BUFFER_S, false), false);
+  assert.equal(readyToPlay(HOLD_BUFFER_S, HOLD_BUFFER_S, false), true);
+  // A finished render never waits: all of it is there.
+  assert.equal(readyToPlay(0, HOLD_BUFFER_S, true), true);
+});
+
+test("the wait and the stretch that follows are estimated from the real rate", () => {
+  // Six frames a second of a thirty fps video is a fifth of real time: fifteen
+  // seconds of video takes seventy-five seconds to make, and then plays for
+  // about nineteen before the playhead catches the renderer again.
+  assert.equal(estimateWait(0, 15, 0.2), 75);
+  assert.equal(estimateWait(10, 15, 0.2), 25);
+  assert.equal(estimateWait(20, 15, 0.2), 0, "already past the target");
+  assert.equal(estimateWait(0, 15, 0), null, "nothing known about the rate yet");
+  assert.equal(estimatePlayback(15, 0.2), 18.75);
+  assert.equal(estimatePlayback(15, 1.2), Infinity, "a render keeping up never stops");
 });
 
 test("a malformed index yields no segments rather than throwing", () => {

@@ -58,6 +58,9 @@ class ProjectPaths:
     root: Path
     asset_root: Path
     asset_dirs: dict[str, Path]
+    # Where the web app looks for videos to play, which is not where the CLI
+    # keeps the training footage.
+    video_dir: Path
     models: dict[str, Path]
     default_model: str
 
@@ -92,6 +95,7 @@ class ProjectPaths:
         candidates = [given] if given.is_absolute() else [
             Path.cwd() / given,
             self.root / given,
+            self.video_dir / given,
             self.asset_dirs.get("videos", self.asset_root) / given,
         ]
         for candidate in candidates:
@@ -145,6 +149,7 @@ def load_paths(
         str(name): _anchor(root, value)
         for name, value in _mapping(raw, "models", manifest_path).items()
     }
+    video_dir = _resolve_video_dir(root, raw)
 
     default_model = str(raw.get("default_model", "")).strip()
     if default_model and default_model not in models:
@@ -158,9 +163,22 @@ def load_paths(
         root=root,
         asset_root=asset_root,
         asset_dirs=asset_dirs,
+        video_dir=video_dir,
         models=models,
         default_model=default_model,
     )
+
+
+def _resolve_video_dir(root: Path, raw: dict[str, Any]) -> Path:
+    """The app's video folder: the environment, then the manifest, then videos/.
+
+    The environment variable is what lets a second server run against a folder
+    of test clips without touching the manifest the real one reads.
+    """
+    override = os.environ.get("TELEMETRY_OCR_VIDEOS", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return _anchor(root, raw.get("video_dir") or "videos")
 
 
 def read_overlay(root: Path) -> dict[str, Any]:

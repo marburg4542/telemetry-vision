@@ -88,3 +88,6 @@ configs/models.local.yaml
 
 # Print copies build_guide.py regenerates from the screenshots.
 docs/user-guide/assets/print/
+
+# Videos the web app lists. Kept out of git: they are gigabytes of flight footage.
+/videos/

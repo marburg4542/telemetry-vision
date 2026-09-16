@@ -1119,12 +1119,28 @@ function applyStreamState(streamState) {
   }
   state.renderProcessedS = Number(streamState.processedS) || 0;
   // Said on the picture: stopping at the frame the model has reached is waiting,
-  // and without a word for it, it looks like a video that has hung.
+  // and without a word for it, it looks like a video that has hung. How long the
+  // wait is, and how long it will play afterwards, come from the rate the render
+  // is actually going at.
   ui.renderWait.hidden = !streamState.waiting;
+  if (streamState.waiting) ui.renderWait.textContent = describeWait(streamState);
   if (streamState.clamped) {
     showToast(`ยังประมวลผลไม่ถึงตรงนั้น — กลับมาที่ ${formatTime(state.renderProcessedS)}`);
   }
   if (state.view === "rendered") describeRenderChoice();
+}
+
+function describeWait(streamState) {
+    const parts = [
+      streamState.started ? "กำลังประมวลผลส่วนถัดไป" : "กำลังสะสมภาพก่อนเริ่มเล่น",
+    ];
+    if (Number.isFinite(streamState.waitS)) {
+      parts.push(`พร้อมเล่นในอีกราว ${formatDuration(streamState.waitS)}`);
+    }
+    if (Number.isFinite(streamState.playS) && streamState.playS >= 3) {
+      parts.push(`แล้วเล่นต่อเนื่องราว ${formatDuration(streamState.playS)}`);
+    }
+    return `${parts.join(" · ")}…`;
 }
 
 // Swaps what the <video> plays and keeps the moment on screen. The original and

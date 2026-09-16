@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -61,6 +62,17 @@ class ProjectPathsTests(unittest.TestCase):
         reloaded = paths.load_paths()
         self.assertEqual(reloaded.asset_root, elsewhere)
         self.assertEqual(reloaded.asset_dir("videos"), elsewhere / "clips")
+
+    def test_the_app_video_folder_defaults_to_videos_in_the_repository(self) -> None:
+        # Not asset_dirs.videos: that is the training footage the CLI reads, and
+        # an operator copying in a clip to look at should not land in it.
+        self.assertEqual(paths.load_paths().video_dir, self.root / "videos")
+
+    def test_the_environment_can_point_the_app_at_another_video_folder(self) -> None:
+        elsewhere = self.root.parent / "clips"
+        os.environ["TELEMETRY_OCR_VIDEOS"] = str(elsewhere)
+        self.addCleanup(os.environ.pop, "TELEMETRY_OCR_VIDEOS", None)
+        self.assertEqual(paths.load_paths().video_dir, elsewhere.resolve())
 
     def test_registered_name_resolves_to_the_checkpoint(self) -> None:
         self.assertEqual(
