@@ -67,8 +67,11 @@ class MessageFormattingTests(unittest.TestCase):
             ]
         )
         text = format_capture_message(shot)
-        self.assertIn("session-20260818-131353", text)
-        self.assertIn("frames/00000000.jpg", text)
+        # The readings open the message: a phone shows the first lines of a
+        # notification, and a header of timestamps and paths spent them.
+        self.assertTrue(text.startswith("ACFT "), text[:40])
+        self.assertNotIn("session-20260818-131353", text)
+        self.assertNotIn("frames/00000000.jpg", text)
         # DMS, matching the overlay, rather than the decimal the pipeline stores.
         self.assertIn("14°52'17.79\"N", text)
         self.assertIn("721.7 m", text)
@@ -344,9 +347,8 @@ class DigestTests(unittest.TestCase):
         from telemetry_ocr.line_client import format_capture_digest
 
         text = format_capture_digest([self._shot(0, 500), self._shot(2, 700)])
+        # The count is the only line that says how many blocks of readings follow.
         self.assertIn("[Capture x2]", text)
-        self.assertIn("frames/00000000.jpg", text)
-        self.assertIn("frames/00000002.jpg", text)
         self.assertIn("500", text)
         self.assertIn("700", text)
 
@@ -363,8 +365,9 @@ class DigestTests(unittest.TestCase):
         shots = [self._shot(i, 100 + i) for i in range(4)]
         for shot in shots:
             # A single block is already clipped at MAX_TEXT, so an over-long
-            # digest can only be made of blocks that each fit.
-            shot.image = f"frames/{'x' * 1600}{shot.frame_index}.jpg"
+            # digest can only be made of blocks that each fit. The length comes
+            # from a reading: the file paths it used to come from are gone.
+            shot.records[0]["value"] = "x" * 1600
         text = format_capture_digest(shots)
         self.assertLessEqual(len(text), MAX_TEXT)
         self.assertIn("ตัดเหลือ", text)

@@ -552,7 +552,7 @@ class AnnotationTests(unittest.TestCase):
         marked = annotate_frame(self._frame(), boxes, 640, 360)
         self.assertEqual(marked.shape, (1080, 1920, 3))
 
-    def test_the_message_points_at_the_annotated_copy(self) -> None:
+    def test_the_message_is_the_readings_and_nothing_about_the_file(self) -> None:
         from telemetry_ocr.capture_service import ShotResult
         from telemetry_ocr.line_client import format_capture_message
 
@@ -566,7 +566,9 @@ class AnnotationTests(unittest.TestCase):
             records=[],
             annotated="frames/00000000.boxes.jpg",
         )
-        text = format_capture_message(shot, directory="out")
-        self.assertIn("00000000.boxes.jpg", text)
-        # And still names the original, which is the record.
-        self.assertIn("00000000.jpg", text)
+        text = format_capture_message(shot)
+        # The annotated picture goes with the message; where it sits on this
+        # machine is of no use to whoever reads that message on a phone.
+        self.assertNotIn("00000000.boxes.jpg", text)
+        self.assertNotIn("00000000.jpg", text)
+        self.assertNotIn("รูป:", text)

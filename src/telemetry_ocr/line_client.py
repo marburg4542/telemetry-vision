@@ -409,10 +409,16 @@ def describe_verification(
 
 def format_capture_message(
     shot: Any,
-    directory: str | Path | None = None,
     dms_decimals: dict[str, int] | None = None,
 ) -> str:
-    """Turn one shot into the text that gets pushed."""
+    """Turn one shot into the text that gets pushed.
+
+    The readings first, with nothing above them. The message used to open with
+    the time of the capture and the session and frame it came from, and to close
+    with the path of the picture on the machine that sent it -- three lines that
+    spent a phone notification's preview on a picture attached to the same
+    message and a path the reader has no way to open.
+    """
     values: dict[str, Any] = {}
     for record in getattr(shot, "records", []) or []:
         field_id = record.get("field_id")
@@ -458,12 +464,7 @@ def format_capture_message(
             # live record is what stops raw OCR text reaching the message.
             rescued += 1
 
-    lines = [f"[Capture] {getattr(shot, 'captured_at', '')}"]
-    session = getattr(shot, "session", "")
-    image = getattr(shot, "image", "")
-    lines.append(f"{session} · {image}")
-    lines.append("")
-
+    lines: list[str] = []
     for label, field_ids in _LAYOUT:
         parts = [
             _format_field(field_id, values.get(field_id), dms_decimals)
@@ -486,13 +487,6 @@ def format_capture_message(
 
     lines.append("")
     lines.append(describe_detections(getattr(shot, "detections", None)))
-
-    if directory is not None:
-        # The annotated copy when there is one. Naming the original as well put
-        # two nearly identical paths in a phone notification and left the reader
-        # to work out which was which; it is still on disk beside this one.
-        annotated = getattr(shot, "annotated", None)
-        lines.append(f"รูป: {Path(directory) / (annotated or image)}")
 
     text = "\n".join(lines)
     if len(text) > MAX_TEXT:
@@ -606,7 +600,6 @@ _DIGEST_RULE = "\n\n" + "\u2014" * 8 + "\n\n"
 
 def format_capture_digest(
     shots: list[Any],
-    directory: str | Path | None = None,
     dms_decimals: dict[str, int] | None = None,
 ) -> str:
     """The text for several shots sent together.
@@ -619,14 +612,11 @@ def format_capture_digest(
     if not shots:
         return ""
     if len(shots) == 1:
-        return format_capture_message(
-            shots[0], directory=directory, dms_decimals=dms_decimals
-        )
+        return format_capture_message(shots[0], dms_decimals=dms_decimals)
+    # Kept for several frames, where it is the only line saying how many blocks
+    # of readings follow. One frame needs no such line.
     header = f"[Capture x{len(shots)}]\n\n"
-    blocks = [
-        format_capture_message(shot, directory=directory, dms_decimals=dms_decimals)
-        for shot in shots
-    ]
+    blocks = [format_capture_message(shot, dms_decimals=dms_decimals) for shot in shots]
     text = header + _DIGEST_RULE.join(blocks)
     if len(text) <= MAX_TEXT:
         return text

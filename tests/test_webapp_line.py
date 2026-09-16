@@ -185,8 +185,10 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.pushes), 1)
         self.assertEqual(self.pushes[0]["auth"], f"Bearer {TOKEN}")
         sent = self.pushes[0]["body"]["messages"][0]["text"]
-        self.assertIn("flight01", sent)
-        self.assertIn("frames/00000000.jpg", sent)
+        # The readings are the message now; the session and the frame's path
+        # went, being about the file rather than about the flight.
+        self.assertIn("LRF", sent)
+        self.assertNotIn("flight01", sent)
 
     async def test_the_token_never_comes_back_to_the_browser(self) -> None:
         await self._shot()
@@ -251,7 +253,10 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         response = await self._send(frame_index=0)
         self.assertEqual(response.status, 200)
         self.assertEqual((await response.json())["frame_index"], 0)
-        self.assertIn("frames/00000000.jpg", self.pushes[0]["body"]["messages"][0]["text"])
+        # Which frame went is the answer above: the text no longer names one,
+        # and both captures here read the same numbers.
+        self.assertEqual(len(self.pushes), 1)
+        self.assertIn("LRF", self.pushes[0]["body"]["messages"][0]["text"])
 
     async def test_an_unknown_session_is_not_found(self) -> None:
         response = await self.client.post("/api/line/send?session=never-existed")
@@ -307,10 +312,10 @@ class MultiFrameSendTests(LineEndpointTests):
         self.assertEqual(len(self.pushes), 1)
         sent = self.pushes[0]["body"]["messages"][0]["text"]
         self.assertIn("[Capture x2]", sent)
-        self.assertIn("frames/00000000.jpg", sent)
-        self.assertIn("frames/00000002.jpg", sent)
-        # The one in the middle was not chosen and must not have come along.
-        self.assertNotIn("frames/00000001.jpg", sent)
+        # Two blocks and not three: the frame in the middle was not chosen. They
+        # are counted by the line every block ends with, now that no block names
+        # the file it came from.
+        self.assertEqual(sent.count("ตรวจจับ"), 2)
 
     async def test_the_same_frame_twice_is_sent_once(self) -> None:
         await self._shot()
@@ -475,11 +480,14 @@ class ImageSendTests(LineEndpointTests):
         ]
         self.assertEqual(len(images), 1)
 
-    async def test_the_message_names_one_path(self) -> None:
+    async def test_the_message_is_the_readings_only(self) -> None:
         await self._shot()
         await self._send()
         text = self.pushes[0]["body"]["messages"][0]["text"]
-        self.assertEqual(text.count("รูป"), 1)
+        # No path, no session, no capture time: the picture is in the same push.
+        self.assertNotIn("รูป", text)
+        self.assertNotIn("frames/", text)
+        self.assertNotIn("[Capture]", text)
 
 
 @unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
@@ -522,7 +530,7 @@ class UnreachableUrlTests(LineEndpointTests):
         await self._shot()
         await self._send()
         sent = self.pushes[0]["body"]["messages"][0]["text"]
-        self.assertIn("flight01", sent)
+        self.assertIn("LRF", sent)
 
     async def test_the_caller_is_told_why_there_is_no_picture(self) -> None:
         await self._shot()

@@ -1155,9 +1155,7 @@ def create_app(
             )
         line_state["last_sent"] = now
 
-        text = format_capture_digest(
-            shots, directory=session.directory, dms_decimals=dms_decimals_by_field
-        )
+        text = format_capture_digest(shots, dms_decimals=dms_decimals_by_field)
 
         # Images only when a public base URL is configured. Without one there is
         # nowhere LINE could fetch from, and the message goes as text.
