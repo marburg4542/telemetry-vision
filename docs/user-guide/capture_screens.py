@@ -5,16 +5,17 @@ extra already installs, so no browser-automation package is needed. The page is
 the real one and the video a real flight clip: a guide whose pictures were
 mocked up drifts from the app the first time either changes.
 
-Expects the server to list a video that already has a finished render with the
-default settings (best50, conf 0.45, 640 px, every frame), because rendering a
-whole video just to photograph it would take as long as the video.
+The moments shown with boxes are read out of the render's own tracks.jsonl, so
+the pictures show the model finding something whichever checkpoint is used.
 
 Side effects, on purpose and nothing more: three captures are written to
-output/sessions/, and a render is started with a different stride and cancelled
-to photograph its progress bar. Nothing is sent to LINE.
+output/sessions/, and the video is rendered with the chosen model if it has not
+been already -- cancelled once and continued, which is what the pictures of
+those two states are of. A render the script starts only to photograph (when a
+finished one already exists) is deleted again at the end. Nothing is sent to LINE.
 
 Usage:
-    .venv-cuda/Scripts/python.exe docs/user-guide/capture_screens.py [BASE_URL] [VIDEO_ID]
+    .venv-cuda/Scripts/python.exe docs/user-guide/capture_screens.py [BASE_URL] [VIDEO_ID] [MODEL]
 """
 
 from __future__ import annotations
@@ -37,12 +38,12 @@ from vision_lab.report import find_browser
 
 APP = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765/"
 VIDEO = sys.argv[2] if len(sys.argv) > 2 else "clip-60s.mp4"
+MODEL = sys.argv[3] if len(sys.argv) > 3 else ""
 OUT = Path(__file__).resolve().parent / "assets" / "screens"
+RENDERS = ROOT / "output" / "renders"
 PORT = 9333
 DESKTOP = (1440, 900)
 MOBILE = (390, 844)
-# Moments in the clip where best50 found a vehicle, so the AI frames show boxes.
-BOX_TIMES = (19.8, 17.6, 5.0)
 
 # Elements the guide points at with numbered markers. Rects are recorded beside
 # each screenshot, so a marker lands where the element really is.
@@ -174,12 +175,6 @@ async def seek(cdp: Cdp, seconds: float) -> None:
     await asyncio.sleep(2.5)
 
 
-async def set_stride(cdp: Cdp, stride: int) -> None:
-    await cdp.js(
-        f"renderStride.value = '{stride}'; renderStride.dispatchEvent(new Event('change'))"
-    )
-
-
 async def capture_at(cdp: Cdp, seconds: float) -> None:
     before = await cdp.js("state.shots.length")
     await seek(cdp, seconds)
@@ -188,6 +183,90 @@ async def capture_at(cdp: Cdp, seconds: float) -> None:
         f"state.shots.length > {before} && !state.pendingCaptures && !state.captureQueued",
         timeout=120, label="capture",
     )
+
+
+async def click_render_action(cdp: Cdp, render_id: str, label: str) -> None:
+    """Press one button on one render's row; another render may be listed too."""
+    await cdp.js(
+        f"[...renderList.querySelectorAll('[data-render-id={json.dumps(render_id)}]"
+        " .link-button')]"
+        f".find((button) => button.textContent === {json.dumps(label)}).click()"
+    )
+
+
+def box_times(render_id: str, fallback=(19.8, 17.6, 5.0)) -> tuple[float, ...]:
+    """Three moments the render found the most in, far enough apart to differ."""
+    path = RENDERS / render_id / "tracks.jsonl"
+    found: list[tuple[float, float]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            area = 0.0
+            for box in record.get("detections", []):
+                area += (box["x2"] - box["x1"]) * (box["y2"] - box["y1"])
+            if area:
+                found.append((area, float(record["time_ms"]) / 1000.0))
+    except (OSError, ValueError, KeyError):
+        return fallback
+    chosen: list[float] = []
+    for _, seconds in sorted(found, reverse=True):
+        if all(abs(seconds - taken) > 3 for taken in chosen):
+            chosen.append(seconds)
+        if len(chosen) == 3:
+            break
+    return tuple(chosen) if chosen else fallback
+
+
+async def render_for_the_pictures(cdp: Cdp) -> str:
+    """Render the clip, photographing it being made, cancelled and continued.
+
+    Returns the render id, and whether it was made only for the pictures -- in
+    which case the caller removes it again.
+    """
+    finished = await cdp.js("Boolean(matchingRender())")
+    if finished:
+        # A finished render is already there to photograph playing, so the
+        # in-progress pictures are taken of a throwaway at another setting.
+        await cdp.js("renderStride.value = '3'; renderStride.dispatchEvent(new Event('change'))")
+    await cdp.js("renderButton.click()")
+    await cdp.wait_for(
+        "state.renderJob && state.renderJob.status === 'running' && state.renderProcessedS > 6",
+        timeout=300, label="the first segments of the render",
+    )
+    await asyncio.sleep(2)
+    await shot(cdp, "05-render-progress", "#aiPanel")
+    render_id = await cdp.js("state.activeRender && state.activeRender.render_id")
+
+    await cdp.js("renderCancelButton.click()")
+    await cdp.wait_for(
+        "state.renders.some((render) => render.render_id === "
+        f"{json.dumps(render_id)} && render.status === 'partial')",
+        timeout=120, label="the partial render",
+    )
+    await asyncio.sleep(1.5)
+    await shot(cdp, "05b-render-partial", "#aiPanel")
+
+    await click_render_action(cdp, render_id, "ทำต่อ")
+    await cdp.wait_for(
+        "state.renders.some((render) => render.render_id === "
+        f"{json.dumps(render_id)} && render.status === 'complete')",
+        timeout=1800, label="the render to finish",
+    )
+    if finished:
+        await cdp.js("renderStride.value = '2'; renderStride.dispatchEvent(new Event('change'))")
+        await asyncio.sleep(1)
+        # Only ever the one this run started: the settings it was made at are
+        # the ones set above, and nothing else here renders at them.
+        await cdp.js(
+            "(async () => {"
+            f"  const params = new URLSearchParams({{ render: {json.dumps(render_id)} }});"
+            "  await fetch(`/api/renders?${params}`,"
+            "    { method: 'DELETE', headers: { 'X-Telemetry-OCR': '1' } });"
+            "  await refreshRenders();"
+            "})()"
+        )
+        return await cdp.js("(matchingRender() || {}).render_id || ''")
+    return render_id
 
 
 async def main() -> None:
@@ -232,44 +311,30 @@ async def main() -> None:
                 await asyncio.sleep(1)
                 await shot(cdp, "01-start")
 
-                # Choosing the video plays its finished render straight away.
                 await cdp.js(
                     f"videoSelect.value = {json.dumps(VIDEO)};"
                     " videoSelect.dispatchEvent(new Event('change'))"
                 )
-                await cdp.wait_for(
-                    "state.view === 'rendered' && sourceVideo.readyState >= 2",
-                    timeout=60, label="the AI video",
-                )
-                await seek(cdp, BOX_TIMES[0])
-                await shot(cdp, "03-ai-video")
-                await shot(cdp, "04-ai-panel", "#aiPanel")
-
-                await cdp.js("viewOriginal.click()")
-                await cdp.wait_for(
-                    "state.view === 'original' && sourceVideo.readyState >= 2", label="original"
-                )
-                await seek(cdp, BOX_TIMES[0])
+                if MODEL:
+                    await cdp.js(
+                        f"modelSelect.value = {json.dumps(MODEL)};"
+                        " modelSelect.dispatchEvent(new Event('change'))"
+                    )
+                await cdp.wait_for("state.video && sourceVideo.readyState >= 2", label="the video")
+                await seek(cdp, 5)
                 await shot(cdp, "02-original")
 
-                # A render in progress: every second frame, so it is not the one
-                # already on disk, then cancelled once the bar has moved.
-                await set_stride(cdp, 2)
-                await asyncio.sleep(1)
-                await cdp.js("renderButton.click()")
+                render_id = await render_for_the_pictures(cdp)
+                times = box_times(render_id)
+                print("moments with boxes:", times)
+
+                await cdp.js("viewRendered.click()")
                 await cdp.wait_for(
-                    "state.renderJob && state.renderJob.status === 'running'"
-                    " && state.renderJob.done > 60",
-                    timeout=120, label="render progress",
+                    "state.view === 'rendered' && sourceVideo.readyState >= 2", label="the AI video"
                 )
-                await asyncio.sleep(2)
-                await shot(cdp, "05-render-progress", "#aiPanel")
-                await cdp.js("renderCancelButton.click()")
-                await cdp.wait_for(
-                    "!state.renderJob || state.renderJob.status === 'cancelled'",
-                    timeout=60, label="cancelled",
-                )
-                await set_stride(cdp, 1)
+                await seek(cdp, times[0])
+                await shot(cdp, "03-ai-video")
+                await shot(cdp, "04-ai-panel", "#aiPanel")
 
                 await cdp.js("manageModelsButton.click()")
                 await cdp.wait_for(
@@ -279,11 +344,7 @@ async def main() -> None:
                 await shot(cdp, "06-model-dialog")
                 await cdp.js("modelDialog.close()")
 
-                await cdp.js("viewRendered.click()")
-                await cdp.wait_for(
-                    "state.view === 'rendered' && sourceVideo.readyState >= 2", label="AI video"
-                )
-                for seconds in BOX_TIMES:
+                for seconds in times:
                     await capture_at(cdp, seconds)
                 await asyncio.sleep(1.5)
                 # The shot with the most detections, so the preview carries boxes.

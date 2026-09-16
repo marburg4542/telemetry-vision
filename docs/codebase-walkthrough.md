@@ -103,7 +103,7 @@ vision-lab     →  vision_lab.cli:main         ← เครื่องมื�
 ## 2.2 แผนผังไฟล์และความรับผิดชอบ
 
 ```
-src/telemetry_ocr/                       (26 ไฟล์ · 9,333 บรรทัด)
+src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรทัด)
 │
 ├─ __main__.py            5    เรียก cli.main()
 ├─ cli.py               522    ★ Entry point · argparse · เชื่อมทุกคำสั่งเข้ากับโมดูล
@@ -122,7 +122,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,333 บรรท�
 │
 ├── ชั้นตรวจจับวัตถุ (แยกโปรเซส) ────────────────────────────
 ├─ detection.py         267    ห่อ Ultralytics YOLO · เลือก device · แปลงผลเป็น Detection
-├─ render_job.py        792    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · วาดกรอบ · NVENC/x264 · แคชผล
+├─ render_job.py      1,199    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · วาดกรอบ · เขียนเป็นชิ้น 2 วิ · ทำต่อได้
 ├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
 ├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
 ├─ detect_sidecar.py    162    ตัวช่วยฝั่ง CLI สำหรับรัน detection คู่กับ run
@@ -134,7 +134,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,333 บรรท�
 │
 ├── ชั้นเว็บ ─────────────────────────────────────
 ├─ video_library.py    155    รายการวิดีโอในโฟลเดอร์ · อ่านเฟรมต้นฉบับทีละเฟรม
-├─ webapp.py          1,663    ★ ใหญ่ที่สุด: aiohttp app · 30 routes · middleware · state
+├─ webapp.py          1,714    ★ ใหญ่ที่สุด: aiohttp app · 32 routes · middleware · state
 ├─ public_share.py     207    เผยแพร่ภาพชั่วคราวด้วย token (ให้ LINE ดึงได้)
 ├─ quick_tunnel.py     262    คุม cloudflared quick tunnel
 ├─ line_client.py      750    จัดรูปแบบข้อความ · แปลง DMS · push เข้า LINE
@@ -143,12 +143,13 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,333 บรรท�
 ├─ calibration.py      387    กวาดสูตรปรับปรุงภาพทุกแบบ เลือกที่ดีที่สุด
 ├─ preview.py           79    วาดกรอบ ROI ลงภาพเพื่อตรวจตำแหน่ง
 │
-└── web_static/                 (3,095 บรรทัด)
-   ├─ index.html       248    โครงหน้า
-   ├─ app.js         1,846    ★ ตรรกะหน้าเว็บทั้งหมด
-   ├─ app.css          840    สไตล์
+└── web_static/                 (3,661 บรรทัด)
+   ├─ index.html       255    โครงหน้า
+   ├─ app.js         1,998    ★ ตรรกะหน้าเว็บทั้งหมด
+   ├─ app.css          853    สไตล์
+   ├─ render-player.js  392   ★ เล่นวิดีโอ AI ที่ยังประมวลผลไม่เสร็จผ่าน Media Source
    ├─ format.js          43    จัดรูปแบบพิกัด DMS (แชร์กับเทสต์ Node)
-   └─ service-worker.js  83   PWA offline shell
+   └─ service-worker.js  85   PWA offline shell
 
 src/vision_lab/                          (10 ไฟล์ · 3,139 บรรทัด) — แยกจากกันโดยสิ้นเชิง
 ├─ cli.py              185    Entry point ที่สอง (`vision-lab`)
@@ -350,13 +351,18 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 
 ## 3.7 `render_job.py` — ประมวลผลวิดีโอทั้งไฟล์ ★
 
-### `run_render(video, output_dir, settings, meta, detector, encoder_factory, publish, cancelled)`
+### `run_render(video, output_dir, settings, meta, detector, encoder_factory, publish, cancelled, fresh)`
 **ฟังก์ชันที่รันในโปรเซสลูก** (หรือใน thread ตอนเทสต์) — ที่เดียวของหน้าเว็บที่แตะ torch
 - **ทำอะไร:** ต่อเฟรม `grab()` → ข้ามตาม stride → `retrieve()` → `detector.track()` (BoT-SORT, persist)
-  → `annotate_frame()` + Track ID → `encoder.write()` → ต่อท้าย `tracks.jsonl`
-- ส่ง `progress` ทุก 0.5 วิ พร้อม `stages_ms` (decode/track/draw/encode) และยกเลิกได้ระหว่างทาง
-- เขียน `.part` ก่อน แล้ว `os.replace` เมื่อเสร็จ พร้อม `meta.json` ที่มี fingerprint ของวิดีโอและโมเดล
-- **Output:** `annotated.mp4`, `tracks.jsonl`, `meta.json` ในโฟลเดอร์ของ render
+  → `annotate_frame()` + Track ID → `encoder.write()` → ต่อท้าย `tracks.jsonl` (flush ทุกเฟรม เพราะ
+  Capture ระหว่างประมวลผลอ่านไฟล์นี้)
+- ส่ง `started` (มี `start_frame`) แล้ว `progress` ทุก 0.5 วิ พร้อม `stages_ms` และยกเลิกได้ระหว่างทาง
+- **ทำต่อ:** ถ้าในโฟลเดอร์มีผล `partial` ที่ fingerprint และค่าตรงกัน จะอ่าน `next_frame` จาก playlist
+  ของรอบล่าสุด (นับจากชิ้นที่เขียนเสร็จจริง ไม่ใช่เฟรมที่ track ไปแล้ว) ตัด `tracks.jsonl` ให้เหลือเฉพาะ
+  เฟรมก่อนหน้านั้น บวก offset ให้ Track ID แล้ว seek ไปเริ่มรอบใหม่ใน `run-NNN` ถัดไป
+- **Output:** `run-NNN/{init.mp4, seg_*.m4s, index.m3u8}`, `tracks.jsonl`, `meta.json`
+- `settle_render(dir)` เรียกทุกครั้งที่จบแบบไม่สมบูรณ์ — เก็บชิ้นที่เสร็จแล้วเป็น `partial` หรือลบทั้ง
+  โฟลเดอร์ทิ้งถ้ายังไม่มีชิ้นไหนเสร็จเลย
 
 ### `RenderManager` (คลาส) — ฝั่ง server ไม่ import torch
 
@@ -364,12 +370,15 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 |---|---|
 | `start(...)` | spawn ลูกผ่าน `spawn_launcher` · งานซ้อนได้ `RenderBusy` · ไม่มี ffmpeg ได้ `RenderUnavailable` |
 | `status()` / `cancel()` | อ่านคิวความคืบหน้า · ตั้ง event ให้ลูกหยุด |
-| `renders(video_id)` / `delete(render_id)` | ผลที่เสร็จแล้วบนดิสก์ · ลบผล (ยกเว้นงานที่กำลังรัน) |
+| `renders(video_id)` / `delete(render_id)` | ผลบนดิสก์ทั้งที่เสร็จ ค้าง และกำลังทำ (พร้อม `processed_ms`) · ลบผล (ยกเว้นงานที่กำลังรัน) |
+| `stream(render_id)` / `segment_path(...)` | รายการชิ้นที่เขียนเสร็จบน timeline ของวิดีโอต้นฉบับ · path ของชิ้นหนึ่ง (รับเฉพาะชื่อที่ render เขียนเอง) |
 | `detections_at(render_id, frame_index)` | กรอบของเฟรมหนึ่งจาก `tracks.jsonl` ผ่าน `TrackIndex` (byte offset) |
 | `shutdown()` | ยกเลิกและ terminate ลูกตอนปิด server |
 
 ### `choose_encoder(ffmpeg)` · `FfmpegEncoder`
-ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม
+ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม จากนั้น `FfmpegEncoder` รัน
+ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย `-f hls -hls_time 2 -hls_segment_type fmp4` บังคับ keyframe ทุก
+2 วินาทีและปิด B-frame (ชิ้นต้องถอดรหัสเองได้ และ Media Source ไม่ต้องเผื่อ composition offset)
 
 > **ทำไมต้องใช้ hardware encoder:** x264 วัดแยกได้ ~105 เฟรม/วินาที แต่ในสายงานจริงแย่ง CPU 4 คอร์
 > กับ tracker จนเหลือ 5 เฟรม/วินาที NVENC พาไปที่ 16 เฟรม/วินาทีบนเครื่องเดียวกัน
@@ -455,8 +464,9 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 | `POST /api/line/send` | `line_send` (1373) | ส่งเข้า LINE (rate limit 3 วิ · สูงสุด 4 ภาพ) |
 | `GET/POST /api/models`, `DELETE /api/models/{name}` | `list_models` · `add_model` · `remove_model` | ทะเบียนโมเดล (เพิ่มจาก candidate id เท่านั้น) |
 | `GET /api/videos`, `GET /api/videos/source` | `list_videos` · `video_source` | รายการวิดีโอ · ส่งไฟล์ต้นฉบับแบบ Range |
-| `POST /api/renders`, `GET/DELETE /api/renders/current` | `start_render` · `render_status` · `cancel_render` | เริ่ม · ความคืบหน้า · ยกเลิกการประมวลผล |
-| `GET /api/renders/video`, `DELETE /api/renders` | `render_video` · `delete_render` | เล่น · ลบผลการประมวลผล |
+| `POST /api/renders`, `GET/DELETE /api/renders/current` | `start_render` · `render_status` · `cancel_render` | เริ่มหรือทำต่อ · ความคืบหน้า · ยกเลิก (เก็บส่วนที่ทำแล้ว) |
+| `GET /api/renders/stream`, `GET /api/renders/segment` | `render_stream` · `render_segment` | รายการชิ้นวิดีโอ · ชิ้นวิดีโอหนึ่งชิ้น (สำหรับ Media Source) |
+| `GET /api/renders/video`, `DELETE /api/renders` | `render_video` · `delete_render` | เล่นผลรุ่นเก่าที่เป็น MP4 ไฟล์เดียว · ลบผลการประมวลผล |
 
 ### `capture_shot(request)` — เส้นทางที่ซับซ้อนที่สุด
 ไม่มี body — หาเฟรมจาก `source_time_ms` × fps (ปัดตาม stride ของ render) แล้ว `SourceFrames.read()`
@@ -548,9 +558,10 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
      │  POST /api/renders {video, model, confidence, image_size, stride}
      └─► RenderManager.start() → spawn ลูก                   [render_job.py]
           ├─ load_ultralytics_detector() · choose_encoder() → h264_nvenc
-          └─ run_render(): ทุกเฟรม → track (BoT-SORT) → annotate_frame → ffmpeg stdin
-                           → tracks.jsonl · annotated.mp4 · meta.json
-     หน้าเว็บ poll GET /api/renders/current ทุก 1 วิ → เสร็จแล้วเล่น /api/renders/video
+          └─ run_render(): ทีละเฟรม → track (BoT-SORT) → annotate_frame → ffmpeg stdin
+                           → run-NNN/seg_*.m4s (ชิ้นละ 2 วิ) · tracks.jsonl · meta.json
+     หน้าเว็บสลับไป "วิดีโอ AI" ทันที: poll GET /api/renders/stream ทุก 2 วิ ดึงชิ้นที่เสร็จแล้ว
+     ต่อเข้า MediaSource [render-player.js] · poll /api/renders/current ทุก 1 วิ เพื่ออัปเดตแถบ
 
 [4] ผู้ใช้กดปุ่ม Capture
      │  POST /api/capture/shot?video=..&source_time_ms=..&render=..   (ไม่มี body)

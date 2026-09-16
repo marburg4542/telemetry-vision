@@ -619,6 +619,7 @@ function renderRenderList() {
       && state.activeRender?.render_id === render.render_id;
     const row = document.createElement("div");
     row.className = "render-item";
+    row.dataset.renderId = render.render_id;
     row.classList.toggle("is-active", playing);
     const text = document.createElement("span");
     text.className = "render-item-text";
