@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from . import __version__
 from .config import AppConfig, clone_config
@@ -26,6 +26,7 @@ from .line_client import ImageMessage, needs_smaller_preview, oversized_for_line
 from .ocr import Recognizer
 from .pipeline import FramePacket, TelemetryPipeline
 from .public_share import DEFAULT_SHARE_PORT, ShareServer, ShareStore
+from .render_export import ExportBusy, ExportManager, ExportUnavailable
 from .render_job import (
     LEGACY_FORMAT,
     LEGACY_VIDEO_FILE,
@@ -97,6 +98,7 @@ def create_app(
     model_registry: Any = None,
     video_library: VideoLibrary | None = None,
     render_manager: RenderManager | None = None,
+    export_manager: ExportManager | None = None,
 ) -> Any:
     try:
         from aiohttp import web
@@ -294,6 +296,11 @@ def create_app(
     library = video_library if video_library is not None else VideoLibrary(None)
     renders = (
         render_manager if render_manager is not None else RenderManager(output_dir / "renders")
+    )
+    exports = (
+        export_manager
+        if export_manager is not None
+        else ExportManager(renders, output_dir / "exports")
     )
     if renders.ffmpeg:
         _LOG.info("Rendering encodes with %s", renders.ffmpeg)
@@ -578,6 +585,7 @@ def create_app(
             # "complete", "partial" (stopped, can continue) or "running".
             "status": meta.get("status"),
             "processed_ms": meta.get("processed_ms"),
+            "size_bytes": meta.get("size_bytes"),
             # False once the video or the checkpoint has been replaced since: a
             # finished render is then out of date, and a partial one starts over.
             "current": made_from(meta, video.path if video else None, model_path),
@@ -709,6 +717,64 @@ def create_app(
             path, headers={"Cache-Control": "no-cache", "Content-Type": "video/mp4"}
         )
 
+    async def start_export(request: Any) -> Any:
+        """Join a render into one MP4 to download. The file is made, then fetched.
+
+        Two steps rather than one long request because the 720p version of a
+        25-minute render takes over a minute to encode, and a request that waits
+        that long before its first byte is one a tunnel or a proxy gives up on.
+        """
+        body = await _json_object(request)
+        render_id = str(body.get("render", "")).strip()
+        quality = str(body.get("quality", "full")).strip()
+        try:
+            job = await asyncio.to_thread(exports.start, render_id, quality)
+        except ExportBusy as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except ExportUnavailable as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        return web.json_response({"export": job}, status=202)
+
+    async def export_status(request: Any) -> Any:
+        status = exports.status((request.query.get("id") or "").strip())
+        if status is None:
+            raise web.HTTPNotFound(
+                text=json.dumps({"error": "ไม่พบไฟล์ที่เตรียมไว้"}), content_type="application/json"
+            )
+        return web.json_response(status, headers={"Cache-Control": "no-store"})
+
+    async def export_file(request: Any) -> Any:
+        """Hand the finished MP4 over, then remove it: the render is the copy kept."""
+        export_id = (request.query.get("id") or "").strip()
+        ready = exports.ready_file(export_id)
+        if ready is None:
+            raise web.HTTPNotFound(
+                text=json.dumps({"error": "ไฟล์ยังไม่พร้อม หรือดาวน์โหลดไปแล้ว"}),
+                content_type="application/json",
+            )
+        path, filename = ready
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "video/mp4",
+                "Content-Length": str(path.stat().st_size),
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+                "Cache-Control": "no-store",
+            }
+        )
+        await response.prepare(request)
+        completed = False
+        try:
+            with path.open("rb") as stream:
+                while chunk := await asyncio.to_thread(stream.read, 1024 * 1024):
+                    await response.write(chunk)
+            await response.write_eof()
+            completed = True
+        finally:
+            # Kept for another try when the download broke off partway.
+            if completed:
+                await asyncio.to_thread(exports.finished, export_id)
+        return response
+
     async def delete_render(request: Any) -> Any:
         render_id = (request.query.get("render") or "").strip()
         try:
@@ -733,6 +799,7 @@ def create_app(
         # A render holds the GPU and an ffmpeg process. It is stopped before the
         # server goes rather than being left running with nothing to report to.
         await asyncio.to_thread(renders.shutdown)
+        await asyncio.to_thread(exports.shutdown)
         await asyncio.to_thread(source_frames.close)
         # The extra recognizers a capture votes with. Built lazily on the first
         # capture, so a server that never captured has none to release.
@@ -1276,6 +1343,9 @@ def create_app(
     app.router.add_get("/api/renders/video", render_video)
     app.router.add_get("/api/renders/stream", render_stream)
     app.router.add_get("/api/renders/segment", render_segment)
+    app.router.add_post("/api/renders/export", start_export)
+    app.router.add_get("/api/renders/export", export_status)
+    app.router.add_get("/api/renders/export/file", export_file)
     app.router.add_post("/api/capture/shot", capture_shot)
     app.router.add_get("/api/capture/status", capture_status)
     app.router.add_get("/api/capture/shots", capture_shots)

@@ -122,7 +122,8 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 │
 ├── ชั้นตรวจจับวัตถุ (แยกโปรเซส) ────────────────────────────
 ├─ detection.py         267    ห่อ Ultralytics YOLO · เลือก device · แปลงผลเป็น Detection
-├─ render_job.py      1,199    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · วาดกรอบ · เขียนเป็นชิ้น 2 วิ · ทำต่อได้
+├─ render_job.py      1,237    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · วาดกรอบ · เขียนเป็นชิ้น 2 วิ · ทำต่อได้
+├─ render_export.py     353    ต่อชิ้นของผลเป็น MP4 ไฟล์เดียว (เต็ม / 720p) ไว้ดาวน์โหลดส่งต่อ
 ├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
 ├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
 ├─ detect_sidecar.py    162    ตัวช่วยฝั่ง CLI สำหรับรัน detection คู่กับ run
@@ -134,7 +135,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 │
 ├── ชั้นเว็บ ─────────────────────────────────────
 ├─ video_library.py    155    รายการวิดีโอในโฟลเดอร์ · อ่านเฟรมต้นฉบับทีละเฟรม
-├─ webapp.py          1,714    ★ ใหญ่ที่สุด: aiohttp app · 32 routes · middleware · state
+├─ webapp.py          1,779    ★ ใหญ่ที่สุด: aiohttp app · 35 routes · middleware · state
 ├─ public_share.py     207    เผยแพร่ภาพชั่วคราวด้วย token (ให้ LINE ดึงได้)
 ├─ quick_tunnel.py     262    คุม cloudflared quick tunnel
 ├─ line_client.py      750    จัดรูปแบบข้อความ · แปลง DMS · push เข้า LINE
@@ -373,6 +374,18 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 | `renders(video_id)` / `delete(render_id)` | ผลบนดิสก์ทั้งที่เสร็จ ค้าง และกำลังทำ (พร้อม `processed_ms`) · ลบผล (ยกเว้นงานที่กำลังรัน) |
 | `stream(render_id)` / `segment_path(...)` | รายการชิ้นที่เขียนเสร็จบน timeline ของวิดีโอต้นฉบับ · path ของชิ้นหนึ่ง (รับเฉพาะชื่อที่ render เขียนเอง) |
 | `detections_at(render_id, frame_index)` | กรอบของเฟรมหนึ่งจาก `tracks.jsonl` ผ่าน `TrackIndex` (byte offset) |
+
+### `render_export.py` — บันทึกผลเป็น MP4 ไฟล์เดียว
+
+ผลเป็นชิ้น 2 วินาทีเพื่อให้ดูระหว่างประมวลผลได้ แต่ส่งต่อให้คนอื่นไม่ได้ ไฟล์นี้ต่อกลับเป็นไฟล์เดียว
+
+| ส่วน | ทำอะไร |
+|---|---|
+| `join_run(render_dir, run, target)` | เขียน `init.mp4` ตามด้วยชิ้นตามลำดับใน playlist เป็น fMP4 หนึ่งไฟล์ต่อรอบ |
+| `ffmpeg_command(ffmpeg, inputs, output, quality, encoder)` | รอบเดียว `-i` · หลายรอบเขียน `runs.txt` ให้ concat demuxer · `full` = `-c copy` · `small` = ย่อ 720p (ไม่ขยาย) + ค่าคุณภาพสำหรับแชทของ encoder นั้น · `+faststart` เสมอ |
+| `export_filename(meta, quality, percent)` | `<วิดีโอ>__<โมเดล>__AI[-720p][_partial-N%].mp4` |
+| `ExportManager.start(render_id, quality)` | ตรวจ quality · ต้องมี ffmpeg และชิ้นอย่างน้อยหนึ่งชิ้น · ทีละไฟล์ (`ExportBusy`) · ทำใน thread ใน `output/exports/<id 32 hex>/` |
+| `status(id)` / `ready_file(id)` / `finished(id)` | ความคืบหน้าจาก `-progress pipe:1` · path ของไฟล์ที่เสร็จ · ลบหลังส่งครบ |
 | `shutdown()` | ยกเลิกและ terminate ลูกตอนปิด server |
 
 ### `tracker_config()`
@@ -472,6 +485,7 @@ ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย 
 | `POST /api/renders`, `GET/DELETE /api/renders/current` | `start_render` · `render_status` · `cancel_render` | เริ่มหรือทำต่อ · ความคืบหน้า · ยกเลิก (เก็บส่วนที่ทำแล้ว) |
 | `GET /api/renders/stream`, `GET /api/renders/segment` | `render_stream` · `render_segment` | รายการชิ้นวิดีโอ · ชิ้นวิดีโอหนึ่งชิ้น (สำหรับ Media Source) |
 | `GET /api/renders/video`, `DELETE /api/renders` | `render_video` · `delete_render` | เล่นผลรุ่นเก่าที่เป็น MP4 ไฟล์เดียว · ลบผลการประมวลผล |
+| `POST/GET /api/renders/export`, `GET /api/renders/export/file` | `start_export` · `export_status` · `export_file` | เริ่มทำ MP4 ไฟล์เดียว · ความคืบหน้า · ดาวน์โหลดแล้วลบ |
 
 ### `capture_shot(request)` — เส้นทางที่ซับซ้อนที่สุด
 ไม่มี body — หาเฟรมจาก `source_time_ms` × fps (ปัดตาม stride ของ render) แล้ว `SourceFrames.read()`

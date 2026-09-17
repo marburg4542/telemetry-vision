@@ -196,6 +196,15 @@ test("every script the page loads is cached by the service worker", () => {
   }
 });
 
+test("a render is saved as one MP4 by the server, never assembled in the page", () => {
+  // Joining segments in the browser would hold a gigabyte in memory and still
+  // produce a file with no index at the front. The page asks for the export and
+  // then downloads the finished file by the id it was given.
+  assert.match(appJs, /\/api\/renders\/export"/, "the page no longer asks the server to export");
+  assert.match(appJs, /\/api\/renders\/export\/file/, "the finished file is not downloaded");
+  assert.doesNotMatch(appJs, /new Blob\(\[[^\]]*segment/i, "segments are being stitched in the page");
+});
+
 test("the service worker cache turns over when the shell changes", () => {
   // An installed PWA serves the cached shell until CACHE_NAME changes, so a
   // redesign that leaves it alone ships to a browser that will not show it.

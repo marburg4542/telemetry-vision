@@ -222,6 +222,22 @@ class FakeEncoder:
         (self.run_dir / "index.m3u8").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def copying_export_runner(command: list[str], duration_s: float, progress: Any) -> None:
+    """Stands in for ffmpeg in an export: writes the joined inputs out as the file."""
+    output = Path(command[-1])
+    if "concat" in command:
+        listing = Path(command[command.index("-i") + 1])
+        inputs = [
+            Path(line.split("'")[1])
+            for line in listing.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    else:
+        inputs = [Path(command[command.index("-i") + 1])]
+    progress(50.0)
+    output.write_bytes(b"".join(path.read_bytes() for path in inputs))
+
+
 class ThreadHandle:
     def __init__(self, thread: threading.Thread) -> None:
         self.thread = thread

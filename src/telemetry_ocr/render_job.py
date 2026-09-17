@@ -1007,7 +1007,13 @@ class RenderManager:
         if render_format(meta) == LEGACY_FORMAT:
             if meta.get("status") != "complete" or not (directory / LEGACY_VIDEO_FILE).is_file():
                 return None
-            return {**meta, "format": LEGACY_FORMAT, "processed_ms": meta.get("duration_ms")}
+            size = _file_size(directory / LEGACY_VIDEO_FILE)
+            return {
+                **meta,
+                "format": LEGACY_FORMAT,
+                "processed_ms": meta.get("duration_ms"),
+                "size_bytes": size,
+            }
         status = str(meta.get("status") or "")
         if status == "running" and directory.name != active:
             # Left "running" by a render that did not get to say otherwise.
@@ -1017,7 +1023,18 @@ class RenderManager:
         index = stream_index(directory, meta)
         if not index["runs"] and status != "running":
             return None
-        return {**meta, "status": status, "processed_ms": index["processed_ms"]}
+        # What an MP4 of it would weigh: the segments are the stream, copied.
+        size = sum(
+            _file_size(directory / run["run"] / name)
+            for run in index["runs"]
+            for name in [INIT_FILE, *(segment["file"] for segment in run["segments"])]
+        )
+        return {
+            **meta,
+            "status": status,
+            "processed_ms": index["processed_ms"],
+            "size_bytes": size,
+        }
 
     def _active_render_locked(self) -> str | None:
         self._poll_locked()
@@ -1197,6 +1214,13 @@ def with_track_ids(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             labelled.append({**box, "label": f"{box['label']} #{box['track_id']}"})
     return labelled
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return int(path.stat().st_size)
+    except OSError:
+        return 0
 
 
 def _now() -> str:

@@ -22,9 +22,10 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         import numpy as np
         from aiohttp.test_utils import TestClient, TestServer
 
-        from _video_fixture import thread_launcher, write_test_video
+        from _video_fixture import copying_export_runner, thread_launcher, write_test_video
         from telemetry_ocr.config import AppConfig, FieldConfig, RuntimeConfig
         from telemetry_ocr.ocr import OCRResult
+        from telemetry_ocr.render_export import ExportManager
         from telemetry_ocr.render_job import RenderManager
         from telemetry_ocr.video_library import VideoLibrary
         from telemetry_ocr.webapp import GUARD_HEADER, create_app
@@ -102,6 +103,9 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
                 model_registry=self.registry,
                 video_library=VideoLibrary(self.videos),
                 render_manager=self.renders,
+                export_manager=ExportManager(
+                    self.renders, self.root / "exports", runner=copying_export_runner
+                ),
             )
         )
         # The real page sends the guard header on every API call, so the default
@@ -378,6 +382,50 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await (await self.client.get("/api/renders")).json())["renders"], [])
         self.assertTrue(self.video.is_file(), "deleting a render deleted the video")
 
+    async def test_a_render_is_saved_as_one_mp4_and_then_removed(self):
+        started = await self.client.post("/api/renders", json=self._render_request())
+        self.assertEqual(started.status, 202)
+        render_id = (await self._wait_for_render("complete"))["render_id"]
+
+        queued = await self.client.post(
+            "/api/renders/export", json={"render": render_id, "quality": "full"}
+        )
+        self.assertEqual(queued.status, 202)
+        export_id = (await queued.json())["export"]["id"]
+        status: dict = {}
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            status = await (await self.client.get(f"/api/renders/export?id={export_id}")).json()
+            if status["status"] != "running":
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual(status["status"], "ready")
+
+        download = await self.client.get(f"/api/renders/export/file?id={export_id}")
+        self.assertEqual(download.status, 200)
+        disposition = download.headers["Content-Disposition"]
+        self.assertIn("attachment", disposition)
+        self.assertIn("flight__best50__AI.mp4", disposition)
+        self.assertEqual(len(await download.read()), status["size_bytes"])
+        # Handed over: nothing of it stays on this machine, so it is not there twice.
+        gone = await self.client.get(f"/api/renders/export/file?id={export_id}")
+        self.assertEqual(gone.status, 404)
+        self.assertEqual((await self.client.get(f"/api/renders/export?id={export_id}")).status, 404)
+        self.assertEqual(list((self.root / "exports").iterdir()), [])
+
+    async def test_an_export_needs_a_render_and_a_quality_it_offers(self):
+        missing = await self.client.post(
+            "/api/renders/export", json={"render": "never-rendered", "quality": "full"}
+        )
+        self.assertEqual(missing.status, 404)
+        await self.client.post("/api/renders", json=self._render_request())
+        render_id = (await self._wait_for_render("complete"))["render_id"]
+        odd = await self.client.post(
+            "/api/renders/export", json={"render": render_id, "quality": "4k"}
+        )
+        self.assertEqual(odd.status, 400)
+        self.assertEqual((await self.client.get("/api/renders/export/file?id=../x")).status, 404)
+
     async def test_a_second_render_waits_and_a_cancelled_one_continues(self):
         self.render_gate.clear()
         first = await self.client.post("/api/renders", json=self._render_request())
@@ -496,6 +544,7 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             ("delete", "/api/models/best50"),
             ("delete", "/api/renders/current"),
             ("delete", "/api/renders?render=x"),
+            ("post", "/api/renders/export"),
             ("post", "/api/session"),
         ):
             with self.subTest(method=method, path=path):

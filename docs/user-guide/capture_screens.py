@@ -198,6 +198,15 @@ async def click_render_action(cdp: Cdp, render_id: str, label: str) -> None:
     )
 
 
+async def export_panel_shot(cdp: Cdp, render_id: str) -> None:
+    """The save-as-MP4 choices, opened and photographed, then closed. Nothing is exported."""
+    await click_render_action(cdp, render_id, "บันทึก MP4")
+    await cdp.wait_for("document.querySelector('.render-export')", label="the export panel")
+    await asyncio.sleep(0.5)
+    await shot(cdp, "05c-render-export", "#renderList")
+    await click_render_action(cdp, render_id, "บันทึก MP4")
+
+
 def box_times(render_id: str, fallback=(19.8, 17.6, 5.0)) -> tuple[float, ...]:
     """Three moments the render found the most in, far enough apart to differ."""
     path = RENDERS / render_id / "tracks.jsonl"
@@ -364,6 +373,7 @@ async def main() -> None:
                 await seek(cdp, times[0])
                 await shot(cdp, "03-ai-video")
                 await shot(cdp, "04-ai-panel", "#aiPanel")
+                await export_panel_shot(cdp, render_id)
 
                 await cdp.js("viewOriginal.click()")
                 await cdp.wait_for(

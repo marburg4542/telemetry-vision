@@ -127,6 +127,13 @@ const state = {
   attached: "",
   // Folded away to give the video the height. Remembered per browser.
   aiCollapsed: false,
+  // Saving a render as one MP4: which render's options are open, the export
+  // being made, and what to say about it.
+  exportPanelFor: null,
+  exportJob: null,
+  exportMessage: "",
+  exportError: false,
+  exportTimer: null,
   // Capture: one session per page load unless the operator is holding the
   // button down, in which case shots keep appending to the same one.
   captureSession: null,
@@ -710,6 +717,19 @@ function renderRenderList() {
       resume.addEventListener("click", () => startRender(render));
       actions.append(resume);
     }
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "link-button";
+    save.textContent = "บันทึก MP4";
+    const blocker = exportBlocker(render);
+    save.disabled = Boolean(blocker);
+    save.title = blocker || "บันทึกเป็นไฟล์ MP4 ไฟล์เดียวเพื่อส่งต่อ";
+    save.setAttribute("aria-expanded", String(state.exportPanelFor === render.render_id));
+    save.addEventListener("click", () => {
+      state.exportPanelFor = state.exportPanelFor === render.render_id ? null : render.render_id;
+      renderRenderList();
+    });
+    actions.append(save);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "link-button is-danger";
@@ -718,7 +738,149 @@ function renderRenderList() {
     actions.append(remove);
     row.append(text, meta, actions);
     ui.renderList.append(row);
+    if (state.exportPanelFor === render.render_id) ui.renderList.append(buildExportPanel(render));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Saving a render as one MP4
+//
+// A render is kept as two-second segments so it can be watched while it is
+// made, which is no use to anyone it is sent to. The server joins them back into
+// one file -- as it is, or scaled to 720p for a chat -- and the browser downloads
+// it. Two steps, because the small version of a long flight takes a minute or
+// more to encode and a request that silent for that long gets dropped.
+// ---------------------------------------------------------------------------
+
+// Measured over a whole 25-minute flight with NVENC: 286 MB in 83 seconds.
+const SMALL_EXPORT_MB_PER_MIN = 11.3;
+const SMALL_EXPORT_S_PER_MIN = 3.3;
+
+// Why a render cannot be saved, or "" when it can. A render made from a video
+// or model that has changed since still plays, so it still saves.
+function exportBlocker(render) {
+  if (state.ffmpeg === false) return "ต้องมี ffmpeg ในเครื่องจึงจะบันทึก MP4 ได้";
+  if (render.format !== "mp4" && !(Number(render.processed_ms) > 0)) {
+    return "ยังไม่มีภาพที่ประมวลผลเสร็จให้บันทึก";
+  }
+  return "";
+}
+
+function exportRunning() {
+  return Boolean(state.exportJob && state.exportJob.status === "running");
+}
+
+function buildExportPanel(render) {
+  const panel = document.createElement("div");
+  panel.className = "render-export";
+  const minutes = (Number(render.processed_ms) || 0) / 60000;
+  const note = document.createElement("span");
+  note.className = "render-export-note";
+  note.textContent = render.status === "complete" || render.format === "mp4"
+    ? "บันทึกเป็นไฟล์ MP4 ไฟล์เดียว ดาวน์โหลดผ่านเบราว์เซอร์"
+    : `ไฟล์จะมีเฉพาะส่วนที่ประมวลผลแล้ว (${renderPercent(render)}%)`;
+  panel.append(note);
+  const options = [
+    {
+      quality: "full",
+      label: `คุณภาพเต็ม · ${formatBytes(Number(render.size_bytes) || 0)}`,
+      title: "ภาพเหมือนที่เห็นในแอป ไม่เข้ารหัสใหม่ เสร็จในไม่กี่วินาที",
+    },
+    {
+      quality: "small",
+      label: `ไฟล์เล็ก 720p · ~${formatBytes(minutes * SMALL_EXPORT_MB_PER_MIN * 1024 * 1024)}`,
+      title: `ย่อเป็น 720p สำหรับส่งแชท ใช้เวลาราว ${
+        formatDuration(Math.max(5, minutes * SMALL_EXPORT_S_PER_MIN))}`,
+    },
+  ];
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost-button render-export-option";
+    button.textContent = option.label;
+    button.title = option.title;
+    button.disabled = exportRunning();
+    button.addEventListener("click", () => startExport(render, option.quality));
+    panel.append(button);
+  }
+  const status = document.createElement("span");
+  status.className = "render-export-status";
+  const mine = state.exportJob?.renderId === render.render_id;
+  status.classList.toggle("is-error", mine && state.exportError);
+  status.textContent = mine ? state.exportMessage : "";
+  panel.append(status);
+  return panel;
+}
+
+function showExportMessage(message, isError = false) {
+  state.exportMessage = message;
+  state.exportError = isError;
+  const status = ui.renderList.querySelector(".render-export-status");
+  if (status) {
+    status.textContent = message;
+    status.classList.toggle("is-error", isError);
+  }
+}
+
+async function startExport(render, quality) {
+  if (exportRunning()) return;
+  state.exportJob = { renderId: render.render_id, status: "running" };
+  showExportMessage("กำลังเริ่มเตรียมไฟล์…");
+  renderRenderList();
+  try {
+    const payload = await jsonFetch("/api/renders/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ render: render.render_id, quality }),
+    });
+    state.exportJob = { ...payload.export, renderId: render.render_id };
+    pollExport();
+  } catch (error) {
+    state.exportJob = { renderId: render.render_id, status: "error" };
+    showExportMessage(`บันทึกไม่สำเร็จ: ${error.message}`, true);
+    renderRenderList();
+  }
+}
+
+function pollExport() {
+  window.clearTimeout(state.exportTimer);
+  state.exportTimer = window.setTimeout(async () => {
+    const job = state.exportJob;
+    if (!job || job.status !== "running" || !job.id) return;
+    let status;
+    try {
+      status = await jsonFetch(`/api/renders/export?${new URLSearchParams({ id: job.id })}`);
+    } catch (error) {
+      showExportMessage(`อ่านสถานะไม่ได้ จะลองใหม่: ${error.message}`, true);
+      pollExport();
+      return;
+    }
+    state.exportJob = { ...status, renderId: job.renderId };
+    if (status.status === "running") {
+      showExportMessage(`กำลังเตรียมไฟล์ ${Math.round(status.percent)}%`);
+      pollExport();
+      return;
+    }
+    if (status.status === "ready") {
+      showExportMessage(`เริ่มดาวน์โหลดแล้ว · ${status.filename} · ${formatBytes(status.size_bytes)}`);
+      downloadExport(status);
+      showToast(`กำลังดาวน์โหลด ${status.filename} — ดูในโฟลเดอร์ Downloads`);
+    } else {
+      showExportMessage(`บันทึกไม่สำเร็จ: ${status.error || "ไม่ทราบสาเหตุ"}`, true);
+    }
+    renderRenderList();
+  }, 1000);
+}
+
+// The server removes the file once it has been sent, so this is the one copy.
+function downloadExport(status) {
+  const link = document.createElement("a");
+  link.href = `/api/renders/export/file?${new URLSearchParams({ id: status.id })}`;
+  link.download = status.filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
 }
 
 function describeRender(render, playing) {

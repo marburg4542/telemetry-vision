@@ -829,15 +829,34 @@ td.k { white-space: nowrap; font-weight: 600; color: var(--blue-900); }
     <li data-n="1"><span><strong>ต้นฉบับ / วิดีโอ AI</strong> — สลับได้ทุกเมื่อ เวลาที่เล่นอยู่ไม่เปลี่ยน</span></li>
     <li data-n="2"><span>วิดีโอ AI — กรอบ ชื่อ class ความมั่นใจ และ <code>#Track ID</code> อยู่ในภาพ</span></li>
     <li data-n="3"><span>บรรทัดสถานะ — บอกว่ากำลังแสดงอะไร และค่าตรงกับที่ตั้งไว้หรือไม่</span></li>
-    <li data-n="4"><span>ผลการประมวลผลของวิดีโอนี้ — <strong>เล่น</strong> · <strong>ทำต่อ</strong> (เฉพาะผลที่หยุดไว้) · <strong>ลบ</strong></span></li>
+    <li data-n="4"><span>ผลการประมวลผลของวิดีโอนี้ — <strong>เล่น</strong> · <strong>ทำต่อ</strong> (เฉพาะผลที่หยุดไว้) · <strong>บันทึก MP4</strong> · <strong>ลบ</strong></span></li>
   </ul>
   <div class="warn"><b>ผลที่ขึ้นว่า “ควรประมวลผลใหม่”</b>
     แปลว่าไฟล์วิดีโอหรือไฟล์โมเดลถูกแก้ไขหลังประมวลผล ผลนั้นยังเล่นได้แต่อาจไม่ตรงกับไฟล์ปัจจุบัน</div>
 
+  <h3>บันทึกวิดีโอ AI เป็น MP4 ไฟล์เดียว</h3>
+  <p>วิดีโอ AI ถูกเก็บเป็นชิ้นละ 2 วินาทีเพื่อให้ดูได้ระหว่างประมวลผล จึงส่งต่อตรง ๆ ไม่ได้
+    กด <strong>บันทึก MP4</strong> ในแถวของผลที่ต้องการ แล้วเลือกแบบใดแบบหนึ่ง ระบบจะรวมเป็นไฟล์เดียว
+    แล้วดาวน์โหลดผ่านเบราว์เซอร์ (อยู่ในโฟลเดอร์ Downloads)</p>
+  <figure>
+    <div class="frame"><img src="assets/screens/05c-render-export.png" alt=""></div>
+    <figcaption><b>ภาพที่ 5.5</b> ตัวเลือกบันทึก MP4 ใต้แถวของผล</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th style="width:24%">แบบ</th><th>ใช้เมื่อ</th><th style="width:30%">วิดีโอ 25 นาที</th></tr></thead>
+    <tbody>
+      <tr><td><strong>คุณภาพเต็ม</strong></td><td>เก็บไว้หรือส่งผ่านไดรฟ์ ภาพเหมือนที่เห็นในแอปทุกอย่าง (1080p)</td><td>~945 MB · เสร็จใน ~8 วินาที</td></tr>
+      <tr><td><strong>ไฟล์เล็ก 720p</strong></td><td>ส่งในแชท ย่อภาพเป็น 720p และบีบให้เล็กลง</td><td>~286 MB · ใช้เวลา ~1 นาทีครึ่ง</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>ผลที่หยุดไว้กลางทางก็บันทึกได้</b>
+    ไฟล์จะมีเฉพาะส่วนที่ประมวลผลแล้ว และชื่อไฟล์ลงท้ายว่า <code>_partial-41%</code> ผู้รับจึงรู้ว่าไม่ใช่ทั้งเที่ยวบิน
+    · ทำได้ทีละไฟล์ · ไฟล์ไม่มีเสียง · หลังดาวน์โหลดเสร็จ สำเนาบน server จะถูกลบ (ผลเดิมยังอยู่ บันทึกใหม่ได้เสมอ)</div>
+
   <h3>จัดการโมเดล</h3>
   <p>กด <strong>จัดการโมเดล</strong> ข้างรายการโมเดล เพื่อเพิ่ม เอาออก หรือตั้งโมเดลค่าเริ่มต้น</p>
   <figure data-screen="06-model-dialog" data-marks="dialog_registered:1,dialog_candidates:2">
-    <figcaption><b>ภาพที่ 5.5</b> หน้าต่างจัดการโมเดล</figcaption>
+    <figcaption><b>ภาพที่ 5.6</b> หน้าต่างจัดการโมเดล</figcaption>
   </figure>
   <ul class="legend">
     <li data-n="1"><span><strong>โมเดลในรายการ</strong> — <strong>ตั้งเป็นค่าเริ่มต้น</strong> หรือ <strong>เอาออกจากรายการ</strong> (ไฟล์ .pt ยังอยู่บนเครื่องเสมอ)</span></li>
@@ -1650,6 +1669,7 @@ python scripts\label_contact_sheet.py output\labels-pass2</code></pre>
       <tr><td><code>GET /api/renders</code> · <code>DELETE /api/renders</code></td><td>ผลการประมวลผลทั้งหมดของวิดีโอ (พร้อมสถานะและ % ที่ทำแล้ว) · ลบผล</td></tr>
       <tr><td><code>GET /api/renders/stream</code> · <code>GET /api/renders/segment</code></td><td>รายการชิ้นวิดีโอที่เสร็จแล้ว · ชิ้นวิดีโอหนึ่งชิ้น (สำหรับเล่นระหว่างประมวลผล)</td></tr>
       <tr><td><code>GET /api/renders/video</code></td><td>เล่นผลรุ่นเก่าที่เป็น MP4 ไฟล์เดียว</td></tr>
+      <tr><td><code>POST · GET /api/renders/export</code> · <code>GET /api/renders/export/file</code></td><td>เริ่มทำ MP4 ไฟล์เดียว (full / small) · ความคืบหน้า · ดาวน์โหลดแล้วลบสำเนาบน server</td></tr>
       <tr><td><code>POST /api/capture/shot</code></td><td>อ่านเฟรมต้นฉบับจากไฟล์ + OCR + กรอบจากผลการประมวลผล</td></tr>
       <tr><td><code>DELETE /api/capture/shot</code> · <code>GET /api/capture/image</code></td><td>ลบภาพที่เลือก · อ่านภาพ/ภาพย่อ</td></tr>
       <tr><td><code>GET /api/line/status</code> · <code>POST /api/line/send</code></td><td>สถานะ LINE และโควต้า · ส่งภาพที่เลือก</td></tr>

@@ -532,6 +532,23 @@ summary:focus-visible, label:has(input:focus-visible) {
 }
 .render-item-meta.is-stale { color: var(--warn); }
 .render-item-actions { display: inline-flex; gap: 2px; }
+.render-export {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: -1px 0 2px 16px;
+  padding: 7px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  font-size: 12px;
+}
+.render-export-note { color: var(--muted); }
+.render-export-option { min-height: 28px; font-size: 12px; }
+.render-export-status { flex: 1 1 100%; color: var(--blue); }
+.render-export-status:empty { display: none; }
+.render-export-status.is-error { color: var(--danger); }
 
 /* ---------------------------------------------------------------- models */
 
@@ -886,4 +903,10 @@ summary:focus-visible, label:has(input:focus-visible) {
   .source-line { flex-direction: column; align-items: flex-start; gap: 2px; }
   .source-line span { max-width: 100%; }
   .topbar { flex-wrap: wrap; gap: 8px; }
+  /* Four actions and the settings do not fit one phone-wide line: the settings
+     take the first, the note and the actions the next. */
+  .render-item { flex-wrap: wrap; row-gap: 2px; }
+  .render-item-text { flex: 1 1 100%; white-space: normal; }
+  .render-item-actions { margin-left: auto; }
+  .render-export { margin-left: 0; }
 }
