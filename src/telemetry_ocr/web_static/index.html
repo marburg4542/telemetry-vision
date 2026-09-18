@@ -71,7 +71,10 @@
 
             <!-- A render is watched while it is made, so the picture stops where
                  the model has got to. Said, rather than looking stuck. -->
-            <div class="render-wait" id="renderWait" hidden>กำลังประมวลผลส่วนถัดไป…</div>
+            <div class="render-wait" id="renderWait" hidden>
+              <span id="renderWaitText">กำลังโหลดวิดีโอ AI…</span>
+              <button type="button" class="render-wait-now" id="renderWaitNow" hidden>ดูเลย ไม่ต้องรอ</button>
+            </div>
 
             <!-- A chosen capture at the size the video plays at, inside the
                  stage so it covers exactly the area the video occupies. -->

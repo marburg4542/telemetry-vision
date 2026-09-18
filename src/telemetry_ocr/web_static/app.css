@@ -462,7 +462,23 @@ summary:focus-visible, label:has(input:focus-visible) {
   color: #fff;
   font-size: 12px;
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
 }
+.render-wait-now {
+  pointer-events: auto;
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.render-wait-now:hover { background: rgba(255, 255, 255, 0.16); }
 .render-bar {
   position: relative;
   flex: 1 1 auto;

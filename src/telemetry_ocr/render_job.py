@@ -936,6 +936,8 @@ class RenderManager:
         directory = self.directory(render_id)
         with self._lock:
             active = self._active_render_locked()
+            job = self._job if active == render_id else None
+            written_per_s = float(job.get("fps") or 0.0) if job is not None else 0.0
         meta = read_meta(directory)
         if meta is None:
             return None
@@ -955,6 +957,16 @@ class RenderManager:
         index["render_id"] = render_id
         if index["status"] == "running" and render_id != active:
             index["status"] = "partial"
+        # Seconds of video made per second, averaged over the run: what the page
+        # works out how long to wait from. Steadier than its own polls, which see
+        # the render only in two-second steps.
+        source_fps = float(meta.get("source_fps") or 0.0)
+        stride = int(meta.get("stride") or 1)
+        index["rate"] = (
+            round(written_per_s * stride / source_fps, 4)
+            if index["status"] == "running" and source_fps > 0
+            else None
+        )
         return index
 
     def segment_path(self, render_id: str, run: str, file: str) -> Path | None:

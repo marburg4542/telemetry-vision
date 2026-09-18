@@ -176,8 +176,35 @@ test("playback waits for a stretch worth playing, not for the first segment", ()
   assert.equal(bufferTarget(true), HOLD_BUFFER_S, "catching up waits for more, not less");
   assert.equal(readyToPlay(2, HOLD_BUFFER_S, false), false);
   assert.equal(readyToPlay(HOLD_BUFFER_S, HOLD_BUFFER_S, false), true);
-  // A finished render never waits: all of it is there.
+  // A finished render never waits: all of it is there. Nor does one nobody is
+  // working on: what it has is all it will have.
   assert.equal(readyToPlay(0, HOLD_BUFFER_S, true), true);
+  assert.equal(readyToPlay(0, null, false), false, "no rate yet, no start");
+});
+
+test("a slow render is waited for once, long enough to play to the end", () => {
+  const { aheadNeeded, RATE_MARGIN } = player;
+  // Ten minutes left at half real time, planned as 0.45: 330 s must be made
+  // before playing, and the other 270 s get made while those play.
+  const needed = aheadNeeded(600, 0.5, false);
+  assert.equal(needed, 600 * (1 - 0.5 * RATE_MARGIN));
+  // Check it the long way: play from here at 1x while the front moves at the
+  // real rate; the playhead must not overtake the front before the end.
+  const rate = 0.5;
+  for (let t = 0; t <= 600; t += 1) {
+    assert.ok(t <= needed + rate * t + 1e-9, `caught the render up at ${t} s`);
+  }
+  // Near the end it is only what is left; a render keeping up waits a moment.
+  assert.equal(aheadNeeded(8, 0.5, false), 8);
+  assert.equal(aheadNeeded(600, 1.5, false), START_BUFFER_S);
+  assert.equal(aheadNeeded(600, 1.5, true), HOLD_BUFFER_S);
+  assert.equal(aheadNeeded(5, 1.5, true), 5, "never more than there is to play");
+  assert.equal(aheadNeeded(600, 0, false), null, "rate not known yet");
+  // One only just faster than real time is planned as slower, and waited for.
+  assert.equal(aheadNeeded(600, 1.05, false), 600 * (1 - 1.05 * RATE_MARGIN));
+  assert.ok(aheadNeeded(600, 1.05, false) > START_BUFFER_S);
+  // Then plays to the end: the estimate of the stretch covers what is left.
+  assert.ok(estimatePlayback(needed, rate) >= 600);
 });
 
 test("the wait and the stretch that follows are estimated from the real rate", () => {

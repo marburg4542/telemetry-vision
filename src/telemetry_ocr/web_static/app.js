@@ -31,6 +31,8 @@ const ui = {
   renderStatus: $("renderStatus"),
   renderList: $("renderList"),
   renderWait: $("renderWait"),
+  renderWaitText: $("renderWaitText"),
+  renderWaitNow: $("renderWaitNow"),
   aiPanel: $("aiPanel"),
   aiToggle: $("aiToggle"),
   aiToggleHint: $("aiToggleHint"),
@@ -1284,25 +1286,40 @@ function applyStreamState(streamState) {
   // and without a word for it, it looks like a video that has hung. How long the
   // wait is, and how long it will play afterwards, come from the rate the render
   // is actually going at.
-  ui.renderWait.hidden = !streamState.waiting;
-  if (streamState.waiting) ui.renderWait.textContent = describeWait(streamState);
+  const shown = streamState.waiting || streamState.stopped;
+  ui.renderWait.hidden = !shown;
+  if (shown) ui.renderWaitText.textContent = describeWait(streamState);
+  // Waiting for the whole of a slow render can be minutes; what is there
+  // already can be watched instead, and the wait comes back at the front.
+  ui.renderWaitNow.hidden = !(streamState.waiting && Number(streamState.aheadS) >= 2);
   if (streamState.clamped) {
     showToast(`ยังประมวลผลไม่ถึงตรงนั้น — กลับมาที่ ${formatTime(state.renderProcessedS)}`);
   }
   if (state.view === "rendered") describeRenderChoice();
 }
 
+// The wait is sized so that, once playing, the picture reaches the end
+// without catching the renderer up -- said as such, so a long wait reads as a
+// plan rather than a hang.
 function describeWait(streamState) {
-    const parts = [
-      streamState.started ? "กำลังประมวลผลส่วนถัดไป" : "กำลังสะสมภาพก่อนเริ่มเล่น",
-    ];
-    if (Number.isFinite(streamState.waitS)) {
-      parts.push(`พร้อมเล่นในอีกราว ${formatDuration(streamState.waitS)}`);
-    }
-    if (Number.isFinite(streamState.playS) && streamState.playS >= 3) {
-      parts.push(`แล้วเล่นต่อเนื่องราว ${formatDuration(streamState.playS)}`);
-    }
+  if (streamState.stopped) {
+    return "ประมวลผลไว้ถึงตรงนี้ — กด ทำต่อ ในรายการผลเพื่อประมวลผลส่วนที่เหลือ";
+  }
+  const parts = [
+    streamState.started ? "ตามทันจุดที่ประมวลผลถึงแล้ว" : "รอสะสมภาพก่อนเริ่มเล่น",
+  ];
+  if (!Number.isFinite(streamState.waitS)) {
+    parts.push("กำลังวัดความเร็วการประมวลผล");
     return `${parts.join(" · ")}…`;
+  }
+  parts.push(`อีกราว ${formatDuration(Math.max(1, streamState.waitS))}`);
+  const toEnd = Number(streamState.playS) >= Number(streamState.remainingS) - 1;
+  if (toEnd) {
+    parts.push("แล้วดูต่อเนื่องจนจบ");
+  } else if (Number.isFinite(streamState.playS) && streamState.playS >= 3) {
+    parts.push(`แล้วเล่นต่อเนื่องราว ${formatDuration(streamState.playS)}`);
+  }
+  return parts.join(" · ");
 }
 
 // Swaps what the <video> plays and keeps the moment on screen. The original and
@@ -1328,6 +1345,8 @@ function showView(view, atSeconds = null, play = null) {
     // the panel keeps saying how far the render just left behind had got.
     state.renderProcessedS = 0;
     ui.renderWait.hidden = false;
+    ui.renderWaitText.textContent = "กำลังโหลดวิดีโอ AI…";
+    ui.renderWaitNow.hidden = true;
     renderPlayer().open(render.render_id, {
       startAt: resumeAt,
       autoplay: resume,
@@ -2179,6 +2198,7 @@ for (const control of [ui.renderConfidence, ui.renderImageSize, ui.renderStride]
 ui.aiToggle.addEventListener("click", () => setAiCollapsed(!state.aiCollapsed));
 ui.renderButton.addEventListener("click", onRenderButton);
 ui.renderCancelButton.addEventListener("click", cancelRender);
+ui.renderWaitNow.addEventListener("click", () => state.renderStream?.playNow());
 ui.manageModelsButton.addEventListener("click", openModelManager);
 ui.modelDialogClose.addEventListener("click", () => ui.modelDialog.close());
 ui.shotClearSelection.addEventListener("click", () => clearChosen());

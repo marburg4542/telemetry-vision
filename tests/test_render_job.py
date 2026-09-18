@@ -476,6 +476,22 @@ class RenderManagerTests(unittest.TestCase):
             with self.subTest(run=run, file=file):
                 self.assertIsNone(self.manager.segment_path(render_id, run, file))
 
+    def test_the_stream_says_how_fast_a_running_render_makes_video(self) -> None:
+        # Held at its first frame: running, with its playlist not yet written.
+        render_id = self.start(RenderSettings(stride=2))["render_id"]
+        self.wait_for("running")
+        deadline = time.monotonic() + 10
+        while self.manager.stream(render_id) is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        with self.manager._lock:
+            self.manager._job["fps"] = 4.0  # frames written a second, as reported
+        # Four frames a second at every second frame of a 10 fps source: 0.8 s of
+        # video for each second of waiting.
+        self.assertAlmostEqual(self.manager.stream(render_id)["rate"], 0.8)
+        self.gate.set()
+        self.wait_for("complete")
+        self.assertIsNone(self.manager.stream(render_id)["rate"], "nothing left to wait for")
+
     def test_a_render_from_before_segments_still_lists_and_plays(self) -> None:
         directory = self.dir / "renders" / "old"
         directory.mkdir(parents=True)

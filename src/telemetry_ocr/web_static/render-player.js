@@ -23,8 +23,13 @@
   // second the picture is played at -- so the choice is not whether to wait but
   // whether to wait a moment every two seconds or once for a stretch that then
   // plays without stopping. These are the second.
+  //
+  // A render slower than playback waits longer than that: long enough that,
+  // once playing, the picture never catches the renderer up before the end.
+  // RATE_MARGIN plans for it running a tenth slower than measured so far.
   const START_BUFFER_S = 10;
   const HOLD_BUFFER_S = 15;
+  const RATE_MARGIN = 0.9;
   const POLL_MS = 2000;
   const MIME = 'video/mp4; codecs="avc1.640029"';
   const INIT_FILE = "init.mp4";
@@ -121,8 +126,21 @@
     return started ? HOLD_BUFFER_S : START_BUFFER_S;
   }
 
-  function readyToPlay(ahead, target, complete) {
-    return Boolean(complete) || ahead >= target;
+  // How far ahead of the playhead the render has to be before playing, so that
+  // playback then runs to the end without stopping. Playing from here takes
+  // `remaining` seconds, in which a render going at `rate` adds rate x remaining;
+  // the rest has to be there already. null while the rate is not known yet.
+  function aheadNeeded(remaining, rate, started) {
+    if (!(rate > 0)) return null;
+    const floor = Math.min(remaining, bufferTarget(started));
+    const planned = rate * RATE_MARGIN;
+    if (planned >= 1) return floor;
+    return Math.min(remaining, Math.max(floor, remaining * (1 - planned)));
+  }
+
+  function readyToPlay(ahead, needed, settled) {
+    if (settled) return true;
+    return needed !== null && ahead >= needed - 0.01;
   }
 
   // Seconds of waiting before that much is ready, at the rate the render is
@@ -145,7 +163,9 @@
     EDGE_S,
     START_BUFFER_S,
     HOLD_BUFFER_S,
+    RATE_MARGIN,
     bufferTarget,
+    aheadNeeded,
     readyToPlay,
     estimateWait,
     estimatePlayback,
@@ -292,6 +312,11 @@
           this.begin();
           this.resumeIfWaiting();
         }
+        // Waiting minutes for a slow render, nothing new is fetched for most of
+        // them -- the look-ahead is already full -- so readiness is checked on
+        // every poll, not only when a segment arrives.
+        this.begin();
+        this.resumeIfWaiting();
         this.finish();
       } catch (error) {
         if (!this.closed) this.onState({ error: error.message });
@@ -401,16 +426,41 @@
       }
     }
 
-    // Playback starts once enough is ready to play for a while, at the moment
-    // asked for. A finished render is ready by definition.
-    begin() {
-      if (this.started || this.closed) return;
-      const complete = Boolean(this.index && this.index.complete);
-      if (!readyToPlay(this.ahead(), bufferTarget(false), complete)) return;
+    // Playback starts once enough is ready to play to the end, at the moment
+    // asked for -- or at once when asked to. A finished render, or one that is
+    // not being worked on, is as ready as it will get.
+    begin(now = false) {
+      if (this.started || this.closed || !this.segments.length) return;
+      if (!now && !readyToPlay(this.ahead(), this.needed(), this.settled())) return;
       this.started = true;
       const wanted = clampSeek(this.startAt, processedUntil(this.segments), false);
       if (wanted > 0.05) this.video.currentTime = wanted;
-      if (this.autoplay) this.video.play().catch(() => {});
+      if (this.autoplay || now) this.video.play().catch(() => {});
+    }
+
+    // "Play now": what is there plays, and the wait comes back at the front.
+    playNow() {
+      if (this.closed || !this.segments.length) return;
+      if (!this.started) {
+        this.begin(true);
+      } else {
+        this.resumeAtFront = false;
+        this.video.play().catch(() => {});
+      }
+      this.report();
+    }
+
+    settled() {
+      return Boolean(this.index && (this.index.complete || this.index.status !== "running"));
+    }
+
+    remaining() {
+      const end = this.duration || processedUntil(this.segments);
+      return Math.max(0, end - this.position());
+    }
+
+    needed() {
+      return aheadNeeded(this.remaining(), this.rate(), this.started);
     }
 
     finish() {
@@ -432,10 +482,14 @@
       const processed = Number(processedMs) / 1000;
       if (!Number.isFinite(processed)) return;
       this.rateSamples.push([Date.now() / 1000, processed]);
-      if (this.rateSamples.length > 6) this.rateSamples.shift();
+      if (this.rateSamples.length > 30) this.rateSamples.shift();
     }
 
+    // The server's average over the run when it has one; the last minute of
+    // polls otherwise.
     rate() {
+      const reported = Number(this.index && this.index.rate);
+      if (reported > 0) return reported;
       if (this.rateSamples.length < 2) return 0;
       const [firstAt, firstProcessed] = this.rateSamples[0];
       const [lastAt, lastProcessed] = this.rateSamples[this.rateSamples.length - 1];
@@ -468,8 +522,11 @@
 
     resumeIfWaiting() {
       if (!this.resumeAtFront) return;
+      // Stopped partway and not being continued: its front is where it ends,
+      // so resuming there would only replay the last half-second over and over.
       const complete = Boolean(this.index && this.index.complete);
-      if (!readyToPlay(this.ahead(), bufferTarget(true), complete)) return;
+      if (this.settled() && !complete) return;
+      if (!readyToPlay(this.ahead(), this.needed(), this.settled())) return;
       this.resumeAtFront = false;
       this.video.play().catch(() => {});
     }
@@ -492,22 +549,26 @@
       if (this.closed) return;
       const processed = processedUntil(this.segments);
       const complete = Boolean(this.index && this.index.complete);
+      const settled = this.settled();
       const ahead = this.ahead();
       const rate = this.rate();
-      const target = bufferTarget(this.started);
-      // Waiting means the picture is stopped on purpose: either it has not
-      // started because too little is ready, or it caught the renderer up.
+      const needed = this.needed();
       const atFront = this.started && this.position() >= processed - EDGE_S;
-      const waiting = !complete && (atFront || !readyToPlay(ahead, target, complete));
+      // Waiting means the picture is stopped on purpose: it has not started
+      // because too little is ready, or it caught the renderer up. A render
+      // nobody is working on just ends where it got to.
+      const waiting = !settled && (!this.started || this.resumeAtFront || atFront);
       this.onState({
         processedS: processed,
         complete,
         started: this.started,
         waiting,
+        stopped: !complete && settled && atFront,
         aheadS: ahead,
         rate,
-        waitS: waiting ? estimateWait(ahead, target, rate) : null,
-        playS: waiting ? estimatePlayback(target, rate) : null,
+        remainingS: this.remaining(),
+        waitS: waiting && needed !== null ? estimateWait(ahead, needed, rate) : null,
+        playS: waiting && needed !== null ? estimatePlayback(needed, rate) : null,
       });
     }
   }
