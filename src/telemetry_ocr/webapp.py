@@ -102,6 +102,8 @@ def create_app(
 ) -> Any:
     try:
         from aiohttp import web
+
+        from .file_response import LargeFileResponse
     except ImportError as exc:
         raise DependencyError(
             "The web UI requires aiohttp; install the project with `pip install -e .[web]`."
@@ -559,8 +561,9 @@ def create_app(
     async def video_source(request: Any) -> Any:
         video = await asyncio.to_thread(find_video, request.query.get("video", ""))
         # FileResponse answers Range requests, which is what lets the page seek
-        # a 400 MB file without downloading it first.
-        return web.FileResponse(video.path, headers={"Cache-Control": "no-cache"})
+        # a 400 MB file without downloading it first. Large, because a long
+        # flight is over the 2 GiB Windows sends in one piece.
+        return LargeFileResponse(video.path, headers={"Cache-Control": "no-cache"})
 
     # -- renders ------------------------------------------------------------------
 
@@ -692,7 +695,7 @@ def create_app(
     async def render_video(request: Any) -> Any:
         """A render made before segments: one finished MP4, played as a file."""
         path = await asyncio.to_thread(legacy_video, request.query.get("render", ""))
-        return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+        return LargeFileResponse(path, headers={"Cache-Control": "no-cache"})
 
     async def render_stream(request: Any) -> Any:
         """A render's finished segments, which the page polls while the render grows."""

@@ -135,7 +135,8 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 │
 ├── ชั้นเว็บ ─────────────────────────────────────
 ├─ video_library.py    155    รายการวิดีโอในโฟลเดอร์ · อ่านเฟรมต้นฉบับทีละเฟรม
-├─ webapp.py          1,779    ★ ใหญ่ที่สุด: aiohttp app · 35 routes · middleware · state
+├─ webapp.py          1,782    ★ ใหญ่ที่สุด: aiohttp app · 35 routes · middleware · state
+├─ file_response.py     47    ส่งไฟล์เกิน 2 GB เป็นช่วง (Windows ส่งทีละไม่เกิน 2 GiB)
 ├─ public_share.py     207    เผยแพร่ภาพชั่วคราวด้วย token (ให้ LINE ดึงได้)
 ├─ quick_tunnel.py     262    คุม cloudflared quick tunnel
 ├─ line_client.py      750    จัดรูปแบบข้อความ · แปลง DMS · push เข้า LINE

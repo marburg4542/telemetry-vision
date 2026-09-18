@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.parse import urlencode
 
 HAS_WEB_DEPS = bool(
@@ -314,6 +315,16 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(part.status, 206)
         self.assertEqual(len(await part.read()), 100)
+        # A flight over the 2 GiB Windows sends in one call goes out in pieces;
+        # the pieces are made small here so the test file can be.
+        with mock.patch("telemetry_ocr.file_response.SENDFILE_PIECE", 1000):
+            for headers in ({}, {"Range": "bytes=0-"}, {"Range": "bytes=1500-"}):
+                with self.subTest(headers=headers):
+                    response = await self.client.get(
+                        "/api/videos/source?video=flight.avi", headers=headers
+                    )
+                    start = int(headers.get("Range", "bytes=0-")[6:-1])
+                    self.assertEqual(await response.read(), self.video.read_bytes()[start:])
         for video in ("missing.avi", "../videos/flight.avi", str(self.video)):
             with self.subTest(video=video):
                 response = await self.client.get(

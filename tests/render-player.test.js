@@ -101,21 +101,64 @@ test("only what is within the look-ahead is fetched", () => {
   assert.deepEqual(due, [0, 2, 4, 6, 8, 10], "fetched past the look-ahead");
 });
 
-test("what is far from the playhead is dropped, and only that", () => {
-  const segments = flattenSegments(INDEX);
-  assert.deepEqual(staleRanges(segments, 3), [], "a short render is kept whole");
-  assert.deepEqual(staleRanges(segments, 120, 60, 30), [[0, 60]], "an hour in, the start goes");
-  // After seeking back, what was fetched far ahead is dropped as well.
-  const long = flattenSegments({
+function evenSegments(count, seconds = 2) {
+  return flattenSegments({
     runs: [
       {
         run: "run-000",
         start_ms: 0,
-        segments: [{ file: "seg_00000.m4s", start_ms: 0, duration_ms: 600000 }],
+        segments: Array.from({ length: count }, (_, index) => ({
+          file: `seg_${String(index).padStart(5, "0")}.m4s`,
+          start_ms: index * seconds * 1000,
+          duration_ms: seconds * 1000,
+        })),
       },
     ],
   });
-  assert.deepEqual(staleRanges(long, 100, 60, 30), [[0, 40], [140, 660]]);
+}
+
+test("what is far from the playhead is dropped, and only that", () => {
+  assert.deepEqual(staleRanges(flattenSegments(INDEX), 3), [], "a short render is kept whole");
+  const long = evenSegments(300); // ten minutes
+  assert.deepEqual(staleRanges(long, 120, 60, 30), [[0, 60], [160, 660]]);
+  assert.deepEqual(staleRanges(long, 20, 60, 30), [[60, 660]], "nothing behind yet");
+});
+
+test("a segment is dropped whole or not at all", () => {
+  // Removing from the middle of a segment takes the rest of it with it, as
+  // everything after its keyframe depends on that keyframe. A cut at 37.3 would
+  // leave 36-38 empty yet counted as fetched: the stall this guards against.
+  const long = evenSegments(300);
+  const [behind, ahead] = staleRanges(long, 97.3, 60, 30);
+  assert.deepEqual(behind, [0, 36], "the segment the cut falls in is kept");
+  assert.deepEqual(ahead, [138, 660], "the one it falls in ahead is kept as well");
+  for (const [from, to] of [behind, ahead]) {
+    for (const item of long) {
+      const overlaps = item.end > from && item.start < to;
+      const inside = item.start >= from && item.end <= to;
+      assert.equal(overlaps, inside, `${item.key} would be cut in half`);
+    }
+  }
+});
+
+test("a fetched segment the buffer no longer holds is fetched again", () => {
+  const segments = evenSegments(10);
+  const loaded = new Set(segments.map((item) => item.key));
+  // 6-8 went missing; 12-14 is only partly there; frame timing puts the ends
+  // a hair off the segment boundaries, which does not count as missing.
+  const buffered = [[0, 5.98], [8.02, 12.9], [14, 20]];
+  assert.deepEqual(
+    player.missingSegments(segments, loaded, buffered).map((item) => item.start),
+    [6, 12],
+  );
+  loaded.delete("run-000/seg_00003.m4s");
+  assert.deepEqual(
+    player.missingSegments(segments, loaded, buffered).map((item) => item.start),
+    [12],
+    "only what was fetched can be missing",
+  );
+  for (const item of player.missingSegments(segments, loaded, buffered)) loaded.delete(item.key);
+  assert.equal(nextSegment(segments, 11, loaded).start, 12, "the hole is filled first");
 });
 
 test("a seek past what is rendered lands at the front", () => {

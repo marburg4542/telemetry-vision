@@ -80,12 +80,32 @@
   // What to drop. Media Source is given a budget of a couple of hundred
   // megabytes, and a render is 55 MB a minute, so what is far from the playhead
   // has to go or appending stops with QuotaExceededError partway through.
+  //
+  // Only whole segments go. Removing from the middle of one takes the rest of
+  // it too -- everything after the keyframe depends on it -- so a cut at 37.3
+  // empties 36-38 while the segment still counts as fetched, and a seek back
+  // there waits on a hole forever.
   function staleRanges(segments, seconds, behind = BEHIND_S, ahead = AHEAD_S) {
     const ranges = [];
     const last = processedUntil(segments);
-    if (seconds - behind > 0) ranges.push([0, seconds - behind]);
-    if (last > seconds + ahead + 10) ranges.push([seconds + ahead + 10, last + 60]);
+    const before = segments.filter((item) => item.end <= seconds - behind);
+    if (before.length) ranges.push([0, before[before.length - 1].end]);
+    const after = segments.find((item) => item.start >= seconds + ahead + 10);
+    if (after) ranges.push([after.start, last + 60]);
     return ranges;
+  }
+
+  // The fetched segments Media Source no longer holds in full: dropped by the
+  // browser under memory pressure, or cut by a removal that ran over. They are
+  // fetched again rather than waited on.
+  function missingSegments(segments, loaded, buffered, tolerance = 0.25) {
+    return segments.filter(
+      (item) =>
+        loaded.has(item.key)
+        && !buffered.some(
+          ([from, to]) => from <= item.start + tolerance && to >= item.end - tolerance,
+        ),
+    );
   }
 
   // A seek past what has been rendered lands at the front instead: the timeline
@@ -134,6 +154,7 @@
     segmentAt,
     nextSegment,
     staleRanges,
+    missingSegments,
     clampSeek,
   };
 
@@ -263,6 +284,7 @@
         while (!this.closed) {
           const seconds = this.position();
           await this.evict(seconds);
+          this.forgetMissing();
           const segment = nextSegment(this.segments, seconds, this.loaded);
           if (!segment) break;
           const appended = await this.appendSegment(segment);
@@ -355,9 +377,27 @@
           return;
         }
         await this.idle();
+        // Touched at all is gone: see staleRanges.
         for (const segment of this.segments) {
-          if (segment.start >= from && segment.end <= to) this.loaded.delete(segment.key);
+          if (segment.end > from && segment.start < to) this.loaded.delete(segment.key);
         }
+      }
+    }
+
+    // What the buffer really holds decides what is fetched, not what was
+    // appended once.
+    forgetMissing() {
+      if (!this.buffer || this.buffer.updating) return;
+      let buffered;
+      try {
+        buffered = [];
+        const ranges = this.buffer.buffered;
+        for (let i = 0; i < ranges.length; i += 1) buffered.push([ranges.start(i), ranges.end(i)]);
+      } catch (error) {
+        return; // the source buffer was removed from a source being closed
+      }
+      for (const segment of missingSegments(this.segments, this.loaded, buffered)) {
+        this.loaded.delete(segment.key);
       }
     }
 
