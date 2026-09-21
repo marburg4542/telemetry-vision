@@ -47,10 +47,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 _LOG = logging.getLogger(__name__)
 
 TRACKS_FILE = "tracks.jsonl"
 META_FILE = "meta.json"
+# The tracker settings one render ran with, written beside its output.
+TRACKER_FILE = "tracker.yaml"
+# A detection this much above the confidence asked for is needed to start a new
+# number. Measured on two flights: the numbers a vehicle was given twice fell
+# from 7 to 3, and from 2 to 0, and nothing that stayed on screen longer than a
+# fifth of a second went unnumbered.
+NEW_TRACK_MARGIN = 0.15
 PLAYLIST_FILE = "index.m3u8"
 INIT_FILE = "init.mp4"
 # The layout of renders made before segments: one MP4, playable once finished.
@@ -70,8 +79,10 @@ _TRACK_ID = re.compile(rb'"track_id": (\d+)')
 _ACTIVE = frozenset({"loading", "running", "cancelling"})
 
 # Offered in the page. The trained sizes of the checkpoints in use, plus 1280 for
-# anyone who trains larger; anything else is a typo rather than a choice.
-IMAGE_SIZES = (416, 640, 960, 1280)
+# anyone who trains larger; anything else is a typo rather than a choice. 1024 is
+# the size the current checkpoints were trained at: it finds more cars than 640
+# on this footage, and fewer motorcycles, so it is a choice rather than a default.
+IMAGE_SIZES = (416, 640, 960, 1024, 1280)
 STRIDES = (1, 2, 3)
 
 
@@ -152,7 +163,7 @@ def is_current(meta: dict[str, Any], video_path: Path | None, model_path: Path |
     return meta.get("status") == "complete" and made_from(meta, video_path, model_path)
 
 
-def tracker_config() -> str:
+def tracker_config(directory: Path | None = None, confidence: float | None = None) -> str:
     """The tracker settings a render uses: this project's, or Ultralytics' own.
 
     configs/botsort.yaml turns ReID on, which is what keeps a vehicle's number
@@ -160,9 +171,27 @@ def tracker_config() -> str:
     where the motion model expected the vehicle to be, and a long occlusion ends
     as a new number. Falling back to the bare name keeps a checkout without that
     file rendering rather than failing.
+
+    Given a render's folder and confidence, the two thresholds that decide what
+    the tracker trusts follow that confidence -- the first matching stage takes
+    what will be drawn, a new number needs NEW_TRACK_MARGIN more -- and the
+    result is written into the folder, so a render says what it was made with.
     """
     candidate = Path(__file__).resolve().parents[2] / "configs" / "botsort.yaml"
-    return str(candidate) if candidate.is_file() else "botsort.yaml"
+    if not candidate.is_file():
+        return "botsort.yaml"
+    if directory is None or confidence is None:
+        return str(candidate)
+    settings = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+    settings["track_high_thresh"] = round(confidence, 3)
+    settings["new_track_thresh"] = round(min(0.95, confidence + NEW_TRACK_MARGIN), 3)
+    path = directory / TRACKER_FILE
+    path.write_text(
+        f"# configs/botsort.yaml as this render ran it, at confidence {confidence:.2f}.\n"
+        + yaml.safe_dump(settings, sort_keys=False),
+        encoding="utf-8",
+    )
+    return str(path)
 
 
 def read_playlist(path: Path) -> list[tuple[str, float]]:
@@ -436,7 +465,7 @@ def run_render(
         if start_frame:
             capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         index = start_frame - 1
-        tracker = tracker_config()
+        tracker = tracker_config(out, options.confidence)
         encoder = encoder_factory(run_dir, out_width, out_height, out_fps)
         publish(
             {"kind": "started", "start_frame": start_frame, "run": run_dir.name, "total": total}
@@ -623,7 +652,12 @@ def _clear_render(directory: Path) -> None:
         if child.is_dir():
             if _RUN_DIR.fullmatch(child.name):
                 shutil.rmtree(child, ignore_errors=True)
-        elif child.name in {TRACKS_FILE, META_FILE, LEGACY_VIDEO_FILE} or child.suffix in {
+        elif child.name in {
+            TRACKS_FILE,
+            META_FILE,
+            TRACKER_FILE,
+            LEGACY_VIDEO_FILE,
+        } or child.suffix in {
             ".part",
             ".tmp",
         }:

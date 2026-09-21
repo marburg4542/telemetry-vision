@@ -147,6 +147,9 @@
                   <option value="416">416 px</option>
                   <option value="640" selected>640 px</option>
                   <option value="960">960 px</option>
+                  <!-- The size the checkpoints were trained at: more cars found
+                       than at 640 on this footage, fewer motorcycles. -->
+                  <option value="1024">1024 px</option>
                   <option value="1280">1280 px</option>
                 </select>
               </label>
@@ -154,10 +157,11 @@
                 <span>ประมวลผล</span>
                 <select id="renderStride">
                   <option value="1">ทุกเฟรม</option>
-                  <!-- Default: at every second frame the renderer keeps up with
-                       the video, so watching it is near enough live. -->
-                  <option value="2" selected>ทุก 2 เฟรม</option>
-                  <option value="3">ทุก 3 เฟรม</option>
+                  <option value="2">ทุก 2 เฟรม</option>
+                  <!-- Default: measured at 1.8x real time at 640 px, so watching
+                       while it renders is near enough live, and the tracker gave
+                       a vehicle a second number least often at this stride. -->
+                  <option value="3" selected>ทุก 3 เฟรม</option>
                 </select>
               </label>
               <button class="primary-button" id="renderButton" type="button" disabled>

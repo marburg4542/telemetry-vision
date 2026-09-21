@@ -11,6 +11,8 @@ import time
 import unittest
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -27,6 +29,7 @@ from telemetry_ocr.render_job import (
     LEGACY_VIDEO_FILE,
     META_FILE,
     PLAYLIST_FILE,
+    TRACKER_FILE,
     TRACKS_FILE,
     RenderBusy,
     RenderManager,
@@ -39,6 +42,7 @@ from telemetry_ocr.render_job import (
     run_render,
     settle_render,
     stream_index,
+    tracker_config,
 )
 from telemetry_ocr.video_library import SourceFrames, VideoLibrary
 
@@ -143,12 +147,28 @@ class RunRenderTests(unittest.TestCase):
         # appearance matching on, which is the whole reason it exists.
         detector = FakeDetector()
         self.render(detector=detector)
-        self.assertTrue(detector.tracker.endswith("botsort.yaml"), detector.tracker)
         settings = Path(detector.tracker)
         self.assertTrue(settings.is_file(), "the render asked for a file that is not there")
-        text = settings.read_text(encoding="utf-8")
-        self.assertIn("with_reid: True", text)
-        self.assertIn("model: auto", text)
+        # Written into the render's own folder: what it was made with stays with it.
+        self.assertEqual(settings.name, TRACKER_FILE)
+        self.assertEqual(settings.parent, self.out)
+        values = yaml.safe_load(settings.read_text(encoding="utf-8"))
+        self.assertIs(values["with_reid"], True)
+        self.assertEqual(values["model"], "auto")
+        # The trusted thresholds follow the confidence asked for: the first stage
+        # takes what is drawn, a new number needs a margin more.
+        self.assertAlmostEqual(values["track_high_thresh"], 0.45)
+        self.assertAlmostEqual(values["new_track_thresh"], 0.6)
+        self.assertAlmostEqual(values["track_low_thresh"], 0.1)
+
+    def test_the_tracker_thresholds_follow_the_confidence(self) -> None:
+        for confidence, new_track in ((0.3, 0.45), (0.9, 0.95)):
+            with self.subTest(confidence=confidence):
+                path = Path(tracker_config(self.dir, confidence))
+                values = yaml.safe_load(path.read_text(encoding="utf-8"))
+                self.assertAlmostEqual(values["track_high_thresh"], confidence)
+                self.assertAlmostEqual(values["new_track_thresh"], new_track)
+        self.assertTrue(tracker_config().endswith("botsort.yaml"), "the shared file itself")
 
     def test_a_stride_keeps_every_nth_frame_and_halves_the_rate(self) -> None:
         self.render(RenderSettings(stride=2))

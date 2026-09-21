@@ -389,9 +389,12 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 | `status(id)` / `ready_file(id)` / `finished(id)` | ความคืบหน้าจาก `-progress pipe:1` · path ของไฟล์ที่เสร็จ · ลบหลังส่งครบ |
 | `shutdown()` | ยกเลิกและ terminate ลูกตอนปิด server |
 
-### `tracker_config()`
-คืน path ของ [configs/botsort.yaml](configs/botsort.yaml) ถ้ามี — ค่าเริ่มต้นของ Ultralytics
-บวก ReID จาก feature ของ detector เอง ซึ่งเป็นสิ่งที่ทำให้วัตถุที่ถูกบังกลับมาพร้อมเลขเดิม
+### `tracker_config(directory, confidence)`
+อ่าน [configs/botsort.yaml](configs/botsort.yaml) แล้วตั้ง `track_high_thresh` = confidence และ
+`new_track_thresh` = confidence + 0.15 (`NEW_TRACK_MARGIN`) เขียนเป็น `tracker.yaml` ในโฟลเดอร์ของ render
+แล้วคืน path นั้น (ไม่ส่งโฟลเดอร์ = คืนไฟล์กลาง) ส่วน `UltralyticsDetector.track()` ส่งกรอบตั้งแต่
+`TRACKER_FLOOR` (0.1) ให้ tracker เพื่อเปิดขั้นจับคู่รอบสอง แต่คืนเฉพาะกรอบที่ ≥ confidence และย่อภาพของ
+GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที่ tracker ถูกสร้าง ตัวเลขที่ใช้เลือกค่าอยู่ใน README
 
 ### `choose_encoder(ffmpeg)` · `FfmpegEncoder`
 ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม จากนั้น `FfmpegEncoder` รัน

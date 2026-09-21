@@ -1,34 +1,52 @@
 # BoT-SORT settings for the renders this project makes.
 #
-# Ultralytics' own defaults with one change: ReID is on, using the detector's
-# own backbone features ("auto"), so a vehicle that goes behind a tree is
-# matched back to its own number by how it looks and not only by where the
-# motion model expected it to be. It costs no second model: the features are
-# already computed by the detection pass.
+# Started from Ultralytics' defaults and changed where this project's footage
+# was measured to argue otherwise. The measurement: 40 s of the busiest stretch
+# of two flights (2026-06-02 at 1:07, 17-17-15-0 at 23:47), 640 px, counting a
+# vehicle "given a second number" when a new track of its class starts within
+# 3 s and 1.5 box-widths of where one vanished, and a "merge" when one number
+# jumps more than two box-widths between frames. Every change below lowered the
+# first -- 7 to 3 and 2 to 0 at every 2nd frame, 4 to 2 and 0 to 0 at every
+# 3rd -- and none produced a single merge.
 #
-# Everything else is left at the Ultralytics default deliberately -- these
-# thresholds were tuned against MOT benchmarks, and there is nothing in this
-# project's footage measured well enough to argue with them yet.
+# A render writes its own copy of this file into its folder, with the two
+# thresholds marked "per render" set from the confidence it was asked for.
 
 tracker_type: botsort
 
-track_high_thresh: 0.25 # first-stage match threshold
-track_low_thresh: 0.1 # second stage, for the detections the first pass left
-new_track_thresh: 0.25 # a detection above this with no match starts a track
-# Frames a lost track is kept for. At "every 2nd frame" this is 30 processed
-# frames, which is two seconds of a 30 fps video.
-track_buffer: 30
-match_thresh: 0.8 # association cost threshold
+# Per render: the confidence asked for. Detections at or above it take part in
+# the first matching stage and are what gets drawn.
+track_high_thresh: 0.45
+# The second stage: detections between this and the one above are matched only
+# to tracks that already exist. The detector is run down to this score for it
+# (detection.TRACKER_FLOOR), and what it matches is never drawn -- it is what
+# keeps a motorcycle whose score flickers around the threshold on its number.
+track_low_thresh: 0.1
+# Per render: the confidence asked for + 0.15. A detection has to be this sure
+# to start a new number. At the default 0.25 every flicker of a small object
+# started one; what this drops are tracks under a fifth of a second long.
+new_track_thresh: 0.6
+# Processed frames a lost track is kept for: 5 s at every 2nd frame, 7.5 s at
+# every 3rd. Lengthening it changed nothing measured -- numbers were lost to
+# failed matches, not to long absences -- but it costs nothing and covers a
+# vehicle behind a tree for longer than the measured stretches had.
+track_buffer: 75
+# Association cost threshold; higher accepts a match that is further off. 0.8
+# failed to re-take small boxes the camera had moved; 0.9 did, with no merges.
+match_thresh: 0.9
 fuse_score: True # weigh detection confidence into the match cost
 
 # The camera pans constantly on this footage, so the tracker has to know how
 # much of the movement between two frames was the camera's own. sparseOptFlow
 # tracks corner features and fits an affine transform; it is the cheapest of
-# the methods offered and the only one that keeps up at 1080p.
+# the methods offered and the only one that keeps up at 1080p. Turned off, the
+# numbers given twice doubled. The frame it looks at is shrunk to a quarter
+# (detection.GMC_DOWNSCALE), which is not a setting this file can carry.
 gmc_method: sparseOptFlow
 
-# ReID: appearance matching on top of motion.
+# ReID: appearance matching on top of motion, using the detector's own backbone
+# features ("auto"), so it costs no second model -- about 5 ms a frame.
 with_reid: True
-model: auto # the detector's backbone features, not a second network
+model: auto
 proximity_thresh: 0.5 # boxes must overlap at least this much to be compared
 appearance_thresh: 0.8 # and look at least this alike to be joined

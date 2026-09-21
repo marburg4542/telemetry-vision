@@ -8,6 +8,21 @@ from typing import Any, Protocol
 
 from .errors import DependencyError
 
+# The tracker is handed detections down to this score, while only those at the
+# confidence asked for come back to be drawn. BoT-SORT's second association
+# stage exists for the ones in between: it matches them to tracks it already
+# has, so a motorcycle whose score flickers around the threshold keeps its
+# number instead of losing it and coming back as a new one. Cut at the
+# confidence asked for, as it used to be, that stage never saw anything.
+TRACKER_FLOOR = 0.1
+
+# How much the tracker's camera-motion estimate (GMC) shrinks each frame before
+# following corner features across it. Ultralytics halves it; a quarter was
+# measured on this project's flights at 34 -> 20 ms a frame for the tracker,
+# with the same numbers kept and tracks that lasted longer. It is not a tracker
+# YAML setting, so it is set on the tracker once it exists.
+GMC_DOWNSCALE = 4
+
 
 @dataclass(frozen=True, slots=True)
 class Detection:
@@ -162,7 +177,7 @@ class UltralyticsDetector:
     ) -> list[Detection]:
         results = self.model.track(
             source=frame,
-            conf=confidence,
+            conf=min(confidence, TRACKER_FLOOR),
             iou=iou,
             imgsz=image_size,
             max_det=300,
@@ -178,7 +193,24 @@ class UltralyticsDetector:
             # emulates half precision, so FP32 is the fast path, not a stopgap.
             verbose=False,
         )
-        return self._parse_results(results)
+        self._tune_trackers()
+        return [
+            detection
+            for detection in self._parse_results(results)
+            if detection.confidence >= confidence
+        ]
+
+    def _tune_trackers(self) -> None:
+        # The trackers are made on the first call, so this lands after one frame
+        # at the default. reset_params() starts the next frame afresh: GMC keeps
+        # the previous frame's pyramid, and one at the old size fails to match.
+        predictor = getattr(self.model, "predictor", None)
+        for tracker in getattr(predictor, "trackers", ()) or ():
+            gmc = getattr(tracker, "gmc", None)
+            if gmc is None or getattr(gmc, "downscale", GMC_DOWNSCALE) == GMC_DOWNSCALE:
+                continue
+            gmc.downscale = GMC_DOWNSCALE
+            gmc.reset_params()
 
     def reset_tracking(self) -> None:
         predictor = getattr(self.model, "predictor", None)
