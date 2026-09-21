@@ -138,6 +138,35 @@ class CaptureShotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(third["records"][0]["value"], 128)
         self.assertTrue(third["records"][0]["confirmed"])
 
+    async def test_a_capture_is_marked_for_training_and_the_mark_taken_back(self) -> None:
+        from urllib.parse import urlencode
+
+        self.assertEqual((await self._shot()).status, 200)
+
+        async def mark(kind: str, index: int = 0) -> Any:
+            params = {
+                "session": "flight01", "frame_index": index, "kind": kind,
+                "video": "flight.avi", "render": "flight__best50",
+            }
+            return await self.client.post(f"/api/capture/feedback?{urlencode(params)}")
+
+        async def listed() -> str:
+            body = await (await self.client.get("/api/capture/shots?session=flight01")).json()
+            return body["shots"][0]["feedback"]
+
+        self.assertEqual(await listed(), "none")
+        self.assertEqual((await mark("wrong")).status, 200)
+        self.assertEqual(await listed(), "wrong")
+        # Kept with the video and render, which the export needs to find the frame.
+        lines = (self.root / "sessions" / "flight01" / "feedback.jsonl").read_text("utf-8")
+        record = json.loads(lines.splitlines()[-1])
+        self.assertEqual((record["video"], record["render"]), ("flight.avi", "flight__best50"))
+        self.assertIn("source_time_ms", record)
+        self.assertEqual((await mark("none")).status, 200)
+        self.assertEqual(await listed(), "none")
+        self.assertEqual((await mark("maybe")).status, 400)
+        self.assertEqual((await mark("wrong", index=99)).status, 404)
+
     async def test_shots_append_rather_than_overwrite(self) -> None:
         first = await (await self._shot()).json()
         second = await (await self._shot()).json()

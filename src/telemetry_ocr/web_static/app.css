@@ -487,6 +487,27 @@ summary:focus-visible, label:has(input:focus-visible) {
 .auto-line-note { color: var(--muted); line-height: 1.5; }
 .auto-line-status { font-size: 12px; color: var(--blue); }
 .auto-line-status.is-error { color: var(--danger); }
+.shot-feedback {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.shot-feedback .link-button.is-on { color: var(--danger); text-decoration: underline; }
+/* A red corner: marked for the next training set. */
+.shot-thumb.is-flagged::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-top: 14px solid var(--danger);
+  border-left: 14px solid transparent;
+  border-top-right-radius: inherit;
+  pointer-events: none;
+}
 .shot-thumb-auto {
   /* Bottom right: the tick, the stage badge and the number hold the others. */
   position: absolute;

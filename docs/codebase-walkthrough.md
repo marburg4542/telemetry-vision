@@ -125,6 +125,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 ├─ render_job.py      1,137    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · เขียนกรอบลง tracks.jsonl · ทำต่อได้
 ├─ render_export.py     463    วาดกรอบลงต้นฉบับทุกเฟรมเป็น MP4 ไฟล์เดียว (เต็ม / 720p) ไว้ส่งต่อ
 ├─ auto_capture.py      372    เลือกวัตถุจาก tracks ระหว่างประมวลผล → Capture/ส่งไลน์อัตโนมัติ
+├─ training_export.py   385    เลือกเฟรมจาก render ไปทำ label เทรนโมเดล (YOLOv8 dataset)
 ├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
 ├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
 ├─ detect_sidecar.py    162    ตัวช่วยฝั่ง CLI สำหรับรัน detection คู่กับ run
@@ -409,6 +410,18 @@ GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที�
 ใน `webapp.py`: `take_capture()` และ `deliver()` แยกออกมาจาก handler ของปุ่ม Capture/ส่ง ให้ทั้งสองทางใช้
 ร่วมกัน `start_render` รับ `auto` แล้ว `start_auto()` สร้าง `AutoLineRun` (pipeline OCR ของตัวเอง) ·
 `GET /api/renders/auto` คืนสถานะ ภาพอัตโนมัติมี `origin: "auto"` และ `note` ใน `frames.jsonl`
+
+### `training_export.py` — เลือกเฟรมเทรนและส่งออก label ร่าง (`telemetry-ocr training-frames`)
+
+| ส่วน | ทำอะไร |
+|---|---|
+| `load_flights(renders, videos)` | render ที่ใหม่ที่สุดของแต่ละวิดีโอ พร้อมกรอบทุกเฟรมที่ประมวลผล |
+| `load_feedback(sessions)` | ภาพที่ผู้ใช้แจ้ง (`feedback.jsonl` ของแต่ละ session ใช้ค่าล่าสุดต่อภาพ) |
+| `select(...)` | แจ้งไว้ทั้งหมด → มอเตอร์ไซค์ 35% → รถได้เลขใหม่ 20% → กระจายทั่วเที่ยวบิน · ห่างกัน ≥ `spacing_s` · วิดีโอ holdout → test |
+| `export(...)` | อ่านวิดีโอไปข้างหน้า เขียน `train|test/images|labels`, `data.yaml`, `manifest.csv` · label ร่างวางด้วย `boxes_at` |
+
+`scripts/compare_models.py` เทียบ checkpoint บนชุดทดสอบ (`YOLO.val`) และบนวิดีโอจริงด้วย
+`UltralyticsDetector` + `tracker_config` ของแอป
 
 ### `choose_encoder(ffmpeg)`
 ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม ใช้ตอนบันทึก MP4 เท่านั้น

@@ -206,6 +206,41 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    frames = commands.add_parser(
+        "training-frames",
+        help=(
+            "Choose frames from the renders to label for training the detector, "
+            "with draft labels, as a YOLOv8 dataset Roboflow imports"
+        ),
+    )
+    frames.add_argument("--output", required=True, type=Path)
+    frames.add_argument("--videos", type=Path, default=Path("videos"))
+    frames.add_argument("--renders", type=Path, default=Path("output") / "renders")
+    frames.add_argument("--sessions", type=Path, default=Path("output") / "sessions")
+    frames.add_argument("--count", type=int, default=600, help="Frames for the train split")
+    frames.add_argument(
+        "--test-count", type=int, default=120, help="Frames for the test split"
+    )
+    frames.add_argument(
+        "--holdout",
+        action="append",
+        default=[],
+        help=(
+            "A video id whose frames all go to the test split. Repeat for more. "
+            "Keeping whole flights out is what makes the test score honest"
+        ),
+    )
+    frames.add_argument(
+        "--spacing", type=float, default=2.0, help="Least seconds between two frames of a video"
+    )
+    frames.add_argument(
+        "--names",
+        help=(
+            "Class names in id order, comma separated, e.g. car,motorcycle,truck. "
+            "Default: read from the renders' boxes"
+        ),
+    )
+
     preview = commands.add_parser(
         "preview-rois", help="Save one video frame annotated with configured ROI boxes"
     )
@@ -253,6 +288,40 @@ def main(argv: list[str] | None = None) -> int:
                     ensure_ascii=False,
                 )
             )
+            return 0
+
+        if args.command == "training-frames":
+            from .training_export import class_names, export, load_feedback, load_flights, select
+            from .video_library import VideoLibrary
+
+            videos = {video.id: video.path for video in VideoLibrary(args.videos).videos()}
+            unknown = [video for video in args.holdout if video not in videos]
+            if unknown:
+                raise ValueError(f"--holdout names videos that are not in {args.videos}: {unknown}")
+            flights = load_flights(args.renders, videos)
+            if not flights:
+                raise ValueError(f"No renders of the videos in {args.videos} under {args.renders}")
+            unrendered = sorted(set(videos) - {flight.video for flight in flights})
+            picks = select(
+                flights,
+                load_feedback(args.sessions),
+                count=args.count,
+                holdout=set(args.holdout),
+                test_count=args.test_count if args.holdout else 0,
+                spacing_s=args.spacing,
+            )
+            names = (
+                [name.strip() for name in args.names.split(",") if name.strip()]
+                if args.names
+                else class_names(flights)
+            )
+            exported = export(picks, flights, args.output, names)
+            print(json.dumps(exported, indent=2, ensure_ascii=False))
+            if unrendered:
+                print(f"Not rendered, so not in the set: {', '.join(unrendered)}")
+            if not args.holdout:
+                print("No --holdout: everything is in train. Name whole flights to test on.")
+            print(f"Import {args.output} into Roboflow as a YOLOv8 dataset; correct the drafts.")
             return 0
 
         from .ocr import create_recognizer

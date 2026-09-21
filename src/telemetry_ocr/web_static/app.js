@@ -76,6 +76,7 @@ const ui = {
   shotImage: $("shotImage"),
   shotAnnotated: $("shotAnnotated"),
   shotDetections: $("shotDetections"),
+  shotFeedback: $("shotFeedback"),
   downloadJsonButton: $("downloadJsonButton"),
   downloadCsvButton: $("downloadCsvButton"),
   clearLogButton: $("clearLogButton"),
@@ -1988,6 +1989,7 @@ function buildShotThumb(shot) {
   card.setAttribute("role", "option");
   card.classList.toggle("is-selected", shot.frame_index === state.selectedShot);
   card.classList.toggle("is-chosen", state.chosen.has(shot.frame_index));
+  card.classList.toggle("is-flagged", Boolean(shot.feedback) && shot.feedback !== "none");
 
   // The picture is a button: pressing it shows that frame enlarged.
   const open = document.createElement("button");
@@ -2100,8 +2102,44 @@ function selectShot(frameIndex) {
   ui.shotImage.src = shotImageUrl(shot, wantsBoxes);
   if (!ui.shotOverlay.hidden) openShotOverlay();
   ui.shotDetections.textContent = describeShotDetections(shot.detections);
+  showShotFeedback(shot);
   renderShotValues(shot);
   updateLineAvailability();
+}
+
+function showShotFeedback(shot) {
+  for (const button of ui.shotFeedback.querySelectorAll("button")) {
+    const on = shot.feedback === button.dataset.kind;
+    button.classList.toggle("is-on", on);
+    button.setAttribute("aria-pressed", String(on));
+  }
+}
+
+// Pressed again, a mark is taken back.
+async function markShot(kind) {
+  const shot = state.shots.find((item) => item.frame_index === state.selectedShot);
+  if (!shot || !state.captureSession) return;
+  const next = shot.feedback === kind ? "none" : kind;
+  try {
+    const params = new URLSearchParams({
+      session: state.captureSession,
+      frame_index: String(shot.frame_index),
+      kind: next,
+      video: state.video?.id || "",
+      render: state.activeRender?.render_id || "",
+    });
+    await jsonFetch(`/api/capture/feedback?${params}`, { method: "POST" });
+    shot.feedback = next;
+    showShotFeedback(shot);
+    const card = ui.shotStrip.querySelector(`[data-frame-index="${shot.frame_index}"]`);
+    if (card) card.classList.toggle("is-flagged", next !== "none");
+    setCaptureStatus(next === "none"
+      ? `ยกเลิกการแจ้งภาพ #${shot.frame_index}`
+      : `บันทึกภาพ #${shot.frame_index} ไว้ใช้เทรนโมเดล (${
+        next === "wrong" ? "โมเดลตรวจผิด" : "โมเดลพลาดวัตถุ"})`);
+  } catch (error) {
+    setCaptureStatus(`บันทึกไม่สำเร็จ: ${error.message}`, true);
+  }
 }
 
 function describeShotDetections(detections) {
@@ -2385,6 +2423,9 @@ for (const control of [ui.renderConfidence, ui.renderImageSize, ui.renderStride]
 ui.aiToggle.addEventListener("click", () => setAiCollapsed(!state.aiCollapsed));
 ui.renderButton.addEventListener("click", onRenderButton);
 ui.renderCancelButton.addEventListener("click", cancelRender);
+for (const button of ui.shotFeedback.querySelectorAll("button")) {
+  button.addEventListener("click", () => markShot(button.dataset.kind));
+}
 ui.autoEnabled.addEventListener("change", describeAutoChoice);
 ui.autoClasses.addEventListener("change", describeAutoChoice);
 for (const radio of document.querySelectorAll('input[name="autoMode"]')) {

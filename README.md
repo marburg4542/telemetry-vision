@@ -849,6 +849,37 @@ Ultralytics ตามที่วัดบนวิดีโอของโป�
 วัดจริงบน `2026-06-02T15-27-28-591.mp4` (10:34, `14th_opt`, 640 px, ทุก 3 เฟรม, motorcycle ≥ 0.50,
 car ≥ 0.70): เก็บ 24 ภาพ (รถยนต์ 21 · มอเตอร์ไซค์ 3) ข้าม 3 ครั้งเพราะเป็นคันเดิม
 
+### เตรียมข้อมูลเทรนโมเดลจากเที่ยวบินของเรา
+
+โมเดลเทรนจาก VisDrone และชุดข้อมูลบน Roboflow ที่ไม่ใช่กล้องตัวนี้ บนฟุตเทจของโปรเจกต์จึงพลาด
+มอเตอร์ไซค์ที่จอดเรียงกันเกือบทั้งแถว บางครั้งตรวจพุ่มไม้เป็นมอเตอร์ไซค์ และตรวจจับวัตถุเล็กวูบวาบจนเลข
+Track ID เปลี่ยน ทางแก้คือเทรนเพิ่มด้วยภาพจากกล้องตัวนี้:
+
+1. **แจ้งภาพที่โมเดลผิด** — ในภาพที่ Capture ไว้ กด **โมเดลตรวจผิด** หรือ **โมเดลพลาดวัตถุ** ใต้ภาพที่เลือก
+   (กดซ้ำเพื่อยกเลิก) บันทึกใน `feedback.jsonl` ของ session พร้อมวิดีโอ render และเวลา ภาพย่อมีมุมแดง
+2. **เลือกเฟรมและส่งออก label ร่าง** — `telemetry-ocr training-frames` เลือกจาก render ที่ใหม่ที่สุดของแต่ละ
+   วิดีโอ: ภาพที่แจ้งไว้ทั้งหมด → เฟรมที่มีมอเตอร์ไซค์ (35%) → เฟรมที่รถได้เลขใหม่ใกล้จุดที่เลขเก่าหาย (20%) →
+   เฟรมกระจายทั่วทุกเที่ยวบินรวมเฟรมว่าง (ที่เหลือ) ห่างกันอย่างน้อย 2 วินาที อ่านวิดีโอไปข้างหน้าทีละเฟรม
+   (ไม่ seek เพราะ OpenCV อาจคลาด 1 เฟรม) แล้วเขียนเป็น dataset แบบ YOLOv8 (`train/`, `test/`, `data.yaml`,
+   `manifest.csv`) พร้อม label ร่างจาก `tracks.jsonl` ของ render ระหว่างเฟรมที่ประมวลผลใช้กติกาวางกรอบ
+   เดียวกับหน้าเว็บ วิดีโอที่ระบุ `--holdout` ไปอยู่ใน test ทั้งไฟล์ วัดจริง: 72 เฟรมจาก 8 วิดีโอใช้ราว 6 นาที
+
+   ```powershell
+   .\.venv-cuda\Scripts\telemetry-ocr.exe training-frames --output output\training\v7 `
+       --count 600 --test-count 120 --holdout 17-42-49-0.mp4 --holdout 2026-06-02T15-27-28-591.mp4
+   ```
+
+3. **แก้ label บน Roboflow** — นำเข้าโฟลเดอร์นั้นเป็น dataset แบบ YOLOv8 (split ตามโฟลเดอร์) แก้กรอบที่ผิด
+   เพิ่มกรอบที่ขาด แล้วสร้าง dataset เวอร์ชันใหม่
+4. **เทรนบน Colab** ด้วยสคริปต์ใน `notebooks/`
+5. **เทียบกับโมเดลเดิม** — `scripts/compare_models.py` วัดบนชุดทดสอบ (mAP, precision/recall ต่อประเภท)
+   และบนวิดีโอจริงด้วย detector และ tracker ของแอป (จำนวนเลข เลขเปลี่ยนของคันเดิม กรอบต่อเฟรม ความเร็ว):
+
+   ```powershell
+   .\.venv-cuda\Scripts\python.exe scripts\compare_models.py --models models\weights\14th_opt.pt new.pt `
+       --data output\training\v7\data.yaml --video videos\2026-06-02T15-27-28-591.mp4 --start 67 --length 40
+   ```
+
 ### จัดการโมเดลจากหน้าเว็บ
 
 กด **จัดการโมเดล** ข้างรายการโมเดล:
@@ -888,6 +919,8 @@ request ใส่ไฟล์ในโฟลเดอร์เหล่านั
   `409` ถ้ามีไฟล์กำลังทำอยู่) · `GET /api/renders/export?id=` — `status` (running/ready/error), `percent`,
   `filename`, `size_bytes` · `GET /api/renders/export/file?id=` — ดาวน์โหลด (`Content-Disposition: attachment`)
   แล้วลบไฟล์ทิ้ง ทำสองขั้นเพราะไฟล์เล็กของวิดีโอยาวใช้เวลาเกินกว่า request ที่รอเงียบ ๆ จะอยู่รอด
+- `POST /api/capture/feedback?session&frame_index&kind=wrong|missed|none&video&render` — แจ้งว่าภาพนี้
+  โมเดลตรวจผิดหรือพลาดวัตถุ เพื่อใช้เลือกเฟรมเทรน (`/api/capture/shots` คืน `feedback` ของแต่ละภาพ)
 - `POST /api/capture/shot?session&session_id&video&source_time_ms&render` — ไม่มี body เพราะ server
   อ่านเฟรมเอง
 

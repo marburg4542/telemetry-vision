@@ -1094,6 +1094,7 @@ def create_app(
             return web.json_response({"session": name, "shots": []})
 
         def collect() -> list[dict[str, Any]]:
+            marks = _feedback_marks(session.directory)
             shots = []
             for shot in session.all_shots():
                 data = asdict(shot)
@@ -1114,6 +1115,7 @@ def create_app(
                 # exists is not yet a shot that has been through best.pt, and
                 # "detected nothing" must not look the same as "never ran".
                 data["stage"] = _shot_stage(shot)
+                data["feedback"] = marks.get(shot.frame_index, "none")
                 shots.append(data)
             shots.reverse()
             return shots
@@ -1121,6 +1123,48 @@ def create_app(
         return web.json_response(
             {"session": name, "shots": await asyncio.to_thread(collect)}
         )
+
+    async def capture_feedback(request: Any) -> Any:
+        """Mark a capture as one the model got wrong, or missed something in.
+
+        Marked frames are the first the training export takes: they are the
+        mistakes seen in real use. The video and the render are kept with the
+        mark, because the session only knows the file's name and time.
+        """
+        from .training_export import FEEDBACK_FILE
+
+        name = (request.query.get("session") or "").strip()
+        if not name:
+            raise ValueError("session is required")
+        session = open_session(name)
+        if session is None:
+            raise web.HTTPNotFound(
+                text='{"error":"No such capture session"}', content_type="application/json"
+            )
+        index = _non_negative_int(request.query.get("frame_index", ""), "frame_index")
+        kind = (request.query.get("kind") or "").strip()
+        if kind not in {"wrong", "missed", "none"}:
+            raise ValueError("kind must be wrong, missed or none")
+        shot = await asyncio.to_thread(session.shot_at, index)
+        if shot is None:
+            raise web.HTTPNotFound(
+                text='{"error":"No such frame"}', content_type="application/json"
+            )
+        record = {
+            "shot": index,
+            "kind": kind,
+            "video": (request.query.get("video") or "").strip()[:300],
+            "render": (request.query.get("render") or "").strip()[:200],
+            "source_time_ms": shot.source_time_ms,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
+        def append() -> None:
+            with (session.directory / FEEDBACK_FILE).open("a", encoding="utf-8") as marks:
+                marks.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        await asyncio.to_thread(append)
+        return web.json_response({"session": name, "frame_index": index, "feedback": kind})
 
     async def capture_discard(request: Any) -> Any:
         """Throw away one capture.
@@ -1471,6 +1515,7 @@ def create_app(
     app.router.add_get("/api/capture/shots", capture_shots)
     app.router.add_get("/api/capture/image", capture_image)
     app.router.add_delete("/api/capture/shot", capture_discard)
+    app.router.add_post("/api/capture/feedback", capture_feedback)
     app.router.add_get("/api/line/status", line_status)
     app.router.add_post("/api/line/send", line_send)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
@@ -1761,6 +1806,23 @@ def _shot_stage(shot: Any) -> str:
 # 1 MB ceiling that a busy frame cannot creep back over it.
 _LINE_PREVIEW_WIDTH = 1024
 _LINE_PREVIEW_QUALITY = 80
+
+
+def _feedback_marks(directory: Path) -> dict[int, str]:
+    """The latest mark on each shot of a session: wrong, missed or none."""
+    from .training_export import FEEDBACK_FILE
+
+    marks: dict[int, str] = {}
+    path = directory / FEEDBACK_FILE
+    if not path.is_file():
+        return marks
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+            marks[int(record["shot"])] = str(record["kind"])
+        except (ValueError, KeyError, TypeError):
+            continue
+    return marks
 
 
 def _line_preview_of(path: Path, cache_dir: Path) -> Path | None:

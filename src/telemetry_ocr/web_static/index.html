@@ -255,6 +255,15 @@
               </label>
               <span id="shotDetections" class="shot-detections"></span>
             </div>
+            <!-- Marked frames are what the next training set is built from first:
+                 the mistakes seen in real use. -->
+            <div class="shot-feedback" id="shotFeedback">
+              <span>ใช้เทรนโมเดล:</span>
+              <button type="button" class="link-button" data-kind="wrong" aria-pressed="false"
+                      title="กรอบผิด ประเภทผิด หรือกรอบที่ไม่ใช่ยานพาหนะ">โมเดลตรวจผิด</button>
+              <button type="button" class="link-button" data-kind="missed" aria-pressed="false"
+                      title="มียานพาหนะในภาพที่ไม่มีกรอบ">โมเดลพลาดวัตถุ</button>
+            </div>
           </div>
 
           <div class="telemetry-list" id="telemetryList" aria-live="polite"></div>
