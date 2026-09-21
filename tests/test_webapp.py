@@ -357,6 +357,124 @@ class WebAppTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         self.fail(f"render never reached {statuses}: {job}")
 
+    # -- automatic capture ----------------------------------------------------
+
+    def _no_line(self):
+        """LINE configured by environment only, with nothing read from the repo."""
+        return [
+            mock.patch.dict(
+                "os.environ",
+                {"TELEMETRY_OCR_LINE_TOKEN": "t" * 40, "TELEMETRY_OCR_LINE_TO": "U1234567890"},
+            ),
+            mock.patch(
+                "telemetry_ocr.line_client.DEFAULT_CONFIG_PATH", self.root / "absent-line.json"
+            ),
+        ]
+
+    async def _wait_for_auto(self):
+        deadline = time.monotonic() + 10
+        status = {}
+        while time.monotonic() < deadline:
+            status = await (await self.client.get("/api/renders/auto")).json()
+            if not status.get("active"):
+                return status
+            await asyncio.sleep(0.05)
+        self.fail(f"automatic capture never finished: {status}")
+
+    async def _auto_render(self, **auto):
+        body = self._render_request(
+            auto={"classes": {"car": 0.5}, "session": "auto-flight", **auto}
+        )
+        started = await self.client.post("/api/renders", json=body)
+        self.assertEqual(started.status, 202, await started.text())
+        await self._wait_for_render("complete")
+        return await self._wait_for_auto()
+
+    async def test_a_vehicle_seen_for_a_second_is_captured_once_by_itself(self):
+        # The fake detector's one car, numbered 7, in all 20 frames (2 s).
+        status = await self._auto_render()
+        self.assertEqual((status["captured"], status["sent"]), (1, 0))
+        self.assertFalse(status["sending"], "capture only is the default")
+        shots = (await (await self.client.get("/api/capture/shots?session=auto-flight")).json())
+        [shot] = shots["shots"]
+        self.assertEqual(shot["origin"], "auto")
+        self.assertEqual(shot["note"], "car #7 0.90")
+        self.assertEqual(shot["detections"]["counts"], {"car": 1})
+        self.assertTrue(shot["annotated"], "the capture has no marked-up copy")
+
+    async def test_a_class_not_asked_for_is_not_captured(self):
+        status = await self._auto_render(classes={"motorcycle": 0.5})
+        self.assertEqual(status["captured"], 0)
+
+    async def _auto_send(self, used):
+        """An automatic render with sending on, LINE faked, `used` of 300 spent."""
+        from telemetry_ocr.line_client import Quota
+
+        pushed = []
+
+        async def push(config, text, images):
+            pushed.append(text)
+            return {"ok": True, "status": 200, "message": ""}
+
+        async def quota(config, *, timeout_s=8.0):
+            return Quota(300, used)
+
+        patches = [
+            *self._no_line(),
+            mock.patch("telemetry_ocr.line_client.push_capture", push),
+            mock.patch("telemetry_ocr.line_client.fetch_quota", quota),
+        ]
+        for patch in patches:
+            patch.start()
+        try:
+            status = await self._auto_render(send=True)
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
+        return status, pushed
+
+    async def test_automatic_sending_sends_the_capture(self):
+        status, pushed = await self._auto_send(used=5)
+        self.assertEqual(status["events"][0]["outcome"], "sent", status)
+        self.assertEqual(status["sent"], 1)
+        self.assertEqual(len(pushed), 1)
+        self.assertIn("car", pushed[0])
+
+    async def test_automatic_sending_keeps_a_reserve_for_sending_by_hand(self):
+        # 8 left of 300, under the 10 kept back.
+        status, pushed = await self._auto_send(used=292)
+        self.assertEqual(status["events"][0]["outcome"], "skipped", status)
+        self.assertEqual(pushed, [])
+        self.assertFalse(status["sending"])
+        self.assertIn("quota", status["stopped_sending"])
+        self.assertEqual(status["captured"], 1, "stopped capturing too")
+
+    async def test_rules_are_checked_before_anything_starts(self):
+        for auto in (
+            {"classes": {}, "session": "s"},
+            {"classes": {"car": 3}, "session": "s"},
+            {"classes": {"car": 0.5}, "session": "../escape"},
+        ):
+            with self.subTest(auto=auto):
+                response = await self.client.post(
+                    "/api/renders", json=self._render_request(auto=auto)
+                )
+                self.assertEqual(response.status, 400)
+        # Sending asked for with LINE not set up: refused, not started.
+        with mock.patch(
+            "telemetry_ocr.line_client.DEFAULT_CONFIG_PATH", self.root / "absent-line.json"
+        ), mock.patch.dict("os.environ", {}, clear=True):
+            response = await self.client.post(
+                "/api/renders",
+                json=self._render_request(
+                    auto={"classes": {"car": 0.5}, "session": "s", "send": True}
+                ),
+            )
+        self.assertEqual(response.status, 400)
+        self.assertIn("LINE", (await response.json())["error"])
+        job = await (await self.client.get("/api/renders/current")).json()
+        self.assertEqual(job["status"], "idle")
+
     async def test_a_render_runs_is_listed_played_reused_and_deleted(self):
         started = await self.client.post("/api/renders", json=self._render_request())
         self.assertEqual(started.status, 202)

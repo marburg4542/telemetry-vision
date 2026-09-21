@@ -31,6 +31,11 @@ const ui = {
   renderStatus: $("renderStatus"),
   renderList: $("renderList"),
   renderWait: $("renderWait"),
+  autoLine: $("autoLine"),
+  autoLineState: $("autoLineState"),
+  autoEnabled: $("autoEnabled"),
+  autoClasses: $("autoClasses"),
+  autoStatus: $("autoStatus"),
   boxOverlay: $("boxOverlay"),
   renderWaitText: $("renderWaitText"),
   renderWaitNow: $("renderWaitNow"),
@@ -130,6 +135,10 @@ const state = {
   attached: "",
   // Folded away to give the video the height. Remembered per browser.
   aiCollapsed: false,
+  // What automatic capture did for the render it watches, and the poll for it.
+  autoRun: null,
+  autoTimer: null,
+  autoCaptured: 0,
   // Saving a render as one MP4: which render's options are open, the export
   // being made, and what to say about it.
   exportPanelFor: null,
@@ -938,13 +947,30 @@ async function startRender(resume = null) {
       stride: Number(resume.stride),
     }
     : renderSettings();
+  let auto = null;
+  try {
+    auto = autoSettings();
+  } catch (error) {
+    setRenderStatus(error.message, true);
+    return;
+  }
   ui.renderButton.disabled = true;
   try {
     const payload = await jsonFetch("/api/renders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: state.video.id, model: model.name, ...settings }),
+      body: JSON.stringify({
+        video: state.video.id, model: model.name, ...settings, ...(auto ? { auto } : {}),
+      }),
     });
+    if (payload.existing && auto) {
+      showToast("ผลนี้ประมวลผลเสร็จแล้ว — Capture อัตโนมัติทำงานเฉพาะระหว่างประมวลผล");
+    }
+    if (payload.auto) {
+      state.autoCaptured = 0;
+      applyAutoStatus(payload.auto);
+      pollAuto();
+    }
     if (payload.existing) {
       await refreshRenders();
       state.activeRender = state.renders.find(
@@ -981,6 +1007,146 @@ async function startRender(resume = null) {
   } finally {
     updateRenderControls();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Automatic capture
+//
+// The rules go with the render request and the server does the rest: it reads
+// the tracks as they are written, captures each vehicle the rules ask for once
+// it has been in view for a second, and sends it to LINE when asked to. The page
+// only offers the rules and reports what happened.
+// ---------------------------------------------------------------------------
+
+// The classes this project's checkpoints are trained on, with a starting
+// confidence each: motorcycles are found less surely than cars.
+const AUTO_CLASSES = [["motorcycle", 0.5], ["car", 0.7], ["truck", 0.7]];
+const AUTO_KEY = "telemetry-ocr.auto-line";
+const AUTO_POLL_MS = 2000;
+
+function buildAutoClasses() {
+  let saved = {};
+  try {
+    saved = JSON.parse(window.localStorage.getItem(AUTO_KEY) || "{}") || {};
+  } catch (error) {
+    saved = {};
+  }
+  ui.autoEnabled.checked = Boolean(saved.enabled);
+  const mode = saved.send ? "send" : "capture";
+  for (const radio of document.querySelectorAll('input[name="autoMode"]')) {
+    radio.checked = radio.value === mode;
+  }
+  ui.autoClasses.replaceChildren();
+  for (const [label, confidence] of AUTO_CLASSES) {
+    const chosen = saved.classes && label in saved.classes;
+    const row = document.createElement("label");
+    row.className = "auto-line-class";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.dataset.label = label;
+    box.checked = Boolean(chosen);
+    const name = document.createElement("span");
+    name.textContent = label;
+    const threshold = document.createElement("input");
+    threshold.type = "number";
+    threshold.min = "0.05";
+    threshold.max = "1";
+    threshold.step = "0.05";
+    threshold.value = Number(chosen ? saved.classes[label] : confidence).toFixed(2);
+    threshold.dataset.label = label;
+    threshold.setAttribute("aria-label", `ความมั่นใจขั้นต่ำของ ${label}`);
+    const unit = document.createElement("span");
+    unit.className = "auto-line-unit";
+    unit.textContent = "ความมั่นใจ ≥";
+    row.append(box, name, unit, threshold);
+    ui.autoClasses.append(row);
+  }
+  describeAutoChoice();
+}
+
+function chosenAutoClasses() {
+  const classes = {};
+  for (const box of ui.autoClasses.querySelectorAll('input[type="checkbox"]')) {
+    if (!box.checked) continue;
+    const input = ui.autoClasses.querySelector(`input[type="number"][data-label="${box.dataset.label}"]`);
+    const value = Math.min(1, Math.max(0.05, Number(input.value) || 0.5));
+    input.value = value.toFixed(2);
+    classes[box.dataset.label] = Number(value.toFixed(2));
+  }
+  return classes;
+}
+
+function autoSends() {
+  return document.querySelector('input[name="autoMode"]:checked')?.value === "send";
+}
+
+// The rules for the next render, or null when automatic capture is off.
+function autoSettings() {
+  if (!ui.autoEnabled.checked) return null;
+  const classes = chosenAutoClasses();
+  if (!Object.keys(classes).length) {
+    ui.autoLine.open = true;
+    throw new Error("Capture อัตโนมัติเปิดอยู่ แต่ยังไม่ได้เลือกประเภทวัตถุ");
+  }
+  return { classes, session: captureSessionName(), send: autoSends() };
+}
+
+function describeAutoChoice() {
+  const classes = chosenAutoClasses();
+  const names = Object.entries(classes).map(([label, value]) => `${label} ≥ ${value.toFixed(2)}`);
+  ui.autoLineState.textContent = ui.autoEnabled.checked
+    ? `เปิด · ${names.join(", ") || "ยังไม่ได้เลือกประเภท"} · ${autoSends() ? "ส่งเข้าไลน์" : "ไม่ส่ง"}`
+    : "ปิด";
+  ui.autoLineState.classList.toggle("is-on", ui.autoEnabled.checked);
+  try {
+    window.localStorage.setItem(AUTO_KEY, JSON.stringify({
+      enabled: ui.autoEnabled.checked, classes, send: autoSends(),
+    }));
+  } catch (error) {
+    // Remembering the choice is a convenience; the page works without it.
+  }
+}
+
+function applyAutoStatus(run) {
+  if (!run || !run.render_id) {
+    ui.autoStatus.hidden = true;
+    return;
+  }
+  state.autoRun = run;
+  // A page opened while the server was already watching adopts its session,
+  // so the pictures it takes show up here.
+  if (!state.captureSession && run.session) state.captureSession = run.session;
+  const parts = [`เก็บภาพ ${run.captured}`];
+  if (run.rules?.send) parts.push(`ส่งเข้าไลน์ ${run.sent}`);
+  if (run.same_vehicle) parts.push(`ข้าม ${run.same_vehicle} (คันเดิม)`);
+  if (run.failed) parts.push(`ผิดพลาด ${run.failed}`);
+  let text = `อัตโนมัติ${run.active ? "" : " (จบแล้ว)"}: ${parts.join(" · ")}`;
+  if (run.stopped_sending) text += ` · หยุดส่ง: ${run.stopped_sending.replace(/^quota: /, "")}`;
+  if (run.error) text += ` · หยุดทำงาน: ${run.error}`;
+  const latest = (run.events || [])[0];
+  if (latest?.outcome === "failed" && latest.detail) text += ` · ล่าสุด: ${latest.detail}`;
+  ui.autoStatus.textContent = text;
+  ui.autoStatus.classList.toggle("is-error", Boolean(run.error || run.failed));
+  ui.autoStatus.hidden = false;
+  if (run.captured > state.autoCaptured) {
+    state.autoCaptured = run.captured;
+    refreshShots();
+  }
+}
+
+function pollAuto() {
+  window.clearTimeout(state.autoTimer);
+  state.autoTimer = window.setTimeout(async () => {
+    let run;
+    try {
+      run = await jsonFetch("/api/renders/auto");
+    } catch (error) {
+      pollAuto();
+      return;
+    }
+    applyAutoStatus(run);
+    if (run.active) pollAuto();
+  }, AUTO_POLL_MS);
 }
 
 async function cancelRender() {
@@ -1852,6 +2018,15 @@ function buildShotThumb(shot) {
   label.textContent = `#${shot.frame_index}`;
   card.append(label);
 
+  if (shot.origin === "auto") {
+    const auto = document.createElement("span");
+    auto.className = "shot-thumb-auto";
+    auto.textContent = "อัตโนมัติ";
+    auto.title = shot.note ? `Capture อัตโนมัติ: ${shot.note}` : "Capture อัตโนมัติ";
+    card.title = auto.title;
+    card.append(auto);
+  }
+
   // Said on the thumbnail rather than only in the enlarged view, because a
   // frame the model never saw looks exactly like a frame it saw and cleared.
   if (shot.stage && shot.stage !== "ready") {
@@ -2210,6 +2385,19 @@ for (const control of [ui.renderConfidence, ui.renderImageSize, ui.renderStride]
 ui.aiToggle.addEventListener("click", () => setAiCollapsed(!state.aiCollapsed));
 ui.renderButton.addEventListener("click", onRenderButton);
 ui.renderCancelButton.addEventListener("click", cancelRender);
+ui.autoEnabled.addEventListener("change", describeAutoChoice);
+ui.autoClasses.addEventListener("change", describeAutoChoice);
+for (const radio of document.querySelectorAll('input[name="autoMode"]')) {
+  radio.addEventListener("change", describeAutoChoice);
+}
+buildAutoClasses();
+// A render set off from another tab, or before a reload, may still be watched.
+jsonFetch("/api/renders/auto").then((run) => {
+  if (run?.render_id && run.active) {
+    applyAutoStatus(run);
+    pollAuto();
+  }
+}).catch(() => {});
 ui.renderWaitNow.addEventListener("click", () => state.renderStream?.playNow());
 ui.manageModelsButton.addEventListener("click", openModelManager);
 ui.modelDialogClose.addEventListener("click", () => ui.modelDialog.close());

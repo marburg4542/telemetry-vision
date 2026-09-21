@@ -124,6 +124,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 ├─ detection.py         267    ห่อ Ultralytics YOLO · เลือก device · แปลงผลเป็น Detection
 ├─ render_job.py      1,137    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · เขียนกรอบลง tracks.jsonl · ทำต่อได้
 ├─ render_export.py     463    วาดกรอบลงต้นฉบับทุกเฟรมเป็น MP4 ไฟล์เดียว (เต็ม / 720p) ไว้ส่งต่อ
+├─ auto_capture.py      372    เลือกวัตถุจาก tracks ระหว่างประมวลผล → Capture/ส่งไลน์อัตโนมัติ
 ├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
 ├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
 ├─ detect_sidecar.py    162    ตัวช่วยฝั่ง CLI สำหรับรัน detection คู่กับ run
@@ -397,6 +398,18 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 `TRACKER_FLOOR` (0.1) ให้ tracker เพื่อเปิดขั้นจับคู่รอบสอง แต่คืนเฉพาะกรอบที่ ≥ confidence และย่อภาพของ
 GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที่ tracker ถูกสร้าง ตัวเลขที่ใช้เลือกค่าอยู่ใน README
 
+### `auto_capture.py` — Capture / ส่งเข้าไลน์อัตโนมัติ
+
+| ส่วน | ทำอะไร |
+|---|---|
+| `AutoRules.from_request(body)` | ตรวจกฎจากหน้าเว็บ: `classes` (label → ความมั่นใจขั้นต่ำ), `send`, `reserve` (10), `min_seconds` (1) |
+| `Selector.feed(frame, time_ms, detections)` | ต่อ Track ID: ช่วงที่เห็นต่อเนื่อง (ขาดได้ 0.5 วิ) ครบ `min_seconds` → `Candidate` ของเฟรมที่มั่นใจที่สุด · เลขใหม่ประเภทเดียวกันที่เริ่มภายใน 3 วิหลังเลขที่ settle แล้วหายไป และห่างไม่เกิน 1.5 เท่าขนาดกรอบ = คันเดิม (`same_vehicle`) |
+| `AutoLineRun.run()` | อ่านบรรทัดใหม่ของ `tracks.jsonl` ทุก 1 วิ (เฉพาะบรรทัดสมบูรณ์) → capture → send · หยุดเมื่อ render ไม่ active แล้วอ่านรอบสุดท้าย · quota ต่ำกว่า reserve → หยุดส่งแต่ยัง capture |
+
+ใน `webapp.py`: `take_capture()` และ `deliver()` แยกออกมาจาก handler ของปุ่ม Capture/ส่ง ให้ทั้งสองทางใช้
+ร่วมกัน `start_render` รับ `auto` แล้ว `start_auto()` สร้าง `AutoLineRun` (pipeline OCR ของตัวเอง) ·
+`GET /api/renders/auto` คืนสถานะ ภาพอัตโนมัติมี `origin: "auto"` และ `note` ใน `frames.jsonl`
+
 ### `choose_encoder(ffmpeg)`
 ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม ใช้ตอนบันทึก MP4 เท่านั้น
 (x264 แย่ง CPU 4 คอร์กับงานอื่น NVENC ใช้วงจรเข้ารหัสเฉพาะบนการ์ดจอ)
@@ -484,6 +497,7 @@ GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที�
 | `GET/POST /api/models`, `DELETE /api/models/{name}` | `list_models` · `add_model` · `remove_model` | ทะเบียนโมเดล (เพิ่มจาก candidate id เท่านั้น) |
 | `GET /api/videos`, `GET /api/videos/source` | `list_videos` · `video_source` | รายการวิดีโอ · ส่งไฟล์ต้นฉบับแบบ Range |
 | `POST /api/renders`, `GET/DELETE /api/renders/current` | `start_render` · `render_status` · `cancel_render` | เริ่มหรือทำต่อ · ความคืบหน้า · ยกเลิก (เก็บส่วนที่ทำแล้ว) |
+| `GET /api/renders/auto` | `auto_status` | สถานะ Capture / ส่งเข้าไลน์อัตโนมัติ |
 | `GET /api/renders/tracks` | `render_tracks` | สถานะ + กรอบของช่วงเวลาหนึ่ง (ไม่เกิน 2 นาที) ให้หน้าเว็บวาด |
 | `DELETE /api/renders` | `delete_render` | ลบผลการประมวลผลทั้งโฟลเดอร์ |
 | `POST/GET /api/renders/export`, `GET /api/renders/export/file` | `start_export` · `export_status` · `export_file` | เริ่มทำ MP4 ไฟล์เดียว · ความคืบหน้า · ดาวน์โหลดแล้วลบ |

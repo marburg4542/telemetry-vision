@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from . import __version__
+from .auto_capture import AutoLineRun, AutoRules
 from .config import AppConfig, clone_config
 from .errors import ConfigError, DependencyError
 
@@ -247,6 +248,8 @@ def create_app(
     # When the last LINE push went out, so the rate limit survives across
     # requests without being stored on the frozen Application.
     line_state: dict[str, float] = {"last_sent": 0.0}
+    # The render being watched for vehicles to capture and send, and its task.
+    auto_state: dict[str, Any] = {"run": None, "task": None}
     # The month's allowance, cached. Two HTTP calls to LINE, and the number
     # moves only when this server sends something, so asking on every status
     # poll would spend more requests on watching the quota than on using it.
@@ -637,6 +640,21 @@ def create_app(
         )
         settings.validate()
         render_id = render_id_for(video.id, entry.name, settings)
+        # Checked before anything starts: a render set off with rules that are
+        # then refused would run with nobody watching it.
+        auto = body.get("auto")
+        rules = AutoRules.from_request(auto) if auto else None
+        auto_session = str((auto or {}).get("session", "")).strip() if auto else ""
+        if rules is not None:
+            capture_session_for(auto_session, video.name)  # a bad name is refused here
+            if rules.send:
+                from .line_client import load_line_config
+
+                if load_line_config() is None:
+                    raise ValueError(
+                        "ยังไม่ได้ตั้งค่า LINE จึงส่งอัตโนมัติไม่ได้ — เลือก Capture อย่างเดียว "
+                        "หรือตั้งค่า LINE ก่อน"
+                    )
         # Without force, a partial render of the same files carries on from where
         # it stopped; with it, whatever is there is made again from the start.
         fresh = bool(body.get("force"))
@@ -667,7 +685,92 @@ def create_app(
             )
         except RenderBusy as exc:
             return web.json_response({"error": str(exc), "job": renders.status()}, status=409)
-        return web.json_response({"job": job}, status=202)
+        if rules is not None:
+            await start_auto(render_id, video, rules, auto_session)
+        return web.json_response(
+            {"job": job, "auto": auto_state["run"].status() if rules is not None else None},
+            status=202,
+        )
+
+    async def start_auto(render_id: str, video: VideoInfo, rules: AutoRules, name: str) -> None:
+        """Watch this render for vehicles the rules ask for, capture them, send them."""
+        await stop_auto()
+        pipeline = new_pipeline()
+
+        def is_active() -> bool:
+            job = renders.status()
+            return job.get("render_id") == render_id and job.get("status") in {
+                "loading",
+                "running",
+                "cancelling",
+            }
+
+        async def capture(candidate: Any) -> Any:
+            meta = await asyncio.to_thread(read_meta, renders.directory(render_id))
+            return await take_capture(
+                name,
+                video,
+                render_id,
+                meta,
+                candidate.frame_index,
+                pipeline,
+                origin="auto",
+                note=candidate.note,
+            )
+
+        async def send(shot: Any, candidate: Any) -> tuple[str, str]:
+            from .line_client import load_line_config
+
+            config = load_line_config()
+            if config is None:
+                return "failed", "ยังไม่ได้ตั้งค่า LINE"
+            quota = await line_quota(config)
+            left = quota.remaining
+            if left is not None and left <= rules.reserve:
+                return "skipped", (
+                    f"quota: เหลือ {left} ข้อความ เก็บไว้ {rules.reserve} ข้อความสำหรับส่งเอง"
+                )
+            session = open_session(name)
+            if session is None:
+                return "failed", "ไม่พบ session ของภาพ"
+            payload, status = await deliver(config, name, session, [shot], wait=True)
+            if status == 200:
+                return "sent", str(payload.get("share_error") or "")
+            return "failed", str(payload.get("error") or payload.get("message") or status)
+
+        run = AutoLineRun(
+            render_id,
+            renders.directory(render_id) / TRACKS_FILE,
+            rules,
+            session=name,
+            capture=capture,
+            send=send,
+            is_active=is_active,
+        )
+        auto_state["run"] = run
+        auto_state["task"] = asyncio.create_task(run.run())
+        _LOG.info(
+            "Watching %s for %s (%s)",
+            render_id,
+            ", ".join(f"{label} >= {value}" for label, value in rules.classes.items()),
+            "send" if rules.send else "capture only",
+        )
+
+    async def stop_auto() -> None:
+        task = auto_state["task"]
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        auto_state["task"] = None
+
+    async def auto_status(_: Any) -> Any:
+        """What automatic capture has done for the render it watches, or last watched."""
+        run = auto_state["run"]
+        return web.json_response(
+            run.status() if run is not None else {"active": False, "render_id": None},
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def render_status(_: Any) -> Any:
         return web.json_response(await asyncio.to_thread(renders.status))
@@ -784,6 +887,7 @@ def create_app(
         # than being left running with nothing to report to.
         await asyncio.to_thread(renders.shutdown)
         await asyncio.to_thread(exports.shutdown)
+        await stop_auto()
         await asyncio.to_thread(source_frames.close)
         # The extra recognizers a capture votes with. Built lazily on the first
         # capture, so a server that never captured has none to release.
@@ -876,7 +980,6 @@ def create_app(
         copy matches the video on screen without asking the model again -- also
         while the render is still being made, for the frames it has got to.
         """
-        from .capture_service import DetectionSummary
 
         name = (request.query.get("session") or "").strip()
         if not name:
@@ -905,23 +1008,44 @@ def create_app(
                 raise ValueError("ผลการประมวลผลนี้ไม่ใช่ของวิดีโอที่เลือก")
         fps = float((meta or {}).get("source_fps") or video.fps)
         stride = int((meta or {}).get("stride") or 1)
-        # The frame on screen. A render made with a stride shows every
+        # The frame on screen. A render made with a stride has boxes on every
         # stride-th source frame, so the time is rounded to one of those.
         frame_index = round(source_time_ms * fps / stride / 1000.0) * stride
         if video.frames:
             frame_index = min(frame_index, (video.frames - 1) // stride * stride)
+        shot = await take_capture(
+            name, video, render_id or None, meta, frame_index, browser_session.pipeline
+        )
+        return web.json_response(asdict(shot))
+
+    async def take_capture(
+        name: str,
+        video: VideoInfo,
+        render_id: str | None,
+        meta: dict[str, Any] | None,
+        frame_index: int,
+        pipeline: Any,
+        origin: str = "manual",
+        note: str = "",
+    ) -> Any:
+        """Read one source frame, OCR it, mark the render's boxes on a copy, keep it.
+
+        Shared by the Capture button and by automatic capture, so a picture sent
+        without anyone pressing anything is the same picture pressing would take.
+        """
+        from .capture_service import DetectionSummary
+
+        fps = float((meta or {}).get("source_fps") or video.fps)
         frame = await asyncio.to_thread(source_frames.read, video.path, frame_index)
         frame_time_ms = round(frame_index * 1000.0 / fps, 3)
 
         packet = FramePacket(frame, frame_index, frame_time_ms, time.perf_counter())
         async with app[ocr_lock_key]:
-            recognised, _ = await asyncio.to_thread(
-                browser_session.pipeline.process_frame, packet
-            )
+            recognised, _ = await asyncio.to_thread(pipeline.process_frame, packet)
         session = capture_session_for(name, video.name)
         boxes: list[dict[str, Any]] | None = None
         box_source: tuple[int, int] | None = None
-        if meta is None:
+        if meta is None or render_id is None:
             summary = DetectionSummary("no_render")
         else:
             detections = await asyncio.to_thread(renders.detections_at, render_id, frame_index)
@@ -942,9 +1066,11 @@ def create_app(
             shot_verifier([_as_record(item) for item in recognised]),
             boxes,
             box_source,
+            origin,
+            note,
         )
         session.record_verification(shot)
-        return web.json_response(asdict(shot))
+        return shot
 
     def open_session(name: str) -> Any:
         """The session by that name, reopened from disk if this run did not make it."""
@@ -1113,12 +1239,7 @@ def create_app(
         endpoint can be called directly, and every call spends a message from the
         account's monthly quota, so a stuck caller must not be able to drain it.
         """
-        from .line_client import (
-            MAX_IMAGES_PER_PUSH,
-            format_capture_digest,
-            load_line_config,
-            push_capture,
-        )
+        from .line_client import MAX_IMAGES_PER_PUSH, load_line_config
 
         config = load_line_config()
         if config is None:
@@ -1173,20 +1294,36 @@ def create_app(
                 {"error": "ยังไม่มีเฟรมที่ capture ไว้ใน session นี้"}, status=409
             )
         shots.sort(key=lambda item: item.frame_index)
-        shot = shots[0]
+        payload, status = await deliver(config, name, session, shots)
+        return web.json_response(payload, status=status)
 
+    async def deliver(
+        config: Any, name: str, session: Any, shots: list[Any], *, wait: bool = False
+    ) -> tuple[dict[str, Any], int]:
+        """Push shots to LINE: telemetry as text, the marked-up pictures with it.
+
+        Shared by the send button and by automatic sending. A caller that cannot
+        be asked to try again -- automatic sending -- waits out the gap between
+        messages instead of being refused.
+        """
+        from .line_client import format_capture_digest, push_capture
+
+        shot = shots[0]
         now = time.monotonic()
         waited = now - float(line_state["last_sent"])
         if waited < _LINE_MIN_INTERVAL_S:
-            return web.json_response(
-                {
-                    "error": (
-                        f"ส่งถี่เกินไป รออีก {_LINE_MIN_INTERVAL_S - waited:.1f} วินาที"
-                    ),
-                    "retry_after_s": round(_LINE_MIN_INTERVAL_S - waited, 1),
-                },
-                status=429,
-            )
+            if not wait:
+                return (
+                    {
+                        "error": (
+                            f"ส่งถี่เกินไป รออีก {_LINE_MIN_INTERVAL_S - waited:.1f} วินาที"
+                        ),
+                        "retry_after_s": round(_LINE_MIN_INTERVAL_S - waited, 1),
+                    },
+                    429,
+                )
+            await asyncio.sleep(_LINE_MIN_INTERVAL_S - waited)
+            now = time.monotonic()
 
         # Refused here rather than at LINE. The push would come back 429 having
         # spent nothing, but the operator would have taken a shot and pressed
@@ -1194,7 +1331,7 @@ def create_app(
         # allowance comes back.
         quota = await line_quota(config)
         if quota.exhausted:
-            return web.json_response(
+            return (
                 {
                     "error": (
                         f"โควต้าเดือนนี้เต็มแล้ว ({quota.used}/{quota.limit} ข้อความ) "
@@ -1202,7 +1339,7 @@ def create_app(
                     ),
                     "quota": quota.as_dict(),
                 },
-                status=429,
+                429,
             )
         line_state["last_sent"] = now
 
@@ -1294,8 +1431,8 @@ def create_app(
             # Released so a failed send is not also a lockout; the operator will
             # want to retry immediately once they have fixed the cause.
             line_state["last_sent"] = 0.0
-            return web.json_response(payload, status=502)
-        return web.json_response(payload)
+            return payload, 502
+        return payload, 200
 
     async def capture_status(request: Any) -> Any:
         name = (request.query.get("session") or "").strip()
@@ -1325,6 +1462,7 @@ def create_app(
     app.router.add_get("/api/renders/current", render_status)
     app.router.add_delete("/api/renders/current", cancel_render)
     app.router.add_get("/api/renders/tracks", render_tracks)
+    app.router.add_get("/api/renders/auto", auto_status)
     app.router.add_post("/api/renders/export", start_export)
     app.router.add_get("/api/renders/export", export_status)
     app.router.add_get("/api/renders/export/file", export_file)

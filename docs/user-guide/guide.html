@@ -853,10 +853,36 @@ td.k { white-space: nowrap; font-weight: 600; color: var(--blue-900); }
     ไฟล์จะมีเฉพาะส่วนที่ประมวลผลแล้ว และชื่อไฟล์ลงท้ายว่า <code>_partial-41%</code> ผู้รับจึงรู้ว่าไม่ใช่ทั้งเที่ยวบิน
     · ทำได้ทีละไฟล์ · ไฟล์ไม่มีเสียง · หลังดาวน์โหลดเสร็จ สำเนาบน server จะถูกลบ (ผลเดิมยังอยู่ บันทึกใหม่ได้เสมอ)</div>
 
+  <h3>Capture และส่งเข้าไลน์อัตโนมัติ</h3>
+  <p>ให้ระบบ Capture วัตถุที่สนใจเองระหว่างประมวลผล และส่งเข้าไลน์ได้ด้วย ตั้งค่าก่อนกด
+    <strong>ประมวลผลด้วย AI</strong> ในหัวข้อ <strong>Capture / ส่งเข้าไลน์อัตโนมัติ</strong> ของแผงประมวลผล</p>
+  <figure>
+    <div class="frame"><img src="assets/screens/05d-auto-line.png" alt=""></div>
+    <figcaption><b>ภาพที่ 5.6</b> ตั้งค่า Capture อัตโนมัติ และบรรทัดสถานะหลังประมวลผลเสร็จ</figcaption>
+  </figure>
+  <ol class="steps">
+    <li>ติ๊ก <strong>เปิดสำหรับการประมวลผลครั้งถัดไป</strong></li>
+    <li>เลือกประเภทวัตถุ และตั้ง<strong>ความมั่นใจขั้นต่ำ</strong>ของแต่ละประเภท (มอเตอร์ไซค์ตรวจเจอยากกว่า จึงตั้งต่ำกว่ารถยนต์ได้)</li>
+    <li>เลือก <strong>Capture อย่างเดียว (ไม่ส่ง)</strong> เพื่อลองตัวกรองก่อน หรือ <strong>Capture และส่งเข้าไลน์</strong></li>
+    <li>กด <strong>ประมวลผลด้วย AI</strong> ภาพที่เก็บจะขึ้นใน <strong>ภาพที่เก็บไว้</strong> พร้อมป้าย <strong>อัตโนมัติ</strong>
+      (ชี้ที่ภาพเพื่อดูว่าเก็บวัตถุใด เช่น <code>motorcycle #43 0.67</code>)</li>
+  </ol>
+  <table>
+    <tbody>
+      <tr><td class="k" style="width:30%">เก็บเมื่อไร</td><td>เห็นวัตถุต่อเนื่องอย่างน้อย 1 วินาที ระบบเลือกเฟรมที่โมเดลมั่นใจที่สุดในช่วงนั้น</td></tr>
+      <tr><td class="k">ไม่เก็บซ้ำ</td><td>วัตถุคันเดิมแม้ตัวติดตามเปลี่ยนเลข (เลขใหม่ประเภทเดียวกันโผล่ใกล้จุดเดิมภายใน 3 วินาที) · บรรทัดสถานะบอกจำนวนที่ข้าม</td></tr>
+      <tr><td class="k">กันโควต้า</td><td>หยุดส่งเมื่อโควต้าเดือนนี้เหลือ 10 ข้อความ (เก็บไว้ส่งเอง) แต่ยัง Capture ต่อ</td></tr>
+      <tr><td class="k">ขอบเขต</td><td>ทำงานเฉพาะระหว่างประมวลผล ผลที่เสร็จแล้วไม่ส่งย้อนหลัง · ปิดหน้าเว็บระหว่างทางได้ server ทำต่อเอง</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>ลองด้วย Capture อย่างเดียวก่อน</b>
+    ตัวอย่างวัดจริง: วิดีโอ 10.5 นาที ตั้ง motorcycle ≥ 0.50 และ car ≥ 0.70 ได้ 24 ภาพ (รถยนต์ 21 มอเตอร์ไซค์ 3)
+    ถ้าเปิดส่งจะใช้โควต้า 24 ข้อความ เลือกเฉพาะประเภทที่ต้องการแจ้งเตือนจริง และดูผลจากโหมดไม่ส่งก่อน</div>
+
   <h3>จัดการโมเดล</h3>
   <p>กด <strong>จัดการโมเดล</strong> ข้างรายการโมเดล เพื่อเพิ่ม เอาออก หรือตั้งโมเดลค่าเริ่มต้น</p>
   <figure data-screen="06-model-dialog" data-marks="dialog_registered:1,dialog_candidates:2">
-    <figcaption><b>ภาพที่ 5.6</b> หน้าต่างจัดการโมเดล</figcaption>
+    <figcaption><b>ภาพที่ 5.7</b> หน้าต่างจัดการโมเดล</figcaption>
   </figure>
   <ul class="legend">
     <li data-n="1"><span><strong>โมเดลในรายการ</strong> — <strong>ตั้งเป็นค่าเริ่มต้น</strong> หรือ <strong>เอาออกจากรายการ</strong> (ไฟล์ .pt ยังอยู่บนเครื่องเสมอ)</span></li>
@@ -1669,6 +1695,7 @@ python scripts\label_contact_sheet.py output\labels-pass2</code></pre>
       <tr><td><code>GET · DELETE /api/renders/current</code></td><td>ความคืบหน้า (fps, ETA, stages_ms) · ยกเลิก</td></tr>
       <tr><td><code>GET /api/renders</code> · <code>DELETE /api/renders</code></td><td>ผลการประมวลผลทั้งหมดของวิดีโอ (พร้อมสถานะและ % ที่ทำแล้ว) · ลบผล</td></tr>
       <tr><td><code>GET /api/renders/tracks</code></td><td>สถานะและกรอบของช่วงเวลาหนึ่ง ให้หน้าเว็บวาดทับวิดีโอ</td></tr>
+      <tr><td><code>GET /api/renders/auto</code></td><td>สถานะ Capture / ส่งเข้าไลน์อัตโนมัติ (จำนวนที่เก็บ ส่ง ข้าม และเหตุการณ์ล่าสุด)</td></tr>
       <tr><td><code>POST · GET /api/renders/export</code> · <code>GET /api/renders/export/file</code></td><td>เริ่มทำ MP4 ไฟล์เดียว (full / small) · ความคืบหน้า · ดาวน์โหลดแล้วลบสำเนาบน server</td></tr>
       <tr><td><code>POST /api/capture/shot</code></td><td>อ่านเฟรมต้นฉบับจากไฟล์ + OCR + กรอบจากผลการประมวลผล</td></tr>
       <tr><td><code>DELETE /api/capture/shot</code> · <code>GET /api/capture/image</code></td><td>ลบภาพที่เลือก · อ่านภาพ/ภาพย่อ</td></tr>

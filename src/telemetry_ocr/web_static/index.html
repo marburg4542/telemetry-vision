@@ -171,6 +171,35 @@
               </button>
             </div>
 
+            <!-- Vehicles the rules ask for are captured -- and sent to LINE if
+                 chosen -- while the render is made. The server does it, so it
+                 goes on with this page closed. -->
+            <details class="auto-line" id="autoLine">
+              <summary>
+                <span>Capture / ส่งเข้าไลน์อัตโนมัติ</span>
+                <span class="auto-line-state" id="autoLineState">ปิด</span>
+              </summary>
+              <div class="auto-line-body">
+                <label class="auto-line-switch">
+                  <input type="checkbox" id="autoEnabled" />
+                  เปิดสำหรับการประมวลผลครั้งถัดไป
+                </label>
+                <div class="auto-line-classes" id="autoClasses"></div>
+                <div class="auto-line-mode" role="radiogroup" aria-label="เมื่อเจอวัตถุ">
+                  <label><input type="radio" name="autoMode" value="capture" checked />
+                    Capture อย่างเดียว (ไม่ส่ง)</label>
+                  <label><input type="radio" name="autoMode" value="send" />
+                    Capture และส่งเข้าไลน์</label>
+                </div>
+                <p class="auto-line-note">
+                  เก็บเมื่อเห็นวัตถุต่อเนื่องอย่างน้อย 1 วินาที (เลือกเฟรมที่โมเดลมั่นใจที่สุด)
+                  · คันเดิมแม้เลขเปลี่ยนไม่เก็บซ้ำ · หยุดส่งเมื่อโควต้าเหลือ 10 ข้อความ (ยัง Capture ต่อ)
+                  · ทำงานเฉพาะระหว่างประมวลผล
+                </p>
+              </div>
+            </details>
+            <p class="auto-line-status" id="autoStatus" hidden></p>
+
             <div class="render-progress" id="renderProgress" hidden>
               <div class="render-bar" aria-hidden="true"><span id="renderBarFill"></span></div>
               <span class="render-progress-text" id="renderProgressText"></span>

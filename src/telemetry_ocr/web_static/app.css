@@ -450,6 +450,56 @@ summary:focus-visible, label:has(input:focus-visible) {
 .model-select select { min-width: 240px; max-width: 100%; }
 .check-control input { accent-color: var(--blue); }
 
+.auto-line {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 12px;
+}
+.auto-line summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  font-weight: 600;
+  list-style: none;
+}
+.auto-line summary::-webkit-details-marker { display: none; }
+.auto-line summary::before { content: "▸"; color: var(--muted); }
+.auto-line[open] summary::before { content: "▾"; }
+.auto-line-state { color: var(--muted); font-weight: 500; }
+.auto-line-state.is-on { color: var(--blue); }
+.auto-line-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 10px 28px;
+}
+.auto-line-switch, .auto-line-class, .auto-line-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.auto-line-classes, .auto-line-mode { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.auto-line-class span:nth-of-type(1) { min-width: 72px; font-weight: 600; }
+.auto-line-class input[type="number"] { width: 64px; padding: 2px 4px; }
+.auto-line-unit { color: var(--muted); }
+.auto-line-note { color: var(--muted); line-height: 1.5; }
+.auto-line-status { font-size: 12px; color: var(--blue); }
+.auto-line-status.is-error { color: var(--danger); }
+.shot-thumb-auto {
+  /* Bottom right: the tick, the stage badge and the number hold the others. */
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  pointer-events: none;
+}
 .render-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--blue); }
 .box-overlay {
   position: absolute;

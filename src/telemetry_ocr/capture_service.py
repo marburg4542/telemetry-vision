@@ -317,6 +317,10 @@ class ShotResult:
     # model was loaded or nothing was found -- an annotated file identical to the
     # original would only waste disk and invite the question of what it adds.
     annotated: str | None = None
+    # "auto" when the render's watcher took it rather than someone pressing
+    # Capture, with a note of which vehicle it was taken for.
+    origin: str = "manual"
+    note: str = ""
 
 
 class CaptureSession:
@@ -391,6 +395,8 @@ class CaptureSession:
         verify: Any = None,
         boxes: list[dict[str, Any]] | None = None,
         box_source: tuple[int, int] | None = None,
+        origin: str = "manual",
+        note: str = "",
     ) -> ShotResult:
         import cv2
 
@@ -457,6 +463,8 @@ class CaptureSession:
                     "detections": _as_dict(summary),
                     "verification": _as_dict(shot_verification),
                     "annotated": annotated_name,
+                    "origin": origin,
+                    "note": note,
                 },
             )
             for item in payload:
@@ -474,6 +482,8 @@ class CaptureSession:
             detections=summary,
             verification=shot_verification,
             annotated=annotated_name,
+            origin=origin,
+            note=note,
         )
         with self._lock:
             # Remembered so sending it somewhere afterwards does not have to
@@ -596,6 +606,8 @@ class CaptureSession:
                 duration_ms=float(raw_verify.get("duration_ms", 0.0)),
             ),
             annotated=entry.get("annotated"),
+            origin=str(entry.get("origin") or "manual"),
+            note=str(entry.get("note") or ""),
         )
 
     def discard(self, frame_index: int) -> bool:
