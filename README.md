@@ -871,7 +871,17 @@ Track ID เปลี่ยน ทางแก้คือเทรนเพิ�
 
 3. **แก้ label บน Roboflow** — นำเข้าโฟลเดอร์นั้นเป็น dataset แบบ YOLOv8 (split ตามโฟลเดอร์) แก้กรอบที่ผิด
    เพิ่มกรอบที่ขาด แล้วสร้าง dataset เวอร์ชันใหม่
-4. **เทรนบน Colab** ด้วยสคริปต์ใน `notebooks/`
+4. **เทรนบนเครื่องนี้ (CUDA)** — `scripts/train_local.py` ดาวน์โหลด dataset เวอร์ชันนั้นจาก Roboflow
+   (อ่าน `ROBOFLOW_API_KEY` จาก environment หรือ `.env`) หรือใช้ `--data` แล้วเทรนจากสองจุดตั้งต้น:
+   `14th` (fine-tune 14th_opt 60 epoch, lr 0.0005) และ `visdrone` (เริ่มจาก yolov8m-visdrone 150 epoch แบบ 14th_opt)
+   ใช้สูตรเดิมของ GTX 1650: 640 px, batch 2, ปิด AMP, AdamW ผลอยู่ที่ `output/training/runs/` ประมาณเวลา:
+   ภาพเทรนราว 1,700 ภาพ ≈ 100 วินาที/epoch (14th_opt: 1,107 ภาพ 150 epoch ใช้ 2.7 ชั่วโมง) — ทั้งสองแบบรวมราว 6 ชั่วโมง
+   ปิดการประมวลผลบนหน้าเว็บระหว่างเทรน เพราะใช้ VRAM 4 GB ร่วมกัน ค้างกลางทางใช้ `--resume` ต่อได้
+
+   ```powershell
+   .\.venv-cuda\Scripts\python.exe scripts\train_local.py --version 14 --start both
+   ```
+
 5. **เทียบกับโมเดลเดิม** — `scripts/compare_models.py` วัดบนชุดทดสอบ (mAP, precision/recall ต่อประเภท)
    และบนวิดีโอจริงด้วย detector และ tracker ของแอป (จำนวนเลข เลขเปลี่ยนของคันเดิม กรอบต่อเฟรม ความเร็ว):
 

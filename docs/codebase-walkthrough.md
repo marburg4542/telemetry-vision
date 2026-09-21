@@ -422,6 +422,7 @@ GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที�
 
 `scripts/compare_models.py` เทียบ checkpoint บนชุดทดสอบ (`YOLO.val`) และบนวิดีโอจริงด้วย
 `UltralyticsDetector` + `tracker_config` ของแอป
+`scripts/train_local.py` เทรนบน GPU เครื่องนี้จาก 14th_opt และ/หรือ yolov8m-visdrone (สูตร GTX 1650: batch 2, ปิด AMP)
 
 ### `choose_encoder(ffmpeg)`
 ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม ใช้ตอนบันทึก MP4 เท่านั้น
