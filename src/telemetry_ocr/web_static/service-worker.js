@@ -1,13 +1,13 @@
 "use strict";
 
-const CACHE_NAME = "telemetry-ocr-pwa-v27";
+const CACHE_NAME = "telemetry-ocr-pwa-v28";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
   "/assets/app.css",
   "/assets/app.js",
   "/assets/format.js",
-  "/assets/render-player.js",
+  "/assets/track-overlay.js",
   "/assets/icons/icon-192.png",
   "/assets/icons/icon-512.png",
   "/assets/icons/icon-maskable-512.png",
@@ -16,7 +16,7 @@ const APP_SHELL = [
 const CODE_PATHS = new Set([
   "/assets/app.js",
   "/assets/format.js",
-  "/assets/render-player.js",
+  "/assets/track-overlay.js",
   "/assets/app.css",
 ]);
 

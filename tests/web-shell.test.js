@@ -163,24 +163,31 @@ test("a model is named from the registry, never sent as a file", () => {
   assert.match(appJs, /JSON\.stringify\(\{ name \}\)/, "the default is not chosen by name");
 });
 
-test("the page plays what the model rendered and draws no boxes itself", () => {
+test("the page draws the boxes the server tracked, never ones it asks a model for", () => {
   /*
-   * The live overlay painted boxes a frame or three late over a video that had
-   * moved on, from a tracker fed an uneven fraction of the frames. Renders run
-   * every frame through the model once and bake the boxes in, so the page must
-   * not grow a second, lagging drawing path back.
+   * The old live overlay posted frames to the detector and painted the answers a
+   * frame or three late, from a tracker fed an uneven fraction of the frames. A
+   * render tracks every frame (or every 2nd or 3rd, evenly) once on the server;
+   * the page only draws what it wrote, over the original, on the frame it was
+   * found on. It must never grow the per-frame detection path back.
    */
-  for (const needle of ["detectionOverlay", "requestVideoFrameCallback", "/api/detection", "DetectionMath"]) {
+  const overlayJs = read("track-overlay.js");
+  for (const needle of ["detectionOverlay", "/api/detection", "DetectionMath"]) {
     assert.ok(!appJs.includes(needle), `app.js still refers to ${needle}`);
+    assert.ok(!overlayJs.includes(needle), `track-overlay.js refers to ${needle}`);
   }
-  assert.doesNotMatch(indexHtml, /detection-math\.js|<canvas/, "the overlay canvas is back");
-  assert.match(appJs, /\/api\/renders/, "the page no longer starts or plays renders");
-  // Watched while it is made: neither Chrome nor Edge plays a playlist that is
-  // still growing, so the page feeds the segments to Media Source itself.
-  assert.match(appJs, /\/api\/renders\/stream/, "the page waits for a render to finish again");
-  assert.match(appJs, /TelemetryRenderPlayer/, "nothing plays the segments");
-  assert.match(indexHtml, /render-player\.js/, "the segment player is not loaded");
+  assert.doesNotMatch(indexHtml, /detection-math\.js/, "the old overlay's maths is back");
+  assert.match(appJs, /\/api\/renders\/tracks/, "the boxes are not read from the render");
+  assert.match(appJs, /TelemetryTrackOverlay/, "nothing draws the render's boxes");
+  assert.match(indexHtml, /track-overlay\.js/, "the box overlay is not loaded");
+  assert.match(indexHtml, /<canvas[^>]*id="boxOverlay"/, "there is nothing to draw the boxes on");
+  // Drawn once per presented frame, so a box never trails its picture.
+  assert.match(overlayJs, /requestVideoFrameCallback/, "the boxes are not drawn per frame");
+  // The <video> only ever plays the original; the render is drawn over it.
   assert.match(appJs, /\/api\/videos\/source/, "the original is no longer served by the server");
+  for (const gone of ["/api/renders/stream", "/api/renders/segment", "/api/renders/video", "MediaSource"]) {
+    assert.ok(!appJs.includes(gone), `app.js still plays rendered video via ${gone}`);
+  }
   // A capture reads its frame on the server, from the original; it posts no picture.
   const capture = appJs.match(/async function takeCaptureShot\(\)\s*\{[\s\S]*?\n\}/);
   assert.ok(capture, "takeCaptureShot() is missing");
@@ -197,9 +204,8 @@ test("every script the page loads is cached by the service worker", () => {
 });
 
 test("a render is saved as one MP4 by the server, never assembled in the page", () => {
-  // Joining segments in the browser would hold a gigabyte in memory and still
-  // produce a file with no index at the front. The page asks for the export and
-  // then downloads the finished file by the id it was given.
+  // The boxes are drawn into every frame on the server, which has the original;
+  // the page asks for the export and downloads the finished file by its id.
   assert.match(appJs, /\/api\/renders\/export"/, "the page no longer asks the server to export");
   assert.match(appJs, /\/api\/renders\/export\/file/, "the finished file is not downloaded");
   assert.doesNotMatch(appJs, /new Blob\(\[[^\]]*segment/i, "segments are being stitched in the page");

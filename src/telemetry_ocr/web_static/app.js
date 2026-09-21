@@ -31,6 +31,7 @@ const ui = {
   renderStatus: $("renderStatus"),
   renderList: $("renderList"),
   renderWait: $("renderWait"),
+  boxOverlay: $("boxOverlay"),
   renderWaitText: $("renderWaitText"),
   renderWaitNow: $("renderWaitNow"),
   aiPanel: $("aiPanel"),
@@ -122,8 +123,8 @@ const state = {
   // which is what the time estimate is made from. null until there is one.
   renderSpeed: null,
   renderSpeedAt: "",
-  // The Media Source player a segmented render is watched through, how far that
-  // render has got, and what the <video> currently has attached.
+  // What draws a render's boxes over the video, how far that render has got,
+  // and which video the <video> currently has loaded.
   renderStream: null,
   renderProcessedS: 0,
   attached: "",
@@ -754,15 +755,17 @@ function renderRenderList() {
 // more to encode and a request that silent for that long gets dropped.
 // ---------------------------------------------------------------------------
 
-// Measured over a whole 25-minute flight with NVENC: 286 MB in 83 seconds.
-const SMALL_EXPORT_MB_PER_MIN = 11.3;
-const SMALL_EXPORT_S_PER_MIN = 3.3;
+// Per minute of video, measured with NVENC on a 1080p30 flight: the boxes are
+// drawn into every frame of the original as it is encoded.
+const FULL_EXPORT_MB_PER_MIN = 57;
+const SMALL_EXPORT_MB_PER_MIN = 19;
+const EXPORT_S_PER_MIN = 17;
 
 // Why a render cannot be saved, or "" when it can. A render made from a video
 // or model that has changed since still plays, so it still saves.
 function exportBlocker(render) {
   if (state.ffmpeg === false) return "ต้องมี ffmpeg ในเครื่องจึงจะบันทึก MP4 ได้";
-  if (render.format !== "mp4" && !(Number(render.processed_ms) > 0)) {
+  if (!(Number(render.processed_ms) > 0)) {
     return "ยังไม่มีภาพที่ประมวลผลเสร็จให้บันทึก";
   }
   return "";
@@ -778,21 +781,21 @@ function buildExportPanel(render) {
   const minutes = (Number(render.processed_ms) || 0) / 60000;
   const note = document.createElement("span");
   note.className = "render-export-note";
-  note.textContent = render.status === "complete" || render.format === "mp4"
-    ? "บันทึกเป็นไฟล์ MP4 ไฟล์เดียว ดาวน์โหลดผ่านเบราว์เซอร์"
-    : `ไฟล์จะมีเฉพาะส่วนที่ประมวลผลแล้ว (${renderPercent(render)}%)`;
+  const takes = formatDuration(Math.max(5, minutes * EXPORT_S_PER_MIN));
+  note.textContent = render.status === "complete"
+    ? `บันทึกเป็นไฟล์ MP4 ไฟล์เดียว ใช้เวลาราว ${takes} ดาวน์โหลดผ่านเบราว์เซอร์`
+    : `ไฟล์จะมีเฉพาะส่วนที่ประมวลผลแล้ว (${renderPercent(render)}%) ใช้เวลาราว ${takes}`;
   panel.append(note);
   const options = [
     {
       quality: "full",
-      label: `คุณภาพเต็ม · ${formatBytes(Number(render.size_bytes) || 0)}`,
-      title: "ภาพเหมือนที่เห็นในแอป ไม่เข้ารหัสใหม่ เสร็จในไม่กี่วินาที",
+      label: `คุณภาพเต็ม · ~${formatBytes(minutes * FULL_EXPORT_MB_PER_MIN * 1024 * 1024)}`,
+      title: "ขนาดเท่าวิดีโอต้นฉบับ กรอบวาดลงในทุกเฟรม",
     },
     {
       quality: "small",
       label: `ไฟล์เล็ก 720p · ~${formatBytes(minutes * SMALL_EXPORT_MB_PER_MIN * 1024 * 1024)}`,
-      title: `ย่อเป็น 720p สำหรับส่งแชท ใช้เวลาราว ${
-        formatDuration(Math.max(5, minutes * SMALL_EXPORT_S_PER_MIN))}`,
+      title: "ย่อเป็น 720p สำหรับส่งแชท",
     },
   ];
   for (const option of options) {
@@ -1066,8 +1069,7 @@ function updateRenderControls() {
   ui.renderButton.textContent = match
     ? "เล่นวิดีโอ AI"
     : partial ? `ทำต่อจาก ${renderPercent(partial)}%` : "ประมวลผลด้วย AI";
-  ui.renderButton.disabled = !state.video || !model || playingMatch
-    || (!match && (busy || state.ffmpeg === false));
+  ui.renderButton.disabled = !state.video || !model || playingMatch || (!match && busy);
 }
 
 function describeRenderChoice() {
@@ -1109,8 +1111,6 @@ function describeRenderChoice() {
       `ประมวลผล ${partial.model} ที่ค่านี้ไว้ ${renderPercent(partial)}% แล้วหยุดไว้`
       + " — กด ทำต่อ เพื่อทำส่วนที่เหลือ",
     );
-  } else if (state.ffmpeg === false) {
-    setRenderStatus("ไม่พบ ffmpeg บนเครื่องนี้ จึงประมวลผลวิดีโอใหม่ไม่ได้ (ยังเล่นผลที่มีอยู่ได้)", true);
   } else {
     const frames = Number(state.video.frames) / renderSettings().stride;
     const estimate = state.renderSpeed && frames
@@ -1247,21 +1247,18 @@ async function selectVideo(videoId) {
   await refreshRenders({ autoplay: true });
 }
 
-// A render is segments the server keeps adding to while it works, not a file
-// that exists once it is finished, so it is played through Media Source instead
-// of by pointing the <video> at a URL. Renders made before segments are one MP4
-// and still play that way.
-function attachedKey(view) {
-  if (view === "rendered" && state.activeRender) return `render:${state.activeRender.render_id}`;
-  return `video:${state.video.id}`;
-}
-
+// The <video> always plays the original. A render is its boxes, drawn over it
+// by the overlay, so "วิดีโอ AI" and "ต้นฉบับ" are the same video with the boxes
+// on or off -- switching reloads nothing and keeps the moment exactly.
 function renderPlayer() {
   if (!state.renderStream) {
-    state.renderStream = TelemetryRenderPlayer.create(ui.video, {
-      fetchIndex: (render) => jsonFetch(`/api/renders/stream?${new URLSearchParams({ render })}`),
-      segmentUrl: (render, run, file) => (
-        `/api/renders/segment?${new URLSearchParams({ render, run, file })}`
+    state.renderStream = TelemetryTrackOverlay.create(ui.video, ui.boxOverlay, {
+      fetchTracks: (render, fromMs, toMs) => jsonFetch(
+        `/api/renders/tracks?${new URLSearchParams({
+          render,
+          from_ms: String(Math.round(fromMs)),
+          to_ms: String(Math.round(toMs)),
+        })}`,
       ),
       onState: applyStreamState,
     });
@@ -1322,8 +1319,9 @@ function describeWait(streamState) {
   return parts.join(" · ");
 }
 
-// Swaps what the <video> plays and keeps the moment on screen. The original and
-// its render share one timeline, so switching is a comparison, not a restart.
+// Puts the boxes on or takes them off, keeping the moment on screen. The
+// original is loaded once per video; only a new video or an explicit moment
+// moves the playhead.
 function showView(view, atSeconds = null, play = null) {
   if (!state.video) return;
   const target = view === "rendered" && state.activeRender ? "rendered" : "original";
@@ -1334,35 +1332,49 @@ function showView(view, atSeconds = null, play = null) {
   ui.viewOriginal.setAttribute("aria-pressed", String(target === "original"));
   ui.viewRendered.setAttribute("aria-pressed", String(target === "rendered"));
   renderRenderList();
-  const key = attachedKey(target);
+  const render = target === "rendered" ? state.activeRender : null;
+  const key = render ? `${state.video.id}|${render.render_id}` : state.video.id;
   if (state.attached === key && atSeconds === null) return;
   const resumeAt = atSeconds ?? (ui.video.currentTime || 0);
   const resume = play ?? (!ui.video.paused && !ui.video.ended);
+  const loaded = state.attached.split("|")[0] === state.video.id;
   state.attached = key;
-  const render = state.activeRender;
-  if (target === "rendered" && render && render.format !== "mp4") {
+  if (!loaded) {
+    ui.video.src = `/api/videos/source?${new URLSearchParams({ video: state.video.id })}`;
+    ui.video.load();
+  }
+  if (render) {
     // Cleared before the new render reports its own: left alone, the line below
     // the panel keeps saying how far the render just left behind had got.
     state.renderProcessedS = 0;
     ui.renderWait.hidden = false;
     ui.renderWaitText.textContent = "กำลังโหลดวิดีโอ AI…";
     ui.renderWaitNow.hidden = true;
-    renderPlayer().open(render.render_id, {
+    const open = () => renderPlayer().open(render.render_id, {
       startAt: resumeAt,
       autoplay: resume,
       durationMs: state.video.duration_ms,
     });
+    if (ui.video.readyState >= 1) {
+      if (Math.abs((ui.video.currentTime || 0) - resumeAt) > 0.05) ui.video.currentTime = resumeAt;
+      open();
+    } else {
+      ui.video.addEventListener("loadedmetadata", () => {
+        ui.video.currentTime = resumeAt;
+        open();
+      }, { once: true });
+    }
     return;
   }
   closeRenderPlayer();
-  ui.video.addEventListener("loadedmetadata", () => {
-    if (resumeAt > 0) ui.video.currentTime = Math.min(resumeAt, ui.video.duration || resumeAt);
+  const place = () => {
+    if (Math.abs((ui.video.currentTime || 0) - resumeAt) > 0.05) {
+      ui.video.currentTime = Math.min(resumeAt, ui.video.duration || resumeAt);
+    }
     if (resume) ui.video.play().catch(() => {});
-  }, { once: true });
-  ui.video.src = target === "rendered"
-    ? `/api/renders/video?${new URLSearchParams({ render: render.render_id })}`
-    : `/api/videos/source?${new URLSearchParams({ video: state.video.id })}`;
-  ui.video.load();
+  };
+  if (ui.video.readyState >= 1) place();
+  else ui.video.addEventListener("loadedmetadata", place, { once: true });
 }
 
 function chooseView(view) {

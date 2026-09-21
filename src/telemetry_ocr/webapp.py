@@ -28,12 +28,10 @@ from .pipeline import FramePacket, TelemetryPipeline
 from .public_share import DEFAULT_SHARE_PORT, ShareServer, ShareStore
 from .render_export import ExportBusy, ExportManager, ExportUnavailable
 from .render_job import (
-    LEGACY_FORMAT,
-    LEGACY_VIDEO_FILE,
+    TRACKS_FILE,
     RenderBusy,
     RenderManager,
     RenderSettings,
-    RenderUnavailable,
     is_current,
     made_from,
     read_meta,
@@ -299,15 +297,20 @@ def create_app(
     renders = (
         render_manager if render_manager is not None else RenderManager(output_dir / "renders")
     )
+
+    def library_video_path(video_id: str) -> Path | None:
+        found = library.get(video_id) if video_id else None
+        return found.path if found is not None else None
+
     exports = (
         export_manager
         if export_manager is not None
-        else ExportManager(renders, output_dir / "exports")
+        else ExportManager(renders, output_dir / "exports", video_path=library_video_path)
     )
     if renders.ffmpeg:
-        _LOG.info("Rendering encodes with %s", renders.ffmpeg)
+        _LOG.info("Renders are saved as MP4 with %s", renders.ffmpeg)
     else:
-        _LOG.warning("ffmpeg not found; videos cannot be rendered through a model")
+        _LOG.warning("ffmpeg not found; renders play but cannot be saved as MP4")
     # Captures read the original frame from the file on the server. What the
     # page shows may be the rendered video, whose boxes cover the OSD digits.
     source_frames = SourceFrames()
@@ -643,10 +646,7 @@ def create_app(
             if (
                 meta is not None
                 and is_current(meta, video.path, entry.path)
-                and (
-                    render_format(meta) != LEGACY_FORMAT
-                    or (directory / LEGACY_VIDEO_FILE).is_file()
-                )
+                and (directory / TRACKS_FILE).is_file()
             ):
                 # Already made from these exact files: play it rather than spend
                 # half an hour of GPU making it again.
@@ -667,8 +667,6 @@ def create_app(
             )
         except RenderBusy as exc:
             return web.json_response({"error": str(exc), "job": renders.status()}, status=409)
-        except RenderUnavailable as exc:
-            return web.json_response({"error": str(exc)}, status=503)
         return web.json_response({"job": job}, status=202)
 
     async def render_status(_: Any) -> Any:
@@ -684,41 +682,24 @@ def create_app(
             content_type="application/json",
         )
 
-    def legacy_video(render_id: str) -> Path:
-        directory = renders.directory(render_id.strip())
-        meta = read_meta(directory)
-        path = directory / LEGACY_VIDEO_FILE
-        if meta is None or meta.get("status") != "complete" or not path.is_file():
-            raise render_not_found()
-        return path
+    async def render_tracks(request: Any) -> Any:
+        """How far a render has got, and its boxes between two times, for the page to draw.
 
-    async def render_video(request: Any) -> Any:
-        """A render made before segments: one finished MP4, played as a file."""
-        path = await asyncio.to_thread(legacy_video, request.query.get("render", ""))
-        return LargeFileResponse(path, headers={"Cache-Control": "no-cache"})
-
-    async def render_stream(request: Any) -> Any:
-        """A render's finished segments, which the page polls while the render grows."""
+        The page asks for the stretch ahead of the playhead and asks again as the
+        render grows. A window is capped at two minutes: the page never needs
+        more, and a whole flight of boxes is megabytes.
+        """
         render_id = (request.query.get("render") or "").strip()
-        index = await asyncio.to_thread(renders.stream, render_id)
-        if index is None:
+        try:
+            from_ms = max(0.0, float(request.query.get("from_ms") or 0.0))
+            to_ms = float(request.query.get("to_ms") or from_ms + 120_000.0)
+        except ValueError as exc:
+            raise ValueError("from_ms and to_ms must be numbers") from exc
+        to_ms = min(max(from_ms, to_ms), from_ms + 120_000.0)
+        state = await asyncio.to_thread(renders.tracks, render_id, from_ms, to_ms)
+        if state is None:
             raise render_not_found()
-        return web.json_response(index, headers={"Cache-Control": "no-store"})
-
-    async def render_segment(request: Any) -> Any:
-        """One init or media segment. Only names a render writes are served."""
-        path = await asyncio.to_thread(
-            renders.segment_path,
-            (request.query.get("render") or "").strip(),
-            request.query.get("run", ""),
-            request.query.get("file", ""),
-        )
-        if path is None:
-            raise render_not_found()
-        # The same names come back when a render is made again, so never cached.
-        return web.FileResponse(
-            path, headers={"Cache-Control": "no-cache", "Content-Type": "video/mp4"}
-        )
+        return web.json_response(state, headers={"Cache-Control": "no-store"})
 
     async def start_export(request: Any) -> Any:
         """Join a render into one MP4 to download. The file is made, then fetched.
@@ -799,8 +780,8 @@ def create_app(
         server = share_state["server"]
         if server is not None:
             await server.stop()
-        # A render holds the GPU and an ffmpeg process. It is stopped before the
-        # server goes rather than being left running with nothing to report to.
+        # A render holds the GPU. It is stopped before the server goes rather
+        # than being left running with nothing to report to.
         await asyncio.to_thread(renders.shutdown)
         await asyncio.to_thread(exports.shutdown)
         await asyncio.to_thread(source_frames.close)
@@ -1343,9 +1324,7 @@ def create_app(
     app.router.add_delete("/api/renders", delete_render)
     app.router.add_get("/api/renders/current", render_status)
     app.router.add_delete("/api/renders/current", cancel_render)
-    app.router.add_get("/api/renders/video", render_video)
-    app.router.add_get("/api/renders/stream", render_stream)
-    app.router.add_get("/api/renders/segment", render_segment)
+    app.router.add_get("/api/renders/tracks", render_tracks)
     app.router.add_post("/api/renders/export", start_export)
     app.router.add_get("/api/renders/export", export_status)
     app.router.add_get("/api/renders/export/file", export_file)

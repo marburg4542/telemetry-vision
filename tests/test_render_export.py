@@ -15,33 +15,31 @@ try:
 except ImportError:  # pragma: no cover - the CPU test venv has it
     cv2 = None
 
-from _video_fixture import (
-    FakeDetector,
-    copying_export_runner,
-    write_fake_render,
-    write_test_video,
-)
+from _video_fixture import FakeDetector, FakeWriter, car, write_fake_render, write_test_video
 from telemetry_ocr.render_export import (
     ExportBusy,
     ExportManager,
     ExportUnavailable,
+    boxes_at,
+    encoder_args,
     export_filename,
-    ffmpeg_command,
-    join_run,
 )
 from telemetry_ocr.render_job import (
     SOFTWARE_ENCODER,
-    FfmpegEncoder,
     RenderManager,
     RenderSettings,
     find_ffmpeg,
     run_render,
 )
 
-copying_runner = copying_export_runner
-
-
 FLIGHT_META = {"video": "day 2/flight #1.avi", "model": "best50"}
+
+
+def box(track_id, x, label="car"):
+    return {
+        "x1": float(x), "y1": 10.0, "x2": float(x) + 20.0, "y2": 30.0,
+        "confidence": 0.8, "class_id": 0, "label": label, "track_id": track_id,
+    }
 
 
 class FilenameTests(unittest.TestCase):
@@ -57,51 +55,62 @@ class FilenameTests(unittest.TestCase):
         )
 
 
-class CommandTests(unittest.TestCase):
+class BoxPlacementTests(unittest.TestCase):
+    """The same cases tests/track-overlay.test.js holds the page's drawing to."""
+
     def setUp(self) -> None:
-        self._temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._temp.cleanup)
-        self.dir = Path(self._temp.name)
-
-    def test_segments_are_joined_in_order_after_their_init(self) -> None:
-        run = self.dir / "run-000"
-        run.mkdir()
-        for name, body in (("init.mp4", b"I"), ("seg_00000.m4s", b"A"), ("seg_00001.m4s", b"B")):
-            (run / name).write_bytes(body)
-        target = self.dir / "joined.mp4"
-        index_run = {
-            "run": "run-000",
-            "segments": [{"file": "seg_00000.m4s"}, {"file": "seg_00001.m4s"}],
+        # Every 3rd frame: car 1 moving right, car 2 arriving at 3, car 3 leaving
+        # after 0, and a box the tracker had not numbered yet at 3.
+        self.frames = [0, 3, 6]
+        self.boxes = {
+            0: [box(1, 0), box(3, 100)],
+            3: [box(1, 30), box(2, 200), box(None, 300)],
+            6: [box(1, 60), box(2, 200)],
         }
-        self.assertEqual(join_run(self.dir, index_run, target), 3)
-        self.assertEqual(target.read_bytes(), b"IAB")
 
-    def test_a_copy_keeps_the_stream_and_puts_the_index_first(self) -> None:
-        command = ffmpeg_command("ffmpeg", [self.dir / "run-000.mp4"], self.dir / "out.mp4", "full")
-        self.assertIn("copy", command)
-        self.assertNotIn("-vf", command)
-        self.assertIn("+faststart", command)
-        self.assertEqual(command[command.index("-i") + 1], str(self.dir / "run-000.mp4"))
+    def at(self, frame, frames=None, stride=3):
+        placed = boxes_at(frame, frames or self.frames, self.boxes, stride)
+        return {(item["track_id"], round(item["x1"], 3)) for item in placed}
 
-    def test_several_runs_are_read_through_the_concat_demuxer(self) -> None:
-        inputs = [self.dir / "run-000.mp4", self.dir / "run-001.mp4"]
-        command = ffmpeg_command("ffmpeg", inputs, self.dir / "out.mp4", "full")
-        self.assertIn("concat", command)
-        listing = (self.dir / "runs.txt").read_text(encoding="utf-8")
-        self.assertEqual(listing.count("file '"), 2)
-        self.assertLess(listing.index("run-000"), listing.index("run-001"))
+    def test_a_processed_frame_shows_its_own_boxes(self) -> None:
+        self.assertEqual(self.at(3), {(1, 30.0), (2, 200.0), (None, 300.0)})
 
-    def test_the_small_version_is_scaled_down_never_up_and_sized_for_a_chat(self) -> None:
+    def test_a_vehicle_on_both_sides_is_placed_between(self) -> None:
+        self.assertIn((1, 10.0), self.at(1))
+        self.assertIn((1, 20.0), self.at(2))
+
+    def test_one_seen_on_one_side_only_shows_for_the_nearer_half(self) -> None:
+        self.assertIn((3, 100.0), self.at(1), "leaving: still there just after")
+        self.assertNotIn(3, {track for track, _ in self.at(2)}, "gone before the next frame")
+        self.assertNotIn(2, {track for track, _ in self.at(1)}, "arriving: not yet")
+        self.assertIn((2, 200.0), self.at(2))
+        self.assertIn((None, 300.0), self.at(2), "an unnumbered box, from its side")
+        self.assertNotIn(None, {track for track, _ in self.at(1)})
+
+    def test_past_the_last_frame_the_boxes_are_held_one_stride(self) -> None:
+        self.assertEqual(self.at(8), {(1, 60.0), (2, 200.0)})
+        self.assertEqual(self.at(9), set())
+        self.assertEqual(boxes_at(0, [], {}, 3), [])
+
+    def test_frames_not_processed_are_not_bridged(self) -> None:
+        # A gap wider than the stride: frames 0 and 9 only, as after a stop.
+        frames = [0, 9]
+        self.boxes[9] = [box(1, 90)]
+        self.assertEqual(self.at(2, frames), {(1, 0.0), (3, 100.0)})
+        self.assertEqual(self.at(4, frames), set())
+
+
+class EncoderArgsTests(unittest.TestCase):
+    def test_full_keeps_the_encoder_and_small_is_scaled_down_never_up(self) -> None:
         nvenc = ("h264_nvenc", ("-c:v", "h264_nvenc", "-rc", "vbr", "-cq", "27", "-maxrate", "8M"))
-        command = ffmpeg_command(
-            "ffmpeg", [self.dir / "a.mp4"], self.dir / "out.mp4", "small", nvenc
-        )
-        self.assertIn("scale=-2:'min(720,ih)'", command)
+        self.assertEqual(encoder_args("full", nvenc)[:8], list(nvenc[1]))
+        small = encoder_args("small", nvenc)
+        self.assertIn("scale=-2:'min(720,ih)'", small)
         # The render's own quality settings go; the chat preset's replace them.
-        self.assertNotIn("27", command)
-        self.assertNotIn("8M", command)
-        self.assertEqual(command[command.index("-cq") + 1], "30")
-        self.assertIn("vbr", command, "NVENC's rate mode is kept for -cq to mean anything")
+        self.assertNotIn("27", small)
+        self.assertNotIn("8M", small)
+        self.assertEqual(small[small.index("-cq") + 1], "30")
+        self.assertIn("vbr", small, "NVENC's rate mode is kept for -cq to mean anything")
 
 
 @unittest.skipIf(cv2 is None, "OpenCV is required")
@@ -115,7 +124,19 @@ class ExportManagerTests(unittest.TestCase):
         self.model.write_bytes(b"checkpoint")
         self.renders = RenderManager(self.dir / "renders", ffmpeg="ffmpeg-for-tests")
         self.exports_root = self.dir / "exports"
-        self.exports = ExportManager(self.renders, self.exports_root, runner=copying_runner)
+        self.exports = self.manager()
+        FakeWriter.instances.clear()
+
+    def manager(self, video_path=None, writer=FakeWriter) -> ExportManager:
+        return ExportManager(
+            self.renders,
+            self.exports_root,
+            video_path=video_path or self.video_of,
+            writer_factory=writer,
+        )
+
+    def video_of(self, video_id: str) -> Path | None:
+        return self.video if video_id == "flight.avi" else None
 
     def fake_render(self, render_id: str = "flight__best50", **options) -> str:
         write_fake_render(
@@ -128,26 +149,35 @@ class ExportManagerTests(unittest.TestCase):
         )
         return render_id
 
-    def wait(self, export_id: str) -> dict:
+    def wait(self, export_id: str, exports=None) -> dict:
+        exports = exports or self.exports
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            status = self.exports.status(export_id)
+            status = exports.status(export_id)
             if status and status["status"] != "running":
                 return status
             time.sleep(0.02)
-        self.fail(f"export never finished: {self.exports.status(export_id)}")
+        self.fail(f"export never finished: {exports.status(export_id)}")
 
-    def test_an_export_is_made_handed_over_and_then_removed(self) -> None:
-        job = self.exports.start(self.fake_render(), "full")
+    def test_every_frame_of_the_original_is_written_with_its_boxes(self) -> None:
+        detections = {4: [car(1, x=40.0)], 6: [car(1, x=60.0)]}
+        render_id = self.fake_render(stride=2, detections=detections)
+        job = self.exports.start(render_id, "full")
         status = self.wait(job["id"])
-        self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["status"], "ready", status["error"])
         self.assertEqual(status["filename"], "flight__best50__AI.mp4")
-        path, name = self.exports.ready_file(job["id"])
-        self.assertTrue(path.is_file())
-        # The init segment followed by the one media segment, joined.
+        writer = FakeWriter.instances[0]
+        # All 20 frames, at the source's rate: not one per processed frame.
+        self.assertEqual(len(writer.frames), 20)
+        self.assertEqual(writer.fps, 10.0)
+        self.assertEqual((writer.width, writer.height), (160, 120))
+        # Frame 1 has no box (nothing at 0 or 2); frame 5 has the car half-way
+        # between where it was at 4 and at 6.
+        clean, boxed = writer.frames[1], writer.frames[5]
+        self.assertTrue((clean == clean[0, 0]).all(), "a frame with no box was drawn on")
+        self.assertFalse((boxed == boxed[0, 0]).all(), "the box between two frames is missing")
+        path, _ = self.exports.ready_file(job["id"])
         self.assertEqual(status["size_bytes"], path.stat().st_size)
-        self.assertEqual([p.name for p in path.parent.iterdir()], [name], "joined runs left behind")
-
         self.exports.finished(job["id"])
         self.assertFalse(path.exists())
         self.assertIsNone(self.exports.status(job["id"]))
@@ -158,15 +188,18 @@ class ExportManagerTests(unittest.TestCase):
         status = self.wait(self.exports.start(render_id, "small")["id"])
         self.assertEqual(status["status"], "ready")
         self.assertEqual(status["filename"], "flight__best50__AI-720p_partial-40%.mp4")
+        self.assertEqual(len(FakeWriter.instances[0].frames), 8)
+        self.assertEqual(FakeWriter.instances[0].quality, "small")
 
     def test_one_export_at_a_time(self) -> None:
         gate = threading.Event()
 
-        def slow(command, duration_s, progress):
-            gate.wait(5)
-            copying_runner(command, duration_s, progress)
+        class SlowWriter(FakeWriter):
+            def write(self, frame):
+                gate.wait(5)
+                super().write(frame)
 
-        exports = ExportManager(self.renders, self.exports_root, runner=slow)
+        exports = self.manager(writer=SlowWriter)
         render_id = self.fake_render()
         first = exports.start(render_id, "full")
         try:
@@ -183,11 +216,17 @@ class ExportManagerTests(unittest.TestCase):
             self.exports.start("never-rendered", "full")
         with self.assertRaises(ValueError):
             self.exports.start(self.fake_render(), "huge")
-        without = ExportManager(
-            RenderManager(self.dir / "renders", ffmpeg=""), self.exports_root, runner=copying_runner
+        # The boxes are drawn onto the original, so without it there is nothing.
+        without_video = self.manager(video_path=lambda video_id: None)
+        with self.assertRaises(ExportUnavailable):
+            without_video.start(self.fake_render(), "full")
+        without_ffmpeg = ExportManager(
+            RenderManager(self.dir / "renders", ffmpeg=""),
+            self.exports_root,
+            video_path=lambda video_id: self.video,
         )
         with self.assertRaises(ExportUnavailable):
-            without.start(self.fake_render(), "full")
+            without_ffmpeg.start(self.fake_render(), "full")
 
     def test_an_id_that_is_not_one_of_ours_finds_nothing(self) -> None:
         for bad in ("", "../renders", "0" * 31, "g" * 32):
@@ -196,30 +235,28 @@ class ExportManagerTests(unittest.TestCase):
                 self.assertIsNone(self.exports.ready_file(bad))
 
     def test_a_failed_export_says_why_and_leaves_nothing(self) -> None:
-        def broken(command, duration_s, progress):
-            raise RuntimeError("ffmpeg exited with code 1: no space left")
+        class BrokenWriter(FakeWriter):
+            def write(self, frame):
+                raise RuntimeError("ffmpeg exited with code 1: no space left")
 
-        exports = ExportManager(self.renders, self.exports_root, runner=broken)
+        exports = self.manager(writer=BrokenWriter)
         job = exports.start(self.fake_render(), "full")
-        deadline = time.monotonic() + 10
-        while exports.status(job["id"])["status"] == "running" and time.monotonic() < deadline:
-            time.sleep(0.02)
-        status = exports.status(job["id"])
+        status = self.wait(job["id"], exports)
         self.assertEqual(status["status"], "error")
         self.assertIn("no space left", status["error"])
+        self.assertTrue(BrokenWriter.instances[-1].aborted)
         self.assertFalse((self.exports_root / job["id"]).exists())
 
 
 @unittest.skipIf(cv2 is None or find_ffmpeg() is None, "needs ffmpeg and OpenCV")
 class RealExportTests(unittest.TestCase):
-    """The whole path with ffmpeg: a render stopped and continued, exported as one file."""
+    """The whole path with ffmpeg: a render stopped and continued, saved both ways."""
 
-    def test_two_runs_become_one_playable_video_both_ways(self) -> None:
+    def test_a_continued_render_becomes_one_playable_video_both_ways(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             video = write_test_video(root / "flight.avi", frames=40)
             out = root / "renders" / "flight__best50"
-            ffmpeg = find_ffmpeg()
             seen = {"n": 0}
 
             def cancel_after_twenty() -> bool:
@@ -230,19 +267,18 @@ class RealExportTests(unittest.TestCase):
                 run_render(
                     video=str(video),
                     output_dir=str(out),
-                    settings={"confidence": 0.45, "iou": 0.45, "image_size": 640, "stride": 1},
+                    settings={"confidence": 0.45, "iou": 0.45, "image_size": 640, "stride": 3},
                     meta={"render_id": "flight__best50", "video": "flight.avi", "model": "best50"},
                     detector=FakeDetector(),
-                    encoder_factory=lambda run_dir, w, h, fps: FfmpegEncoder(
-                        ffmpeg, run_dir, w, h, fps
-                    ),
                     publish=lambda message: None,
                     cancelled=cancelled,
                 )
-            self.assertTrue((out / "run-001").is_dir(), "the render was not continued")
 
-            renders = RenderManager(root / "renders", ffmpeg=ffmpeg)
-            exports = ExportManager(renders, root / "exports", encoder=SOFTWARE_ENCODER)
+            renders = RenderManager(root / "renders", ffmpeg=find_ffmpeg())
+            exports = ExportManager(
+                renders, root / "exports", video_path=lambda video_id: video,
+                encoder=SOFTWARE_ENCODER,
+            )
             for quality in ("full", "small"):
                 with self.subTest(quality=quality):
                     job = exports.start("flight__best50", quality)
@@ -259,7 +295,8 @@ class RealExportTests(unittest.TestCase):
                     while capture.read()[0]:
                         frames += 1
                     capture.release()
-                    self.assertEqual(frames, 40, "both runs are in the file, once each")
+                    # Every frame of the original, at every 3rd frame tracked.
+                    self.assertEqual(frames, 40)
                     # 120 px high already: the small version must not scale it up.
                     self.assertEqual(height, 120)
                     exports.finished(job["id"])

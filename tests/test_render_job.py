@@ -22,26 +22,23 @@ try:
 except ImportError:  # pragma: no cover - the CPU test venv has both
     cv2 = None
 
-from _video_fixture import FakeDetector, FakeEncoder, ThreadHandle, thread_launcher
+from _video_fixture import FakeDetector, ThreadHandle, thread_launcher, write_fake_render
 from telemetry_ocr import render_job
 from telemetry_ocr.render_job import (
-    INIT_FILE,
-    LEGACY_VIDEO_FILE,
     META_FILE,
-    PLAYLIST_FILE,
     TRACKER_FILE,
     TRACKS_FILE,
     RenderBusy,
     RenderManager,
     RenderSettings,
-    RenderUnavailable,
+    TrackIndex,
     is_current,
+    last_frame,
     read_meta,
-    read_playlist,
     render_id_for,
+    render_state,
     run_render,
     settle_render,
-    stream_index,
     tracker_config,
 )
 from telemetry_ocr.video_library import SourceFrames, VideoLibrary
@@ -85,7 +82,6 @@ class RunRenderTests(unittest.TestCase):
         write_video(self.video)
         self.out = self.dir / "render"
         self.messages: list[dict] = []
-        FakeEncoder.instances.clear()
 
     def render(
         self,
@@ -93,7 +89,6 @@ class RunRenderTests(unittest.TestCase):
         cancelled=lambda: False,
         video=None,
         detector=None,
-        encoder=FakeEncoder,
         meta=None,
         fresh=False,
     ):
@@ -103,7 +98,6 @@ class RunRenderTests(unittest.TestCase):
             settings=_asdict(settings),
             meta=meta or {"render_id": "x", "video": "flight.avi"},
             detector=detector or FakeDetector(),
-            encoder_factory=encoder,
             publish=self.messages.append,
             cancelled=cancelled,
             fresh=fresh,
@@ -113,33 +107,31 @@ class RunRenderTests(unittest.TestCase):
         text = (self.out / TRACKS_FILE).read_text(encoding="utf-8")
         return [json.loads(line) for line in text.splitlines()]
 
-    def test_every_frame_is_tracked_encoded_and_recorded(self) -> None:
+    def test_every_frame_is_tracked_and_recorded_and_nothing_else_written(self) -> None:
         self.render()
         lines = self.lines()
         self.assertEqual(len(lines), FRAMES)
         self.assertEqual(lines[0]["frame_index"], 0)
         self.assertEqual(lines[0]["detections"][0]["track_id"], 7)
         self.assertEqual(lines[5]["time_ms"], 500.0)
-        encoder = FakeEncoder.instances[0]
-        self.assertEqual(encoder.frames, FRAMES)
-        self.assertFalse(encoder.closed_with_abort)
         meta = read_meta(self.out)
         self.assertEqual(meta["status"], "complete")
-        self.assertEqual(meta["format"], "hls")
+        self.assertEqual(meta["format"], "tracks")
         self.assertEqual(meta["frames_written"], FRAMES)
         self.assertEqual(meta["video"], "flight.avi")
-        self.assertEqual([run["dir"] for run in meta["runs"]], ["run-000"])
-        self.assertTrue((self.out / "run-000" / INIT_FILE).is_file())
-        # Watchable as it goes: four-frame segments on the source timeline.
-        index = stream_index(self.out, meta)
-        self.assertTrue(index["complete"])
-        starts = [segment["start_ms"] for segment in index["runs"][0]["segments"]]
-        self.assertEqual(starts, [0.0, 400.0, 800.0])
-        self.assertEqual(index["processed_ms"], 1200.0)
+        self.assertEqual([run["start_frame"] for run in meta["runs"]], [0])
+        # The boxes are the render: no video is drawn or encoded beside them.
+        self.assertEqual(
+            sorted(path.name for path in self.out.iterdir()),
+            sorted([META_FILE, TRACKS_FILE, TRACKER_FILE]),
+        )
+        state = render_state(self.out, meta)
+        self.assertTrue(state["complete"])
+        self.assertEqual(state["processed_ms"], 1200.0)
         self.assertEqual(self.messages[0]["kind"], "started")
         self.assertEqual(self.messages[-1]["kind"], "complete")
         # Where the time went, so a slow render says which stage to fix.
-        self.assertEqual(set(meta["stages_ms"]), {"decode", "track", "draw", "encode"})
+        self.assertEqual(set(meta["stages_ms"]), {"decode", "track"})
 
     def test_the_tracker_is_this_project_s_settings_with_reid_on(self) -> None:
         # Ultralytics' defaults track by motion alone, so a vehicle that goes
@@ -170,24 +162,26 @@ class RunRenderTests(unittest.TestCase):
                 self.assertAlmostEqual(values["new_track_thresh"], new_track)
         self.assertTrue(tracker_config().endswith("botsort.yaml"), "the shared file itself")
 
-    def test_a_stride_keeps_every_nth_frame_and_halves_the_rate(self) -> None:
+    def test_a_stride_keeps_every_nth_frame(self) -> None:
         self.render(RenderSettings(stride=2))
         self.assertEqual([line["frame_index"] for line in self.lines()], list(range(0, FRAMES, 2)))
-        self.assertAlmostEqual(FakeEncoder.instances[0].fps, FPS / 2)
         meta = read_meta(self.out)
         self.assertEqual(meta["source_frames"], FRAMES)
-        self.assertEqual(stream_index(self.out, meta)["processed_ms"], 1200.0)
+        self.assertEqual(render_state(self.out, meta)["processed_ms"], 1200.0)
 
-    def test_cancelling_keeps_what_was_rendered_to_watch(self) -> None:
+    def test_cancelling_keeps_what_was_tracked(self) -> None:
         self.render(cancelled=_cancel_after(5))
         self.assertEqual(self.messages[-1], {"kind": "cancelled", "kept": True})
-        # Closed, not killed: ffmpeg finishes the segment it holds.
-        self.assertFalse(FakeEncoder.instances[0].closed_with_abort)
         meta = read_meta(self.out)
         self.assertEqual(meta["status"], "partial")
         self.assertEqual(meta["next_frame"], 5)
-        self.assertEqual(stream_index(self.out, meta)["processed_ms"], 500.0)
+        self.assertEqual(render_state(self.out, meta)["processed_ms"], 500.0)
         self.assertEqual(len(self.lines()), 5)
+
+    def test_at_a_stride_the_boxes_cover_the_frames_until_the_next(self) -> None:
+        self.render(RenderSettings(stride=3), cancelled=_cancel_after(7))
+        # Frames 0, 3 and 6 tracked; 6 covers 6, 7 and 8.
+        self.assertEqual(render_state(self.out, read_meta(self.out))["processed_ms"], 900.0)
 
     def test_a_partial_render_continues_where_it_stopped(self) -> None:
         self.render(cancelled=_cancel_after(5))
@@ -195,10 +189,7 @@ class RunRenderTests(unittest.TestCase):
         self.render(detector=second)
         meta = read_meta(self.out)
         self.assertEqual(meta["status"], "complete")
-        self.assertEqual(
-            [(run["dir"], run["start_frame"]) for run in meta["runs"]],
-            [("run-000", 0), ("run-001", 5)],
-        )
+        self.assertEqual([run["start_frame"] for run in meta["runs"]], [0, 5])
         lines = self.lines()
         self.assertEqual([line["frame_index"] for line in lines], list(range(FRAMES)))
         # The tracker restarts at 7 in the new run; its ids move past those used.
@@ -206,36 +197,41 @@ class RunRenderTests(unittest.TestCase):
         self.assertEqual({line["detections"][0]["track_id"] for line in lines[5:]}, {14})
         # It really read on from frame 5 (brightness 100), not from the start.
         self.assertAlmostEqual(second.brightness[0], 5 * 20, delta=6)
-        self.assertEqual(FakeEncoder.instances[1].frames, FRAMES - 5)
+        self.assertEqual(second.calls, FRAMES - 5)
         self.assertEqual(meta["frames_written"], FRAMES)
-        index = stream_index(self.out, meta)
-        self.assertEqual([run["start_ms"] for run in index["runs"]], [0.0, 500.0])
-        self.assertEqual(index["processed_ms"], 1200.0)
 
-    def test_a_killed_encoder_keeps_only_whole_segments_and_redoes_the_rest(self) -> None:
-        class DyingEncoder(FakeEncoder):
-            def write(self, frame) -> None:
-                if self.frames == 6:
-                    raise render_job.EncoderFailed("ffmpeg stopped accepting frames")
-                super().write(frame)
-
-        with self.assertRaises(render_job.EncoderFailed):
-            self.render(encoder=DyingEncoder)
-        self.assertTrue(FakeEncoder.instances[0].closed_with_abort)
+    def test_a_killed_render_continues_after_its_last_whole_line(self) -> None:
+        # What a killed child leaves: a meta still saying "running" from when it
+        # started, and tracks up to the line it was writing.
+        self.render(cancelled=_cancel_after(6))
         meta = read_meta(self.out)
-        self.assertEqual(meta["status"], "partial")
-        # One whole four-frame segment; frames 4 and 5 were tracked but lost.
-        self.assertEqual(meta["next_frame"], 4)
-        self.assertEqual(len(self.lines()), 6)
-
+        meta.update(status="running", next_frame=0)
+        (self.out / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
+        with (self.out / TRACKS_FILE).open("a", encoding="utf-8") as tracks:
+            tracks.write('{"frame_index": 6, "time_ms": 600.0, "detec')
         self.render()
         self.assertEqual([line["frame_index"] for line in self.lines()], list(range(FRAMES)))
-        self.assertEqual(read_meta(self.out)["runs"][1]["start_frame"], 4)
+        self.assertEqual(read_meta(self.out)["runs"][1]["start_frame"], 6)
+
+    def test_a_render_made_with_video_segments_continues_as_tracks(self) -> None:
+        # Renders from before the page drew the boxes: format "hls", run folders.
+        self.render(cancelled=_cancel_after(4))
+        meta = read_meta(self.out)
+        meta.update(format="hls", runs=[{"dir": "run-000", "start_frame": 0}])
+        (self.out / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
+        (self.out / "run-000").mkdir()
+        (self.out / "run-000" / "seg_00000.m4s").write_bytes(b"old")
+        self.render()
+        meta = read_meta(self.out)
+        self.assertEqual(meta["format"], "tracks")
+        self.assertEqual([line["frame_index"] for line in self.lines()], list(range(FRAMES)))
+        # Its old video is left where it is, not cleared by continuing it.
+        self.assertTrue((self.out / "run-000" / "seg_00000.m4s").is_file())
 
     def test_other_files_or_settings_start_over(self) -> None:
         self.render(cancelled=_cancel_after(5), meta={"render_id": "x", "video_fingerprint": 1})
         self.render(meta={"render_id": "x", "video_fingerprint": 2})
-        self.assertEqual([run["dir"] for run in read_meta(self.out)["runs"]], ["run-000"])
+        self.assertEqual([run["start_frame"] for run in read_meta(self.out)["runs"]], [0])
         self.assertEqual(len(self.lines()), FRAMES)
 
         self.render(cancelled=_cancel_after(5), fresh=True)
@@ -247,21 +243,13 @@ class RunRenderTests(unittest.TestCase):
         self.render(cancelled=_cancel_after(5))
         self.render(fresh=True)
         meta = read_meta(self.out)
-        self.assertEqual([run["dir"] for run in meta["runs"]], ["run-000"])
+        self.assertEqual([run["start_frame"] for run in meta["runs"]], [0])
         self.assertEqual(len(self.lines()), FRAMES)
 
     def test_a_render_that_finished_nothing_leaves_no_folder(self) -> None:
         self.render(cancelled=lambda: True)
         self.assertEqual(self.messages[-1], {"kind": "cancelled", "kept": False})
         self.assertFalse(self.out.exists())
-
-    def test_odd_dimensions_are_cropped_for_the_encoder(self) -> None:
-        odd = self.dir / "odd.avi"
-        write_video(odd, width=65, height=49)
-        self.render(video=odd)
-        encoder = FakeEncoder.instances[0]
-        self.assertEqual((encoder.width, encoder.height), (64, 48))
-        self.assertEqual(encoder.shapes[0][:2], (48, 64))
 
     def test_an_unreadable_video_is_an_error(self) -> None:
         broken = self.dir / "broken.avi"
@@ -279,30 +267,9 @@ class RunRenderTests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             self.render(detector=FailingDetector())
-        self.assertFalse(FakeEncoder.instances[0].closed_with_abort)
         meta = read_meta(self.out)
         self.assertEqual(meta["status"], "partial")
         self.assertEqual(meta["next_frame"], 3)
-
-
-class PlaylistTests(unittest.TestCase):
-    def test_only_the_segments_the_playlist_names_are_listed(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / PLAYLIST_FILE
-            # As ffmpeg leaves it mid-render: an EVENT playlist with no end.
-            path.write_text(
-                "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:2\n"
-                "#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:EVENT\n"
-                '#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI="init.mp4"\n'
-                "#EXTINF:2.000000,\nseg_00000.m4s\n"
-                "#EXTINF:1.933333,\nseg_00001.m4s\n"
-                "#EXTINF:2.000000,\n../escape.m4s\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(
-                read_playlist(path), [("seg_00000.m4s", 2.0), ("seg_00001.m4s", 1.933333)]
-            )
-            self.assertEqual(read_playlist(Path(temp) / "missing.m3u8"), [])
 
 
 class TrackIndexTests(unittest.TestCase):
@@ -336,6 +303,44 @@ class TrackIndexTests(unittest.TestCase):
             self.assertEqual(index.at(0)[0]["track_id"], 9)
             self.assertIsNone(index.at(1))
 
+    def test_a_range_of_frames_comes_back_compact_and_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / TRACKS_FILE
+            boxes = {
+                "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0,
+                "confidence": 0.9, "class_id": 1, "label": "truck", "track_id": 5,
+            }
+            path.write_text(
+                "".join(
+                    json.dumps({"frame_index": frame, "time_ms": frame * 100.0,
+                                "detections": [boxes] if frame == 4 else []}) + "\n"
+                    for frame in range(0, 10, 2)
+                ),
+                encoding="utf-8",
+            )
+            index = TrackIndex(path)
+            index.refresh()
+            self.assertEqual(
+                index.between(3, 6), [[4, [[1.0, 2.0, 3.0, 4.0, 0.9, 1, 5, "truck"]]], [6, []]]
+            )
+            self.assertEqual([row[0] for row in index.between(7)], [8])
+            self.assertEqual(index.between(20, 30), [])
+            self.assertEqual(last_frame(path), 8)
+
+    def test_the_last_frame_is_the_last_whole_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / TRACKS_FILE
+            self.assertIsNone(last_frame(path), "no file")
+            path.write_text('{"frame_index": 0, "de', encoding="utf-8")
+            self.assertIsNone(last_frame(path), "only a line being written")
+            # Long lines, so the answer is not in the last block read.
+            long_line = json.dumps({"frame_index": 3, "detections": ["x" * 90_000]}) + "\n"
+            path.write_text(
+                json.dumps({"frame_index": 2}) + "\n" + long_line + '{"frame_index": 4, "d',
+                encoding="utf-8",
+            )
+            self.assertEqual(last_frame(path), 3)
+
 
 @unittest.skipIf(cv2 is None, "OpenCV is required")
 class RenderManagerTests(unittest.TestCase):
@@ -356,7 +361,6 @@ class RenderManagerTests(unittest.TestCase):
             ffmpeg="ffmpeg-for-tests",
         )
         self.addCleanup(self.gate.set)
-        FakeEncoder.instances.clear()
 
     def start(self, settings: RenderSettings | None = None, manager=None) -> dict:
         settings = settings or RenderSettings()
@@ -419,28 +423,27 @@ class RenderManagerTests(unittest.TestCase):
         self.assertEqual(frames, list(range(FRAMES)))
         self.assertEqual(self.manager.renders()[0]["status"], "complete")
 
-    def test_a_render_process_that_died_keeps_its_finished_segments(self) -> None:
+    def test_a_render_process_that_died_keeps_what_it_tracked(self) -> None:
         settings = RenderSettings()
         render_id = render_id_for("flight.avi", "best50", settings)
 
-        def launch_that_dies(segment_frames: int):
+        def launch_that_dies(tracked: int):
             def launch(job):
                 # What a killed process leaves: a meta still saying "running" and
-                # whatever segments ffmpeg had finished.
+                # the frames it had written.
                 output = Path(job["output_dir"])
-                (output / "run-000").mkdir(parents=True)
-                encoder = FakeEncoder(output / "run-000", 64, 48, FPS)
-                for _ in range(segment_frames):
-                    encoder.write(np.zeros((48, 64, 3), dtype=np.uint8))
+                output.mkdir(parents=True)
+                with (output / TRACKS_FILE).open("w", encoding="utf-8") as tracks:
+                    for frame in range(tracked):
+                        tracks.write(json.dumps({"frame_index": frame, "detections": []}) + "\n")
                 meta = {
                     **job["meta"],
-                    "format": "hls",
+                    "format": "tracks",
                     "status": "running",
                     "settings": job["settings"],
                     "source_fps": FPS,
-                    "fps": FPS,
                     "stride": 1,
-                    "runs": [{"dir": "run-000", "start_frame": 0, "track_id_offset": 0}],
+                    "runs": [{"start_frame": 0, "track_id_offset": 0}],
                 }
                 (output / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
                 thread = threading.Thread(target=lambda: None)
@@ -452,16 +455,16 @@ class RenderManagerTests(unittest.TestCase):
 
             return RenderManager(self.dir / "renders", launcher=launch, ffmpeg="ffmpeg-for-tests")
 
-        manager = launch_that_dies(segment_frames=6)
+        manager = launch_that_dies(tracked=6)
         self.start(manager=manager)
         job = manager.status()
         self.assertEqual(job["status"], "error")
         self.assertTrue(job["kept"])
-        self.assertEqual(read_meta(manager.directory(render_id))["next_frame"], 4)
+        self.assertEqual(read_meta(manager.directory(render_id))["next_frame"], 6)
         self.assertEqual(manager.renders()[0]["status"], "partial")
         manager.delete(render_id)
 
-        manager = launch_that_dies(segment_frames=2)
+        manager = launch_that_dies(tracked=0)
         self.start(manager=manager)
         self.assertEqual(manager.status()["status"], "error")
         self.assertFalse(manager.directory(render_id).exists())
@@ -474,62 +477,53 @@ class RenderManagerTests(unittest.TestCase):
         self.assertEqual(settle_render(directory), "complete")
         self.assertEqual(len(self.manager.renders()), 1)
 
-    def test_the_stream_lists_segments_and_serves_only_names_renders_write(self) -> None:
+    def test_the_tracks_of_a_window_come_with_how_far_the_render_got(self) -> None:
         self.gate.set()
-        render_id = self.start()["render_id"]
+        render_id = self.start(RenderSettings(stride=2))["render_id"]
         self.wait_for("complete")
-        stream = self.manager.stream(render_id)
-        self.assertEqual(stream["format"], "hls")
-        self.assertTrue(stream["complete"])
-        self.assertEqual(len(stream["runs"][0]["segments"]), 3)
-        self.assertIsNone(self.manager.stream("never-rendered"))
-        self.assertIsNotNone(self.manager.segment_path(render_id, "run-000", INIT_FILE))
-        self.assertIsNotNone(self.manager.segment_path(render_id, "run-000", "seg_00000.m4s"))
-        for run, file in (
-            ("run-000", PLAYLIST_FILE),
-            ("run-000", "../meta.json"),
-            ("..", "seg_00000.m4s"),
-            ("run-0", "seg_00000.m4s"),
-            ("run-000", "seg_00099.m4s"),
-            ("run-000", "seg_00000.m4s.tmp"),
-        ):
-            with self.subTest(run=run, file=file):
-                self.assertIsNone(self.manager.segment_path(render_id, run, file))
+        answer = self.manager.tracks(render_id, 300.0, 700.0)
+        self.assertTrue(answer["complete"])
+        self.assertEqual(answer["processed_ms"], 1200.0)
+        self.assertEqual(answer["stride"], 2)
+        self.assertEqual(answer["source_fps"], FPS)
+        # Frames 3 to 8 asked for; frames 4, 6 and 8 were tracked.
+        self.assertEqual([row[0] for row in answer["frames"]], [4, 6, 8])
+        *_, class_id, track_id, label = answer["frames"][0][1][0]
+        self.assertEqual((class_id, track_id, label), (0, 7, "car"))
+        self.assertIsNone(self.manager.tracks("never-rendered"))
 
-    def test_the_stream_says_how_fast_a_running_render_makes_video(self) -> None:
-        # Held at its first frame: running, with its playlist not yet written.
+    def test_the_tracks_say_how_fast_a_running_render_goes(self) -> None:
+        # Held at its first frame: running, with nothing tracked yet.
         render_id = self.start(RenderSettings(stride=2))["render_id"]
         self.wait_for("running")
         deadline = time.monotonic() + 10
-        while self.manager.stream(render_id) is None and time.monotonic() < deadline:
+        while self.manager.tracks(render_id) is None and time.monotonic() < deadline:
             time.sleep(0.02)
         with self.manager._lock:
-            self.manager._job["fps"] = 4.0  # frames written a second, as reported
+            self.manager._job["fps"] = 4.0  # frames tracked a second, as reported
         # Four frames a second at every second frame of a 10 fps source: 0.8 s of
         # video for each second of waiting.
-        self.assertAlmostEqual(self.manager.stream(render_id)["rate"], 0.8)
+        answer = self.manager.tracks(render_id)
+        self.assertAlmostEqual(answer["rate"], 0.8)
+        self.assertEqual(answer["status"], "running")
         self.gate.set()
         self.wait_for("complete")
-        self.assertIsNone(self.manager.stream(render_id)["rate"], "nothing left to wait for")
+        self.assertIsNone(self.manager.tracks(render_id)["rate"], "nothing left to wait for")
 
-    def test_a_render_from_before_segments_still_lists_and_plays(self) -> None:
-        directory = self.dir / "renders" / "old"
-        directory.mkdir(parents=True)
-        (directory / LEGACY_VIDEO_FILE).write_bytes(b"mp4")
-        (directory / META_FILE).write_text(
-            json.dumps(
-                {
-                    "render_id": "old",
-                    "video": "flight.avi",
-                    "status": "complete",
-                    "duration_ms": 1200.0,
-                }
-            ),
-            encoding="utf-8",
+    def test_a_render_made_with_video_segments_still_lists_and_plays(self) -> None:
+        directory = write_fake_render(
+            self.dir / "renders",
+            "old",
+            video_id="flight.avi",
+            video_path=self.video,
+            model_path=self.model,
+            segmented=True,
         )
         listed = self.manager.renders("flight.avi")
-        self.assertEqual([(item["render_id"], item["format"]) for item in listed], [("old", "mp4")])
-        self.assertEqual(self.manager.stream("old")["format"], "mp4")
+        self.assertEqual([(item["render_id"], item["format"]) for item in listed], [("old", "hls")])
+        # Its folder, video included: what deleting it gives back.
+        self.assertGreater(listed[0]["size_bytes"], (directory / TRACKS_FILE).stat().st_size)
+        self.assertEqual(len(self.manager.tracks("old")["frames"]), 20)
 
     def test_a_replaced_video_or_checkpoint_makes_a_render_stale(self) -> None:
         self.gate.set()
@@ -563,18 +557,22 @@ class RenderManagerTests(unittest.TestCase):
             with self.subTest(render_id=bad), self.assertRaises(ValueError):
                 self.manager.directory(bad)
 
-    def test_no_ffmpeg_is_reported_before_anything_starts(self) -> None:
+    def test_a_render_needs_no_ffmpeg(self) -> None:
+        # Only saving an MP4 encodes; tracking writes boxes.
         manager = RenderManager(self.dir / "renders", launcher=thread_launcher(), ffmpeg="")
-        with self.assertRaises(RenderUnavailable):
-            manager.start(
-                render_id="x",
-                video_id="flight.avi",
-                video_path=self.video,
-                model_name="best50",
-                model_label="best.pt",
-                model_path=self.model,
-                settings=RenderSettings(),
-            )
+        manager.start(
+            render_id="x",
+            video_id="flight.avi",
+            video_path=self.video,
+            model_name="best50",
+            model_label="best.pt",
+            model_path=self.model,
+            settings=RenderSettings(),
+        )
+        deadline = time.monotonic() + 10
+        while manager.status()["status"] != "complete" and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(manager.status()["status"], "complete")
 
     def test_settings_outside_the_offered_values_are_rejected(self) -> None:
         for bad in (
@@ -667,33 +665,6 @@ class FfmpegTests(unittest.TestCase):
                 self.assertEqual(render_job.find_ffmpeg(), str(fake))
             finally:
                 os.environ.pop("TELEMETRY_OCR_FFMPEG", None)
-
-    @unittest.skipIf(cv2 is None or render_job.find_ffmpeg() is None, "needs ffmpeg and OpenCV")
-    def test_the_encoder_writes_segments_that_play_on_their_own(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            run_dir = Path(temp)
-            ffmpeg = render_job.find_ffmpeg()
-            encoder = render_job.FfmpegEncoder(ffmpeg, run_dir, 64, 48, 10.0)
-            for index in range(45):
-                encoder.write(np.full((48, 64, 3), index * 5, dtype=np.uint8))
-            encoder.close()
-            segments = read_playlist(run_dir / PLAYLIST_FILE)
-            self.assertGreaterEqual(len(segments), 2)
-            self.assertAlmostEqual(sum(duration for _, duration in segments), 4.5, places=2)
-            self.assertTrue((run_dir / INIT_FILE).is_file())
-            for name, _ in segments:
-                self.assertTrue((run_dir / name).is_file(), name)
-            # The init segment and any one media segment make a playable video:
-            # what the page appends when it starts or seeks there.
-            joined = run_dir / "joined.mp4"
-            second = (run_dir / segments[1][0]).read_bytes()
-            joined.write_bytes((run_dir / INIT_FILE).read_bytes() + second)
-            capture = cv2.VideoCapture(str(joined))
-            count = 0
-            while capture.read()[0]:
-                count += 1
-            capture.release()
-            self.assertEqual(count, 20)
 
 
 class ImportBoundaryTests(unittest.TestCase):

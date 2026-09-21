@@ -1,45 +1,48 @@
 """Turn a render into one MP4 file that can be sent to someone.
 
-A render is kept as two-second fragmented-MP4 segments, one folder per run,
-because that is what lets it be watched while it is being made. Nobody can be
-sent that. An export joins the segments back into a single MP4 with its index at
-the front: either as they are -- a copy of the stream, which took 2.7 seconds for
-a 25-minute render -- or scaled to 720p and re-encoded, about a fifth of the size,
-for a chat that will not take a gigabyte.
+A render is the boxes the tracker found, one line per processed frame; the page
+draws them over the original video as it plays. Nobody can be sent that, so an
+export draws them into the video itself: every frame of the original is read,
+the boxes of that moment are placed on it -- between two processed frames, where
+the vehicle was on either side, exactly as the page places them -- and ffmpeg
+encodes the result at the source's own frame rate. Either at the source's size,
+or scaled to 720p and squeezed for a chat that will not take a gigabyte.
 
-Segments are joined by concatenating their bytes, not by handing ffmpeg the
-playlist. An fMP4 init segment followed by its media segments is itself a valid
-fragmented MP4; a playlist from a render that was stopped has no end marker, and
-ffmpeg's HLS reader takes that for a live stream and waits for more.
+Drawing costs the export what it saves the render: a 25-minute flight takes
+minutes to save rather than seconds. What it buys is renders that are nothing
+but tracks, a tracker that has the machine to itself, and a saved file as smooth
+as the original at every stride.
 
 The server holds PaddleOCR, so like render_job this module must not import torch.
-Exports run ffmpeg in a thread; one at a time, which is all a laptop GPU's
-encoder and a single disk want anyway.
+Exports run in a thread; one at a time, which is all a laptop GPU's encoder and
+a single disk want anyway.
 """
 
 from __future__ import annotations
 
+import bisect
 import logging
 import re
 import secrets
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .render_job import (
-    FORMAT,
-    INIT_FILE,
-    LEGACY_FORMAT,
-    LEGACY_VIDEO_FILE,
-    SOFTWARE_ENCODER,
+    TRACKS_FILE,
     RenderManager,
+    TrackIndex,
     choose_encoder,
     read_meta,
+    render_state,
+    with_track_ids,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -51,9 +54,7 @@ STALE_AFTER_S = 3600.0
 _EXPORT_ID = re.compile(r"[0-9a-f]{32}")
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
 
-# Size-for-a-chat settings per encoder. Measured with NVENC over a whole
-# 25-minute flight: 286 MB, about 11 MB a minute at 720p, against 945 MB for the
-# same render copied as it is.
+# Size-for-a-chat settings per encoder: about 11 MB a minute at 720p with NVENC.
 _SMALL_QUALITY: dict[str, tuple[str, ...]] = {
     "h264_nvenc": ("-cq", "30", "-maxrate", "3M", "-bufsize", "6M"),
     "h264_qsv": ("-global_quality", "30"),
@@ -62,7 +63,8 @@ _SMALL_QUALITY: dict[str, tuple[str, ...]] = {
 # The render encoder's own quality options, each followed by its value.
 _RATE_CONTROL = frozenset({"-cq", "-crf", "-global_quality", "-maxrate", "-bufsize"})
 
-Runner = Callable[[list[str], float, Callable[[float], None]], None]
+VideoPath = Callable[[str], Path | None]
+WriterFactory = Callable[[Path, int, int, float, str], Any]
 
 
 class ExportBusy(RuntimeError):
@@ -70,7 +72,7 @@ class ExportBusy(RuntimeError):
 
 
 class ExportUnavailable(RuntimeError):
-    """Nothing to export, or no ffmpeg to export it with."""
+    """Nothing to export, or no ffmpeg or source video to export it with."""
 
 
 @dataclass
@@ -108,7 +110,7 @@ def export_filename(meta: dict[str, Any], quality: str, percent: int | None) -> 
     """The name the browser saves the file under.
 
     The video and the model, so two exports of the same flight say which checkpoint
-    drew the boxes, and "partial-40%" on one that was stopped partway, so nobody
+    found the boxes, and "partial-40%" on one that was stopped partway, so nobody
     forwards the first ten minutes of a flight believing it is the whole of it.
     """
     stem = Path(str(meta.get("video") or "video")).stem
@@ -121,87 +123,145 @@ def export_filename(meta: dict[str, Any], quality: str, percent: int | None) -> 
     return f"{name}.mp4"
 
 
-def join_run(render_dir: Path, run: dict[str, Any], target: Path) -> int:
-    """Write one run's init segment and media segments, in order, as one fMP4 file."""
-    run_dir = render_dir / str(run["run"])
-    written = 0
-    with target.open("wb") as out:
-        for name in [INIT_FILE, *(segment["file"] for segment in run["segments"])]:
-            with (run_dir / name).open("rb") as part:
-                shutil.copyfileobj(part, out, length=1024 * 1024)
-                written += part.tell()
-    return written
+# ---------------------------------------------------------------------------
+# Where the boxes are on a frame the tracker did not look at. The page does the
+# same in track-overlay.js; tests on both sides hold them to the same answers.
+# ---------------------------------------------------------------------------
 
 
-def ffmpeg_command(
-    ffmpeg: str,
-    inputs: list[Path],
-    output: Path,
-    quality: str,
-    encoder: tuple[str, tuple[str, ...]] | None = None,
-) -> list[str]:
-    """The ffmpeg call that turns the joined runs into one MP4 with its index first."""
-    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-nostats"]
-    if len(inputs) == 1:
-        command += ["-i", str(inputs[0])]
-    else:
-        # Several runs: the concat demuxer, reading a list written beside them.
-        listing = output.with_name("runs.txt")
-        listing.write_text(
-            "".join(f"file '{path.as_posix()}'\n" for path in inputs), encoding="utf-8"
+def boxes_at(
+    frame: int, frames: list[int], boxes: dict[int, list[dict[str, Any]]], stride: int
+) -> list[dict[str, Any]]:
+    """The boxes to draw on one source frame.
+
+    On a processed frame, its own boxes. Between two processed frames a stride
+    apart, a vehicle numbered on both sides is placed along the line between
+    them; one seen on only one side is shown for the half nearer to it, so a
+    box neither lingers after its vehicle has gone nor appears before it has
+    come. Past the last processed frame, or across a gap where frames were not
+    processed, the last boxes are held for at most one stride.
+    """
+    at = bisect.bisect_right(frames, frame) - 1
+    if at < 0:
+        return []
+    before = frames[at]
+    if before == frame:
+        return boxes[before]
+    after = frames[at + 1] if at + 1 < len(frames) else None
+    if after is None or after - before > stride:
+        return boxes[before] if frame - before < stride else []
+    t = (frame - before) / (after - before)
+    later = {box["track_id"]: box for box in boxes[after] if box.get("track_id") is not None}
+    placed: list[dict[str, Any]] = []
+    matched: set[Any] = set()
+    for box in boxes[before]:
+        partner = later.get(box.get("track_id")) if box.get("track_id") is not None else None
+        if partner is not None:
+            matched.add(box["track_id"])
+            placed.append(
+                {
+                    **(box if t < 0.5 else partner),
+                    **{
+                        key: box[key] + (partner[key] - box[key]) * t
+                        for key in ("x1", "y1", "x2", "y2")
+                    },
+                }
+            )
+        elif t < 0.5:
+            placed.append(box)
+    if t >= 0.5:
+        placed.extend(
+            box
+            for box in boxes[after]
+            if box.get("track_id") is None or box["track_id"] not in matched
         )
-        command += ["-f", "concat", "-safe", "0", "-i", str(listing)]
-    command += ["-an"]
-    if quality == "small":
-        name, codec = encoder or SOFTWARE_ENCODER
-        # The render's rate control is set to keep detail; a file for a chat wants
-        # the opposite, so those settings are dropped for the ones below.
-        cleaned: list[str] = []
-        skip = False
-        for arg in codec:
-            if skip:
-                skip = False
-                continue
-            if arg in _RATE_CONTROL:
-                skip = True
-                continue
-            cleaned.append(arg)
-        command += [
-            # Never scale up: a clip already smaller than 720p is left its size.
-            "-vf", f"scale=-2:'min({SMALL_HEIGHT},ih)'",
-            *cleaned,
-            *_SMALL_QUALITY.get(name, _SMALL_QUALITY["libx264"]),
-            "-pix_fmt", "yuv420p",
-        ]
-    else:
-        command += ["-c", "copy"]
-    command += ["-movflags", "+faststart", "-progress", "pipe:1", str(output)]
-    return command
+    return placed
 
 
-def run_ffmpeg(command: list[str], duration_s: float, progress: Callable[[float], None]) -> None:
-    """Run ffmpeg, reporting how far through the video it has written."""
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert process.stdout is not None
-    for line in process.stdout:
-        key, _, value = line.strip().partition("=")
-        if key == "out_time_us" and duration_s > 0:
-            try:
-                progress(min(99.0, int(value) / 1_000_000 / duration_s * 100.0))
-            except ValueError:
-                continue
-    code = process.wait()
-    if code != 0:
-        tail = (process.stderr.read() if process.stderr else "").strip()[-600:]
-        raise RuntimeError(f"ffmpeg exited with code {code}: {tail}")
+def encoder_args(quality: str, encoder: tuple[str, tuple[str, ...]]) -> list[str]:
+    """ffmpeg's output options: the render encoder's for full, a chat's for small."""
+    name, codec = encoder
+    if quality != "small":
+        return [*codec, "-pix_fmt", "yuv420p"]
+    # Rate control set to keep detail is dropped for the size-first settings below.
+    cleaned: list[str] = []
+    skip = False
+    for arg in codec:
+        if skip:
+            skip = False
+            continue
+        if arg in _RATE_CONTROL:
+            skip = True
+            continue
+        cleaned.append(arg)
+    return [
+        # Never scale up: a clip already smaller than 720p is left its size.
+        "-vf", f"scale=-2:'min({SMALL_HEIGHT},ih)'",
+        *cleaned,
+        *_SMALL_QUALITY.get(name, _SMALL_QUALITY["libx264"]),
+        "-pix_fmt", "yuv420p",
+    ]
+
+
+class Mp4Writer:
+    """Raw BGR frames in on stdin; one MP4 with its index at the front out."""
+
+    def __init__(
+        self,
+        ffmpeg: str,
+        target: Path,
+        width: int,
+        height: int,
+        fps: float,
+        output_args: list[str],
+    ) -> None:
+        # A file rather than a pipe: nothing reads stderr while frames go in.
+        self._log = tempfile.TemporaryFile()  # noqa: SIM115 - closed in close()
+        self._process = subprocess.Popen(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "rawvideo", "-pix_fmt", "bgr24",
+                "-s", f"{width}x{height}", "-r", f"{fps:.6f}", "-i", "-",
+                "-an", *output_args, "-movflags", "+faststart", str(target),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=self._log,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    def write(self, frame: Any) -> None:
+        import numpy as np
+
+        stdin = self._process.stdin
+        assert stdin is not None
+        try:
+            stdin.write(np.ascontiguousarray(frame).tobytes())
+        except OSError as exc:
+            raise RuntimeError(self._failure("ffmpeg stopped accepting frames")) from exc
+
+    def close(self, abort: bool = False) -> None:
+        stdin = self._process.stdin
+        if stdin is not None:
+            with suppress(OSError):
+                stdin.close()
+        if abort:
+            with suppress(OSError):
+                self._process.kill()
+        try:
+            code = self._process.wait(timeout=600)
+            if not abort and code != 0:
+                raise RuntimeError(self._failure(f"ffmpeg exited with code {code}"))
+        finally:
+            self._log.close()
+
+    def _failure(self, message: str) -> str:
+        with suppress(OSError, ValueError):
+            self._log.seek(0)
+            tail = self._log.read()[-800:].decode("utf-8", "replace").strip()
+            if tail:
+                return f"{message}: {tail}"
+        return message
 
 
 class ExportManager:
@@ -212,14 +272,16 @@ class ExportManager:
         renders: RenderManager,
         exports_root: Path,
         *,
+        video_path: VideoPath,
         ffmpeg: str | None = None,
-        runner: Runner | None = None,
+        writer_factory: WriterFactory | None = None,
         encoder: tuple[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.renders = renders
         self.root = Path(exports_root)
+        self._video_path = video_path
         self._ffmpeg = ffmpeg if ffmpeg is not None else renders.ffmpeg
-        self._runner = runner or run_ffmpeg
+        self._writer_factory = writer_factory
         self._encoder = encoder
         self._lock = threading.Lock()
         self._jobs: dict[str, ExportJob] = {}
@@ -228,19 +290,22 @@ class ExportManager:
     def start(self, render_id: str, quality: str) -> dict[str, Any]:
         if quality not in QUALITIES:
             raise ValueError(f"quality must be one of {QUALITIES}")
-        if not self._ffmpeg:
+        if not self._ffmpeg and self._writer_factory is None:
             raise ExportUnavailable("ไม่พบ ffmpeg จึงบันทึกเป็น MP4 ไม่ได้")
         directory = self.renders.directory(render_id)
-        index = self.renders.stream(render_id)
-        if index is None:
+        meta = read_meta(directory)
+        if meta is None or not (directory / TRACKS_FILE).is_file():
             raise ExportUnavailable("ไม่พบผลการประมวลผลนี้")
-        if index["format"] == FORMAT and not index["runs"]:
+        state = render_state(directory, meta)
+        if state["last_frame"] is None:
             raise ExportUnavailable("ผลนี้ยังไม่มีภาพที่ประมวลผลเสร็จให้บันทึก")
-        meta = read_meta(directory) or {}
+        video = self._video_path(str(meta.get("video") or ""))
+        if video is None:
+            raise ExportUnavailable("ไม่พบไฟล์วิดีโอต้นฉบับของผลนี้ในโฟลเดอร์วิดีโอ")
         percent = None
-        if not index.get("complete"):
-            duration = float(index.get("duration_ms") or 0.0)
-            processed = float(index.get("processed_ms") or 0.0)
+        if not state["complete"]:
+            duration = float(state.get("duration_ms") or 0.0)
+            processed = float(state.get("processed_ms") or 0.0)
             percent = min(99, round(processed / duration * 100)) if duration else 0
         with self._lock:
             running = next((job for job in self._jobs.values() if job.status == "running"), None)
@@ -258,7 +323,7 @@ class ExportManager:
             self._jobs[export_id] = job
         job.directory.mkdir(parents=True, exist_ok=True)
         self._thread = threading.Thread(
-            target=self._run, args=(job, directory, index), name="render-export", daemon=True
+            target=self._run, args=(job, directory, state, video), name="render-export", daemon=True
         )
         self._thread.start()
         _LOG.info("Exporting %s as %s (%s)", render_id, job.filename, quality)
@@ -294,40 +359,76 @@ class ExportManager:
         with self._lock:
             return self._jobs.get(export_id)
 
-    def _run(self, job: ExportJob, render_dir: Path, index: dict[str, Any]) -> None:
+    def _writer(self, job: ExportJob, width: int, height: int, fps: float) -> Any:
+        if self._writer_factory is not None:
+            return self._writer_factory(job.path, width, height, fps, job.quality)
+        encoder = self._encoder or choose_encoder(str(self._ffmpeg))
+        return Mp4Writer(
+            str(self._ffmpeg), job.path, width, height, fps, encoder_args(job.quality, encoder)
+        )
+
+    def _run(self, job: ExportJob, render_dir: Path, state: dict[str, Any], video: Path) -> None:
+        import cv2
+
+        from .annotate import annotate_frame
+
+        writer = None
+        capture = None
         try:
-            inputs: list[Path] = []
-            if index["format"] == LEGACY_FORMAT:
-                inputs.append(render_dir / LEGACY_VIDEO_FILE)
-            else:
-                for number, run in enumerate(index["runs"]):
-                    joined = job.directory / f"run-{number:03d}.mp4"
-                    join_run(render_dir, run, joined)
-                    inputs.append(joined)
-            duration_s = float(index.get("processed_ms") or 0.0) / 1000.0
-            encoder = self._encoder
-            if job.quality == "small" and encoder is None:
-                encoder = choose_encoder(str(self._ffmpeg))
-            command = ffmpeg_command(str(self._ffmpeg), inputs, job.path, job.quality, encoder)
+            index = TrackIndex(render_dir / TRACKS_FILE)
+            index.refresh()
+            rows = index.between(0, state["last_frame"])
+            frames = [row[0] for row in rows]
+            boxes = {row[0]: [_box(item) for item in row[1]] for row in rows}
+            stride = int(state["stride"])
+            # The last frame there are boxes for, plus the stride they cover.
+            end = frames[-1] + stride if frames else 0
 
-            def progress(percent: float) -> None:
-                job.percent = percent
-
-            self._runner(command, duration_s, progress)
-            for joined in inputs:
-                if joined.parent == job.directory:
-                    joined.unlink(missing_ok=True)
-            (job.directory / "runs.txt").unlink(missing_ok=True)
+            capture = cv2.VideoCapture(str(video))
+            if not capture.isOpened():
+                raise RuntimeError(f"Cannot open video: {video}")
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            if not 0.0 < fps < 1000.0:
+                fps = float(state["source_fps"])
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if state["complete"] and total:
+                end = max(end, total)
+            # yuv420p has half-resolution chroma, so x264 refuses odd dimensions.
+            out_width, out_height = width - width % 2, height - height % 2
+            writer = self._writer(job, out_width, out_height, fps)
+            frame_index = -1
+            while frame_index + 1 < end:
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    break
+                frame_index += 1
+                placed = boxes_at(frame_index, frames, boxes, stride)
+                if placed:
+                    frame = annotate_frame(frame, with_track_ids(placed), width, height)
+                if (out_width, out_height) != (width, height):
+                    frame = frame[:out_height, :out_width]
+                writer.write(frame)
+                if frame_index % 30 == 0:
+                    job.percent = min(99.0, (frame_index + 1) / end * 100.0)
+            writer.close()
+            writer = None
             job.size_bytes = job.path.stat().st_size
             job.percent = 100.0
             job.status = "ready"
             _LOG.info("Exported %s (%.1f MB)", job.filename, job.size_bytes / 1e6)
         except Exception as exc:
             _LOG.exception("Export of %s failed", job.render_id)
+            if writer is not None:
+                with suppress(Exception):
+                    writer.close(abort=True)
             job.status = "error"
             job.error = f"{type(exc).__name__}: {exc}"
             shutil.rmtree(job.directory, ignore_errors=True)
         finally:
+            if capture is not None:
+                capture.release()
             job.finished_at = time.time()
 
     def _remove_stale_locked(self) -> None:
@@ -347,6 +448,15 @@ class ExportManager:
                         continue
                     if age > STALE_AFTER_S:
                         shutil.rmtree(child, ignore_errors=True)
+
+
+def _box(item: list[Any]) -> dict[str, Any]:
+    """TrackIndex.between's compact box back to the dict annotate_frame draws."""
+    x1, y1, x2, y2, confidence, class_id, track_id, label = item
+    return {
+        "x1": float(x1), "y1": float(y1), "x2": float(x2), "y2": float(y2),
+        "confidence": confidence, "class_id": class_id, "track_id": track_id, "label": label,
+    }
 
 
 def _safe(value: str) -> str:

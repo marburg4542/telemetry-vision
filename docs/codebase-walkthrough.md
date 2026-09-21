@@ -122,8 +122,8 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 │
 ├── ชั้นตรวจจับวัตถุ (แยกโปรเซส) ────────────────────────────
 ├─ detection.py         267    ห่อ Ultralytics YOLO · เลือก device · แปลงผลเป็น Detection
-├─ render_job.py      1,237    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · วาดกรอบ · เขียนเป็นชิ้น 2 วิ · ทำต่อได้
-├─ render_export.py     353    ต่อชิ้นของผลเป็น MP4 ไฟล์เดียว (เต็ม / 720p) ไว้ดาวน์โหลดส่งต่อ
+├─ render_job.py      1,137    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · เขียนกรอบลง tracks.jsonl · ทำต่อได้
+├─ render_export.py     463    วาดกรอบลงต้นฉบับทุกเฟรมเป็น MP4 ไฟล์เดียว (เต็ม / 720p) ไว้ส่งต่อ
 ├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
 ├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
 ├─ detect_sidecar.py    162    ตัวช่วยฝั่ง CLI สำหรับรัน detection คู่กับ run
@@ -135,7 +135,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 │
 ├── ชั้นเว็บ ─────────────────────────────────────
 ├─ video_library.py    155    รายการวิดีโอในโฟลเดอร์ · อ่านเฟรมต้นฉบับทีละเฟรม
-├─ webapp.py          1,782    ★ ใหญ่ที่สุด: aiohttp app · 35 routes · middleware · state
+├─ webapp.py          1,761    ★ ใหญ่ที่สุด: aiohttp app · 33 routes · middleware · state
 ├─ file_response.py     47    ส่งไฟล์เกิน 2 GB เป็นช่วง (Windows ส่งทีละไม่เกิน 2 GiB)
 ├─ public_share.py     207    เผยแพร่ภาพชั่วคราวด้วย token (ให้ LINE ดึงได้)
 ├─ quick_tunnel.py     262    คุม cloudflared quick tunnel
@@ -149,7 +149,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
    ├─ index.html       255    โครงหน้า
    ├─ app.js         1,998    ★ ตรรกะหน้าเว็บทั้งหมด
    ├─ app.css          853    สไตล์
-   ├─ render-player.js  392   ★ เล่นวิดีโอ AI ที่ยังประมวลผลไม่เสร็จผ่าน Media Source
+   ├─ track-overlay.js  565   ★ วาดกรอบของ render ทับวิดีโอต้นฉบับทุกเฟรม · รอ tracker
    ├─ format.js          43    จัดรูปแบบพิกัด DMS (แชร์กับเทสต์ Node)
    └─ service-worker.js  85   PWA offline shell
 
@@ -353,41 +353,42 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 
 ## 3.7 `render_job.py` — ประมวลผลวิดีโอทั้งไฟล์ ★
 
-### `run_render(video, output_dir, settings, meta, detector, encoder_factory, publish, cancelled, fresh)`
+### `run_render(video, output_dir, settings, meta, detector, publish, cancelled, fresh)`
 **ฟังก์ชันที่รันในโปรเซสลูก** (หรือใน thread ตอนเทสต์) — ที่เดียวของหน้าเว็บที่แตะ torch
 - **ทำอะไร:** ต่อเฟรม `grab()` → ข้ามตาม stride → `retrieve()` → `detector.track()` (BoT-SORT, persist)
-  → `annotate_frame()` + Track ID → `encoder.write()` → ต่อท้าย `tracks.jsonl` (flush ทุกเฟรม เพราะ
-  Capture ระหว่างประมวลผลอ่านไฟล์นี้)
-- ส่ง `started` (มี `start_frame`) แล้ว `progress` ทุก 0.5 วิ พร้อม `stages_ms` และยกเลิกได้ระหว่างทาง
-- **ทำต่อ:** ถ้าในโฟลเดอร์มีผล `partial` ที่ fingerprint และค่าตรงกัน จะอ่าน `next_frame` จาก playlist
-  ของรอบล่าสุด (นับจากชิ้นที่เขียนเสร็จจริง ไม่ใช่เฟรมที่ track ไปแล้ว) ตัด `tracks.jsonl` ให้เหลือเฉพาะ
-  เฟรมก่อนหน้านั้น บวก offset ให้ Track ID แล้ว seek ไปเริ่มรอบใหม่ใน `run-NNN` ถัดไป
-- **Output:** `run-NNN/{init.mp4, seg_*.m4s, index.m3u8}`, `tracks.jsonl`, `meta.json`
-- `settle_render(dir)` เรียกทุกครั้งที่จบแบบไม่สมบูรณ์ — เก็บชิ้นที่เสร็จแล้วเป็น `partial` หรือลบทั้ง
-  โฟลเดอร์ทิ้งถ้ายังไม่มีชิ้นไหนเสร็จเลย
+  → ต่อท้าย `tracks.jsonl` (flush ทุกเฟรม เพราะหน้าเว็บและ Capture อ่านไฟล์นี้ระหว่างประมวลผล)
+  ไม่วาดและไม่เข้ารหัสวิดีโอ — หน้าเว็บวาดกรอบเอง ส่วน MP4 วาดตอนบันทึก
+- ส่ง `started` (มี `start_frame`) แล้ว `progress` ทุก 0.5 วิ พร้อม `stages_ms` (decode / track)
+- **ทำต่อ:** ผล `partial` (หรือ `running` ที่ process ตาย) ที่ fingerprint และค่าตรงกัน ทำต่อจากเฟรมถัดจาก
+  บรรทัดสมบูรณ์สุดท้ายใน `tracks.jsonl` (`last_frame()` อ่านจากท้ายไฟล์) ตัดบรรทัดที่เขียนค้างทิ้ง บวก
+  offset ให้ Track ID ผลแบบ `hls` รุ่นก่อนทำต่อได้เหมือนกัน (format กลายเป็น `tracks`)
+- **Output:** `tracks.jsonl`, `tracker.yaml`, `meta.json` (format `tracks`)
+- `settle_render(dir)` เรียกทุกครั้งที่จบแบบไม่สมบูรณ์ — ถ้ามีเฟรมแล้วเป็น `partial` พร้อม `next_frame`
+  ถ้ายังไม่มีเลยลบทั้งโฟลเดอร์
+- `render_state(dir, meta)` — `processed_ms` = (เฟรมสุดท้าย + stride) ÷ fps หรือความยาวทั้งไฟล์เมื่อเสร็จ
 
 ### `RenderManager` (คลาส) — ฝั่ง server ไม่ import torch
 
 | เมธอด | ทำอะไร |
 |---|---|
-| `start(...)` | spawn ลูกผ่าน `spawn_launcher` · งานซ้อนได้ `RenderBusy` · ไม่มี ffmpeg ได้ `RenderUnavailable` |
+| `start(...)` | spawn ลูกผ่าน `spawn_launcher` · งานซ้อนได้ `RenderBusy` (ไม่ต้องมี ffmpeg) |
 | `status()` / `cancel()` | อ่านคิวความคืบหน้า · ตั้ง event ให้ลูกหยุด |
-| `renders(video_id)` / `delete(render_id)` | ผลบนดิสก์ทั้งที่เสร็จ ค้าง และกำลังทำ (พร้อม `processed_ms`) · ลบผล (ยกเว้นงานที่กำลังรัน) |
-| `stream(render_id)` / `segment_path(...)` | รายการชิ้นที่เขียนเสร็จบน timeline ของวิดีโอต้นฉบับ · path ของชิ้นหนึ่ง (รับเฉพาะชื่อที่ render เขียนเอง) |
+| `renders(video_id)` / `delete(render_id)` | ผลบนดิสก์ทุก format ที่มี `tracks.jsonl` (พร้อม `processed_ms` และ `size_bytes` ของทั้งโฟลเดอร์) · ลบผล (ยกเว้นงานที่กำลังรัน) |
+| `tracks(render_id, from_ms, to_ms)` | สถานะ + `rate` + กรอบของช่วงเวลานั้นแบบกะทัดรัดผ่าน `TrackIndex.between()` (bisect บน offset) |
 | `detections_at(render_id, frame_index)` | กรอบของเฟรมหนึ่งจาก `tracks.jsonl` ผ่าน `TrackIndex` (byte offset) |
 
 ### `render_export.py` — บันทึกผลเป็น MP4 ไฟล์เดียว
 
-ผลเป็นชิ้น 2 วินาทีเพื่อให้ดูระหว่างประมวลผลได้ แต่ส่งต่อให้คนอื่นไม่ได้ ไฟล์นี้ต่อกลับเป็นไฟล์เดียว
+ผลคือกรอบ ไม่ใช่วิดีโอ ไฟล์นี้วาดกรอบลงต้นฉบับทุกเฟรมแล้วเข้ารหัสเป็นไฟล์เดียวไว้ส่งต่อ
 
 | ส่วน | ทำอะไร |
 |---|---|
-| `join_run(render_dir, run, target)` | เขียน `init.mp4` ตามด้วยชิ้นตามลำดับใน playlist เป็น fMP4 หนึ่งไฟล์ต่อรอบ |
-| `ffmpeg_command(ffmpeg, inputs, output, quality, encoder)` | รอบเดียว `-i` · หลายรอบเขียน `runs.txt` ให้ concat demuxer · `full` = `-c copy` · `small` = ย่อ 720p (ไม่ขยาย) + ค่าคุณภาพสำหรับแชทของ encoder นั้น · `+faststart` เสมอ |
+| `boxes_at(frame, frames, boxes, stride)` | กรอบของเฟรมใดก็ได้: เฟรมที่ประมวลผล = กรอบของมัน · ระหว่างสองเฟรม = เลื่อนตามเส้นตรง (Track ID เดียวกัน) ฝั่งเดียว = แสดงครึ่งที่ใกล้ · เลยเฟรมสุดท้าย = ค้างไว้ไม่เกิน stride · กติกาเดียวกับ `boxesAt` ใน `track-overlay.js` |
+| `encoder_args(quality, encoder)` | `full` = ค่าของ encoder · `small` = ย่อ 720p (ไม่ขยาย) + ค่าคุณภาพสำหรับแชท |
+| `Mp4Writer` | raw BGR ทาง stdin → MP4 `+faststart` |
 | `export_filename(meta, quality, percent)` | `<วิดีโอ>__<โมเดล>__AI[-720p][_partial-N%].mp4` |
-| `ExportManager.start(render_id, quality)` | ตรวจ quality · ต้องมี ffmpeg และชิ้นอย่างน้อยหนึ่งชิ้น · ทีละไฟล์ (`ExportBusy`) · ทำใน thread ใน `output/exports/<id 32 hex>/` |
-| `status(id)` / `ready_file(id)` / `finished(id)` | ความคืบหน้าจาก `-progress pipe:1` · path ของไฟล์ที่เสร็จ · ลบหลังส่งครบ |
-| `shutdown()` | ยกเลิกและ terminate ลูกตอนปิด server |
+| `ExportManager.start(render_id, quality)` | ต้องมี ffmpeg, เฟรมอย่างน้อยหนึ่งเฟรม และไฟล์ต้นฉบับ (`video_path` จาก VideoLibrary) · ทีละไฟล์ (`ExportBusy`) · ทำใน thread ใน `output/exports/<id 32 hex>/` |
+| `status(id)` / `ready_file(id)` / `finished(id)` | ความคืบหน้าตามเฟรมที่เขียน · path ของไฟล์ที่เสร็จ · ลบหลังส่งครบ |
 
 ### `tracker_config(directory, confidence)`
 อ่าน [configs/botsort.yaml](configs/botsort.yaml) แล้วตั้ง `track_high_thresh` = confidence และ
@@ -396,13 +397,9 @@ src/vision_lab/                          (10 ไฟล์ · 3,139 บรรท�
 `TRACKER_FLOOR` (0.1) ให้ tracker เพื่อเปิดขั้นจับคู่รอบสอง แต่คืนเฉพาะกรอบที่ ≥ confidence และย่อภาพของ
 GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที่ tracker ถูกสร้าง ตัวเลขที่ใช้เลือกค่าอยู่ใน README
 
-### `choose_encoder(ffmpeg)` · `FfmpegEncoder`
-ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม จากนั้น `FfmpegEncoder` รัน
-ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย `-f hls -hls_time 2 -hls_segment_type fmp4` บังคับ keyframe ทุก
-2 วินาทีและปิด B-frame (ชิ้นต้องถอดรหัสเองได้ และ Media Source ไม่ต้องเผื่อ composition offset)
-
-> **ทำไมต้องใช้ hardware encoder:** x264 วัดแยกได้ ~105 เฟรม/วินาที แต่ในสายงานจริงแย่ง CPU 4 คอร์
-> กับ tracker จนเหลือ 5 เฟรม/วินาที NVENC พาไปที่ 16 เฟรม/วินาทีบนเครื่องเดียวกัน
+### `choose_encoder(ffmpeg)`
+ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม ใช้ตอนบันทึก MP4 เท่านั้น
+(x264 แย่ง CPU 4 คอร์กับงานอื่น NVENC ใช้วงจรเข้ารหัสเฉพาะบนการ์ดจอ)
 
 ### `video_library.py` — `VideoLibrary` · `SourceFrames`
 รายการวิดีโอใต้ `video_dir` (ค่าเริ่มต้น `videos/` ในโปรเจกต์ · env `TELEMETRY_OCR_VIDEOS`)
@@ -487,8 +484,8 @@ ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย 
 | `GET/POST /api/models`, `DELETE /api/models/{name}` | `list_models` · `add_model` · `remove_model` | ทะเบียนโมเดล (เพิ่มจาก candidate id เท่านั้น) |
 | `GET /api/videos`, `GET /api/videos/source` | `list_videos` · `video_source` | รายการวิดีโอ · ส่งไฟล์ต้นฉบับแบบ Range |
 | `POST /api/renders`, `GET/DELETE /api/renders/current` | `start_render` · `render_status` · `cancel_render` | เริ่มหรือทำต่อ · ความคืบหน้า · ยกเลิก (เก็บส่วนที่ทำแล้ว) |
-| `GET /api/renders/stream`, `GET /api/renders/segment` | `render_stream` · `render_segment` | รายการชิ้นวิดีโอ · ชิ้นวิดีโอหนึ่งชิ้น (สำหรับ Media Source) |
-| `GET /api/renders/video`, `DELETE /api/renders` | `render_video` · `delete_render` | เล่นผลรุ่นเก่าที่เป็น MP4 ไฟล์เดียว · ลบผลการประมวลผล |
+| `GET /api/renders/tracks` | `render_tracks` | สถานะ + กรอบของช่วงเวลาหนึ่ง (ไม่เกิน 2 นาที) ให้หน้าเว็บวาด |
+| `DELETE /api/renders` | `delete_render` | ลบผลการประมวลผลทั้งโฟลเดอร์ |
 | `POST/GET /api/renders/export`, `GET /api/renders/export/file` | `start_export` · `export_status` · `export_file` | เริ่มทำ MP4 ไฟล์เดียว · ความคืบหน้า · ดาวน์โหลดแล้วลบ |
 
 ### `capture_shot(request)` — เส้นทางที่ซับซ้อนที่สุด
@@ -580,11 +577,11 @@ ffmpeg ในโฟลเดอร์ของรอบนั้นด้วย 
 [3] ผู้ใช้กด "ประมวลผลด้วย AI"
      │  POST /api/renders {video, model, confidence, image_size, stride}
      └─► RenderManager.start() → spawn ลูก                   [render_job.py]
-          ├─ load_ultralytics_detector() · choose_encoder() → h264_nvenc
-          └─ run_render(): ทีละเฟรม → track (BoT-SORT) → annotate_frame → ffmpeg stdin
-                           → run-NNN/seg_*.m4s (ชิ้นละ 2 วิ) · tracks.jsonl · meta.json
-     หน้าเว็บสลับไป "วิดีโอ AI" ทันที: poll GET /api/renders/stream ทุก 2 วิ ดึงชิ้นที่เสร็จแล้ว
-     ต่อเข้า MediaSource [render-player.js] · poll /api/renders/current ทุก 1 วิ เพื่ออัปเดตแถบ
+          ├─ load_ultralytics_detector()
+          └─ run_render(): ทีละเฟรม → track (BoT-SORT) → tracks.jsonl · meta.json
+     หน้าเว็บสลับไป "วิดีโอ AI" ทันที (วิดีโอต้นฉบับเดิม + canvas): poll GET /api/renders/tracks
+     ทุก 2 วิ ขอกรอบ 30 วิข้างหน้า วาดทุกเฟรมที่แสดง [track-overlay.js] · poll /api/renders/current
+     ทุก 1 วิ เพื่ออัปเดตแถบ
 
 [4] ผู้ใช้กดปุ่ม Capture
      │  POST /api/capture/shot?video=..&source_time_ms=..&render=..   (ไม่มี body)

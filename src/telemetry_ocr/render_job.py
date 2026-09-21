@@ -1,26 +1,23 @@
-"""Run a whole video through a detector once, and let the page watch it as it goes.
+"""Run a whole video through a detector once, and let the page draw it as it goes.
 
 The page used to post a frame to the detector every hundred milliseconds or so
-and draw the answer over the playing video. Two things were wrong with that and
-neither was the drawing. BoT-SORT was fed whatever frames the GPU had time for,
-ten to sixteen a second out of thirty and never evenly spaced, so it lost
-identities whenever the camera moved; and every box was already a frame or
-three old by the time it was painted over a picture that had moved on.
+and draw the answer over the playing video. BoT-SORT was fed whatever frames the
+GPU had time for, ten to sixteen a second out of thirty and never evenly spaced,
+so it lost identities whenever the camera moved; and every box was already a
+frame or three old by the time it was painted over a picture that had moved on.
 
 Here the tracker sees every frame of the file (or every second or third, evenly
-spaced), in order, once. The boxes are drawn into the frames themselves and
-encoded as H.264, so what is on screen is exactly what the model saw at that
-instant. The per-frame detections are kept beside it in tracks.jsonl, which is
-what a capture reads its boxes from rather than asking the model again.
+spaced), in order, once, and writes each frame's boxes to tracks.jsonl as it
+goes. Nothing is drawn and nothing is encoded: the page plays the original video
+and draws the boxes of the frame on screen over it, placing a box between two
+processed frames by where it was on either side. That is what keeps the picture
+at the source's full frame rate at every stride, and the tracker the only thing
+the GPU and the CPU are spent on. A capture reads its boxes from the same file.
 
-The video is written as two-second fragmented-MP4 segments under an HLS playlist
-that ffmpeg rewrites as each segment finishes, not as one MP4 whose index only
-exists once the last frame is in. The page feeds finished segments to Media
-Source as they appear, so a render is watched while it is being made; neither
-Chrome nor Edge plays a still-growing HLS playlist on its own. A render that
-stops early keeps the segments it finished and continues later in a new run
-folder: continuing ffmpeg's own playlist rewrites the init segment and shifts
-the timestamps of everything already written.
+Renders made before this also drew their boxes into H.264 segments beside the
+tracks; those segments are no longer read, and the tracks play the same way.
+A render that stops early keeps what it tracked and continues from the frame
+after the last one written.
 
 Process layout is the same as the live worker's was: the server holds
 PaddleOCR, so torch loads only in a spawned child, and nothing but builtins
@@ -29,6 +26,7 @@ crosses back. This module is imported by the server and must stay free of both.
 
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 import multiprocessing
@@ -37,7 +35,6 @@ import queue
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -60,20 +57,21 @@ TRACKER_FILE = "tracker.yaml"
 # from 7 to 3, and from 2 to 0, and nothing that stayed on screen longer than a
 # fifth of a second went unnumbered.
 NEW_TRACK_MARGIN = 0.15
-PLAYLIST_FILE = "index.m3u8"
-INIT_FILE = "init.mp4"
-# The layout of renders made before segments: one MP4, playable once finished.
-# Still listed and played, so nothing rendered that way has to be made again.
+# Renders made before the boxes were drawn by the page also wrote video: first
+# one MP4 of it, then two-second segments in run folders. Their tracks play like
+# any other; the video is only cleared away when the render is made again.
 LEGACY_VIDEO_FILE = "annotated.mp4"
-FORMAT = "hls"
+FORMAT = "tracks"
+SEGMENTED_FORMAT = "hls"
 LEGACY_FORMAT = "mp4"
+# Keyframes this far apart in what an encoder writes, which also bounds how far
+# a player seeks to find one.
 SEGMENT_SECONDS = 2
 
 _PROGRESS_INTERVAL_S = 0.5
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 _RENDER_ID = re.compile(r"[A-Za-z0-9_.-]{1,200}")
 _RUN_DIR = re.compile(r"run-(\d{3})")
-_SEGMENT_NAME = re.compile(r"seg_\d{5}\.m4s")
 _FRAME_INDEX = re.compile(rb'\{"frame_index": (\d+)')
 _TRACK_ID = re.compile(rb'"track_id": (\d+)')
 _ACTIVE = frozenset({"loading", "running", "cancelling"})
@@ -194,75 +192,69 @@ def tracker_config(directory: Path | None = None, confidence: float | None = Non
     return str(path)
 
 
-def read_playlist(path: Path) -> list[tuple[str, float]]:
-    """The finished segments an HLS playlist lists, in order, with their lengths.
+def last_frame(path: Path) -> int | None:
+    """The frame index of the last whole line of a tracks file, or None if it has none.
 
-    ffmpeg writes a segment to a .tmp file, renames it once it is whole, and only
-    then rewrites the playlist to name it, so the playlist never lists half of
-    one. A read that lands on that rename on Windows fails and returns nothing;
-    the page asks again a moment later.
+    Read from the end: a render is tens of thousands of lines, and this is asked
+    every time the page polls. A line still being written has no newline yet and
+    is not counted.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            end = stream.tell()
+            chunk = 1 << 16
+            while True:
+                start = max(0, end - chunk)
+                stream.seek(start)
+                data = stream.read(end - start)
+                cut_at = data.rfind(b"\n")
+                if cut_at >= 0:
+                    whole = data[: cut_at + 1]
+                    lines = whole.splitlines()
+                    # The first line of a chunk that did not start the file may
+                    # be the tail of a longer one; only trust it at the start.
+                    candidates = lines if start == 0 else lines[1:]
+                    for line in reversed(candidates):
+                        match = _FRAME_INDEX.match(line)
+                        if match:
+                            return int(match.group(1))
+                if start == 0:
+                    return None
+                chunk *= 4
     except OSError:
-        return []
-    segments: list[tuple[str, float]] = []
-    duration: float | None = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("#EXTINF:"):
-            try:
-                duration = float(line[len("#EXTINF:"):].split(",", 1)[0])
-            except ValueError:
-                duration = None
-        elif line and not line.startswith("#"):
-            if duration is not None and _SEGMENT_NAME.fullmatch(line):
-                segments.append((line, duration))
-            duration = None
-    return segments
+        return None
 
 
-def stream_index(directory: Path, meta: dict[str, Any]) -> dict[str, Any]:
-    """What the page needs to play a render: its runs and their finished segments.
+def render_state(directory: Path, meta: dict[str, Any]) -> dict[str, Any]:
+    """How far a render has got, on the source video's timeline.
 
-    Times are on the source video's timeline, so the rendered video and the
-    original switch at the same moment. A run starts at the source frame it began
-    from; the timestamps inside its segments start at zero, and the page offsets
-    them by the run's start.
+    processed_ms is where the boxes stop: the last frame tracked, plus the stride
+    it would have covered before the next one. A finished render covers the
+    whole video.
     """
     source_fps = float(meta.get("source_fps") or 0.0) or 30.0
-    runs: list[dict[str, Any]] = []
-    processed_ms = 0.0
-    for record in meta.get("runs") or []:
-        name = str(record.get("dir", ""))
-        if not _RUN_DIR.fullmatch(name):
-            continue
-        start_ms = int(record.get("start_frame", 0)) * 1000.0 / source_fps
-        elapsed = 0.0
-        segments = []
-        for file, duration in read_playlist(directory / name / PLAYLIST_FILE):
-            segments.append(
-                {
-                    "file": file,
-                    "start_ms": round(start_ms + elapsed * 1000.0, 3),
-                    "duration_ms": round(duration * 1000.0, 3),
-                }
-            )
-            elapsed += duration
-        if segments:
-            runs.append({"run": name, "start_ms": round(start_ms, 3), "segments": segments})
-            processed_ms = max(processed_ms, start_ms + elapsed * 1000.0)
+    stride = int(meta.get("stride") or 1)
     status = str(meta.get("status") or "")
+    duration_ms = meta.get("duration_ms")
+    last = last_frame(directory / TRACKS_FILE)
+    if status == "complete":
+        processed_ms = float(duration_ms or 0.0)
+    elif last is None:
+        processed_ms = 0.0
+    else:
+        processed_ms = (last + stride) * 1000.0 / source_fps
+        if duration_ms:
+            processed_ms = min(processed_ms, float(duration_ms))
     return {
         "render_id": meta.get("render_id"),
-        "format": FORMAT,
         "status": status,
         "complete": status == "complete",
         "source_fps": source_fps,
-        "stride": int(meta.get("stride") or 1),
-        "duration_ms": meta.get("duration_ms"),
+        "stride": stride,
+        "duration_ms": duration_ms,
         "processed_ms": round(processed_ms, 3),
-        "runs": runs,
+        "last_frame": last,
     }
 
 
@@ -355,12 +347,13 @@ def settle_render(directory: Path) -> str | None:
     meta = read_meta(directory)
     if meta is not None and meta.get("status") == "complete":
         return "complete"
-    if meta is None or render_format(meta) != FORMAT or not stream_index(directory, meta)["runs"]:
+    last = last_frame(directory / TRACKS_FILE)
+    if meta is None or last is None:
         _clear_render(directory)
         with suppress(OSError):
             directory.rmdir()
         return None
-    next_frame = _next_frame(directory, meta)
+    next_frame = last + 1
     if meta.get("status") != "partial" or meta.get("next_frame") != next_frame:
         _write_json(
             directory / META_FILE,
@@ -376,7 +369,6 @@ def run_render(
     settings: dict[str, Any],
     meta: dict[str, Any],
     detector: Any,
-    encoder_factory: Callable[[Path, int, int, float], Any],
     publish: Callable[[dict[str, Any]], None],
     cancelled: Callable[[], bool],
     fresh: bool = False,
@@ -387,8 +379,6 @@ def run_render(
     anything else in the folder is replaced, and ``fresh`` replaces it regardless.
     """
     import cv2
-
-    from .annotate import annotate_frame
 
     options = RenderSettings(**settings)
     out = Path(output_dir)
@@ -404,9 +394,9 @@ def run_render(
         raise RuntimeError(f"Cannot open video: {video}")
 
     started = time.perf_counter()
-    # Where a frame's time goes, averaged over the frames written. Reported with
+    # Where a frame's time goes, averaged over the frames tracked. Reported with
     # the progress, because "slow" has a different fix for each of these.
-    spans = {"decode": 0.0, "track": 0.0, "draw": 0.0, "encode": 0.0}
+    spans = {"decode": 0.0, "track": 0.0}
     record: dict[str, Any] = {}
     index = -1
     kept = written = 0
@@ -419,39 +409,35 @@ def run_render(
         total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        # yuv420p has half-resolution chroma, so x264 refuses odd dimensions.
-        out_width, out_height = width - width % 2, height - height % 2
-        out_fps = fps / options.stride
 
-        runs = _finished_runs(out, previous)
+        runs = list((previous or {}).get("runs") or [])
         track_offset = 0
-        if previous is not None and runs:
-            start_frame = _next_frame(out, {**previous, "runs": runs})
+        if previous is not None:
+            # The file, not the meta: a render that was killed never got to
+            # record where it stopped, but every frame it tracked is in there.
+            last = last_frame(out / TRACKS_FILE)
+            start_frame = 0 if last is None else last + 1
             # The tracker starts again from 1 in a new run. Its ids are moved past
             # the ones already used, so two vehicles never share a number.
             kept, track_offset = _trim_tracks(out / TRACKS_FILE, start_frame)
         else:
             start_frame = 0
             (out / TRACKS_FILE).unlink(missing_ok=True)
-        run_number = max((_run_number(run["dir"]) for run in runs), default=-1) + 1
-        run_dir = out / f"run-{run_number:03d}"
-        shutil.rmtree(run_dir, ignore_errors=True)
-        run_dir.mkdir()
         record = {
             **meta,
             "format": FORMAT,
             "status": "running",
             "settings": asdict(options),
             "source_fps": fps,
-            "fps": out_fps,
+            "fps": fps / options.stride,
             "stride": options.stride,
             "source_frames": total,
-            "width": out_width,
-            "height": out_height,
+            "width": width,
+            "height": height,
             "duration_ms": round(total * 1000.0 / fps, 3),
             "runs": [
                 *runs,
-                {"dir": run_dir.name, "start_frame": start_frame, "track_id_offset": track_offset},
+                {"start_frame": start_frame, "track_id_offset": track_offset},
             ],
             "next_frame": start_frame,
             "frames_written": kept,
@@ -466,87 +452,66 @@ def run_render(
             capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         index = start_frame - 1
         tracker = tracker_config(out, options.confidence)
-        encoder = encoder_factory(run_dir, out_width, out_height, out_fps)
         publish(
-            {"kind": "started", "start_frame": start_frame, "run": run_dir.name, "total": total}
+            {"kind": "started", "start_frame": start_frame, "run": len(runs), "total": total}
         )
         publish({"kind": "progress", "done": start_frame, "total": total, "fps": 0.0})
         last_published = time.perf_counter()
-        encoder_failed = False
-        try:
-            with (out / TRACKS_FILE).open("a", encoding="utf-8") as tracks:
-                while True:
-                    if cancelled():
-                        was_cancelled = True
-                        break
-                    step = time.perf_counter()
-                    if not capture.grab():
-                        break
-                    index += 1
-                    # grab() without retrieve() skips the decode to pixels, so a
-                    # stride costs little more than the frames it keeps.
-                    if index % options.stride:
-                        continue
-                    ok, frame = capture.retrieve()
-                    if not ok or frame is None:
-                        break
-                    decoded = time.perf_counter()
-                    detections = detector.track(
-                        frame,
-                        confidence=options.confidence,
-                        iou=options.iou,
-                        image_size=options.image_size,
-                        tracker=tracker,
+        with (out / TRACKS_FILE).open("a", encoding="utf-8") as tracks:
+            while True:
+                if cancelled():
+                    was_cancelled = True
+                    break
+                step = time.perf_counter()
+                if not capture.grab():
+                    break
+                index += 1
+                # grab() without retrieve() skips the decode to pixels, so a
+                # stride costs little more than the frames it keeps.
+                if index % options.stride:
+                    continue
+                ok, frame = capture.retrieve()
+                if not ok or frame is None:
+                    break
+                decoded = time.perf_counter()
+                detections = detector.track(
+                    frame,
+                    confidence=options.confidence,
+                    iou=options.iou,
+                    image_size=options.image_size,
+                    tracker=tracker,
+                )
+                boxes = [_plain(item, track_offset) for item in detections]
+                spans["decode"] += decoded - step
+                spans["track"] += time.perf_counter() - decoded
+                tracks.write(
+                    json.dumps(
+                        {
+                            "frame_index": index,
+                            "time_ms": round(index * 1000.0 / fps, 3),
+                            "detections": boxes,
+                        },
+                        ensure_ascii=False,
                     )
-                    tracked = time.perf_counter()
-                    boxes = [_plain(item, track_offset) for item in detections]
-                    marked = annotate_frame(frame, with_track_ids(boxes), width, height)
-                    if (out_width, out_height) != (width, height):
-                        marked = marked[:out_height, :out_width]
-                    drawn = time.perf_counter()
-                    # Blocks when ffmpeg falls behind, so this also measures
-                    # whether the encoder is keeping up.
-                    try:
-                        encoder.write(marked)
-                    except BaseException:
-                        encoder_failed = True
-                        raise
-                    spans["decode"] += decoded - step
-                    spans["track"] += tracked - decoded
-                    spans["draw"] += drawn - tracked
-                    spans["encode"] += time.perf_counter() - drawn
-                    tracks.write(
-                        json.dumps(
-                            {
-                                "frame_index": index,
-                                "time_ms": round(index * 1000.0 / fps, 3),
-                                "detections": boxes,
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
+                    + "\n"
+                )
+                # Per frame: a capture taken while this runs reads the file
+                # for the boxes of the frame on screen.
+                tracks.flush()
+                written += 1
+                now = time.perf_counter()
+                if now - last_published >= _PROGRESS_INTERVAL_S:
+                    last_published = now
+                    elapsed = now - started
+                    publish(
+                        {
+                            "kind": "progress",
+                            "done": index + 1,
+                            "total": total,
+                            "fps": round(written / elapsed, 2) if elapsed > 0 else 0.0,
+                            "stages_ms": _averages(spans, written),
+                        }
                     )
-                    # Per frame: a capture taken while this runs reads the file
-                    # for the boxes of the frame on screen.
-                    tracks.flush()
-                    written += 1
-                    now = time.perf_counter()
-                    if now - last_published >= _PROGRESS_INTERVAL_S:
-                        last_published = now
-                        elapsed = now - started
-                        publish(
-                            {
-                                "kind": "progress",
-                                "done": index + 1,
-                                "total": total,
-                                "fps": round(written / elapsed, 2) if elapsed > 0 else 0.0,
-                                "stages_ms": _averages(spans, written),
-                            }
-                        )
-        finally:
-            # Closed normally even when the model failed, so ffmpeg finishes the
-            # segment it holds and every frame tracked so far stays watchable.
-            encoder.close(abort=encoder_failed)
     except BaseException:
         if record:
             _account(record, started, spans, kept, written)
@@ -570,9 +535,8 @@ def run_render(
         source_frames=source_frames,
         duration_ms=round(source_frames * 1000.0 / fps, 3),
         next_frame=source_frames,
-        runs=_finished_runs(out, record),
     )
-    if not record["runs"]:
+    if last_frame(out / TRACKS_FILE) is None:
         settle_render(out)
         raise RuntimeError("The video yielded no frames to render")
     _write_json(out / META_FILE, record)
@@ -581,7 +545,7 @@ def run_render(
 
 def _can_continue(previous: dict[str, Any], meta: dict[str, Any], options: RenderSettings) -> bool:
     return (
-        render_format(previous) == FORMAT
+        render_format(previous) in {FORMAT, SEGMENTED_FORMAT}
         and previous.get("status") in {"running", "partial"}
         and previous.get("video_fingerprint") == meta.get("video_fingerprint")
         and previous.get("model_fingerprint") == meta.get("model_fingerprint")
@@ -589,43 +553,12 @@ def _can_continue(previous: dict[str, Any], meta: dict[str, Any], options: Rende
     )
 
 
-def _finished_runs(directory: Path, meta: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """The runs that finished at least one segment.
-
-    A run that stopped before its first segment added nothing to keep, so its
-    folder goes and the next run takes its number.
-    """
-    runs = []
-    for run in (meta or {}).get("runs") or []:
-        name = str(run.get("dir", ""))
-        if not _RUN_DIR.fullmatch(name):
-            continue
-        if read_playlist(directory / name / PLAYLIST_FILE):
-            runs.append(run)
-        else:
-            shutil.rmtree(directory / name, ignore_errors=True)
-    return runs
-
-
-def _next_frame(directory: Path, meta: dict[str, Any]) -> int:
-    """The first source frame that no finished segment holds: where a render continues."""
-    runs = meta.get("runs") or []
-    if not runs:
-        return 0
-    last = runs[-1]
-    out_fps = float(meta.get("fps") or 0.0)
-    stride = int(meta.get("stride") or 1)
-    playlist = directory / str(last.get("dir", "")) / PLAYLIST_FILE
-    seconds = sum(duration for _, duration in read_playlist(playlist))
-    return int(last.get("start_frame", 0)) + round(seconds * out_fps) * stride
-
-
 def _trim_tracks(path: Path, before_frame: int) -> tuple[int, int]:
     """Keep only the frames before one; return how many were kept and their highest track id.
 
-    A render that was killed can have recorded frames whose segment it never
-    finished. Those frames are rendered again when it continues, so their lines
-    go rather than appearing twice.
+    Anything from that frame on is tracked again when the render continues, so it
+    goes rather than appearing twice -- as does a last line a killed render left
+    half written.
     """
     if not path.is_file():
         return 0, 0
@@ -676,93 +609,6 @@ def _account(
     )
 
 
-def _run_number(name: str) -> int:
-    match = _RUN_DIR.fullmatch(name)
-    return int(match.group(1)) if match else -1
-
-
-class FfmpegEncoder:
-    """Raw BGR frames in on stdin; two-second fMP4 segments and their playlist out.
-
-    ffmpeg runs inside the run folder, so the playlist names the init segment
-    and every media segment by bare file name.
-    """
-
-    def __init__(
-        self,
-        ffmpeg: str,
-        run_dir: Path,
-        width: int,
-        height: int,
-        fps: float,
-        codec: tuple[str, ...] = SOFTWARE_ENCODER[1],
-    ) -> None:
-        # A file rather than a pipe: nothing reads ffmpeg's stderr while frames
-        # are going in, and a full pipe would stall the encoder mid-render.
-        self._log = tempfile.TemporaryFile()  # noqa: SIM115 - closed in close()
-        self._process = subprocess.Popen(
-            [
-                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "rawvideo", "-pix_fmt", "bgr24",
-                "-s", f"{width}x{height}", "-r", f"{fps:.6f}", "-i", "-",
-                "-an", *codec, *KEYFRAME_ARGS,
-                "-pix_fmt", "yuv420p",
-                "-f", "hls",
-                "-hls_time", str(SEGMENT_SECONDS),
-                "-hls_playlist_type", "event",
-                "-hls_segment_type", "fmp4",
-                "-hls_fmp4_init_filename", INIT_FILE,
-                "-hls_segment_filename", "seg_%05d.m4s",
-                # Each segment goes to a .tmp file renamed when whole, and is
-                # listed only after that, so a reader never sees half of one.
-                "-hls_flags", "independent_segments+temp_file",
-                PLAYLIST_FILE,
-            ],
-            cwd=str(run_dir),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=self._log,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-
-    def write(self, frame: Any) -> None:
-        import numpy as np
-
-        stdin = self._process.stdin
-        assert stdin is not None
-        try:
-            stdin.write(np.ascontiguousarray(frame).tobytes())
-        except OSError as exc:
-            raise EncoderFailed(self._failure("ffmpeg stopped accepting frames")) from exc
-
-    def close(self, abort: bool = False) -> None:
-        """Finish the last segment and the playlist, or with ``abort`` just stop."""
-        stdin = self._process.stdin
-        if stdin is not None:
-            with suppress(OSError):
-                stdin.close()
-        if abort:
-            with suppress(OSError):
-                self._process.kill()
-        try:
-            code = self._process.wait(timeout=600)
-        finally:
-            failure = "" if abort or self._process.returncode == 0 else self._failure(
-                f"ffmpeg exited with code {self._process.returncode}"
-            )
-            self._log.close()
-        if not abort and code != 0:
-            raise EncoderFailed(failure)
-
-    def _failure(self, message: str) -> str:
-        with suppress(OSError, ValueError):
-            self._log.seek(0)
-            tail = self._log.read()[-800:].decode("utf-8", "replace").strip()
-            if tail:
-                return f"{message}: {tail}"
-        return message
-
-
 def _render_process_main(job: dict[str, Any], progress: Any, cancel: Any) -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s render %(message)s"
@@ -780,19 +626,12 @@ def _render_process_main(job: dict[str, Any], progress: Any, cancel: Any) -> Non
 
         detector = load_ultralytics_detector(job["model_path"])
         publish({"kind": "loaded", "metadata": detector.metadata()})
-        ffmpeg = str(job["ffmpeg"])
-        encoder_name, codec = choose_encoder(ffmpeg)
-        _LOG.info("Encoding with %s", encoder_name)
-        publish({"kind": "encoder", "name": encoder_name})
         run_render(
             video=job["video"],
             output_dir=job["output_dir"],
             settings=job["settings"],
-            meta={**job["meta"], "encoder": encoder_name},
+            meta=job["meta"],
             detector=detector,
-            encoder_factory=lambda run_dir, width, height, fps: FfmpegEncoder(
-                ffmpeg, run_dir, width, height, fps, codec
-            ),
             publish=publish,
             cancelled=cancel.is_set,
             fresh=bool(job.get("fresh")),
@@ -866,10 +705,6 @@ class RenderManager:
     ) -> dict[str, Any]:
         """Start rendering, continuing a partial render of the same files if there is one."""
         settings.validate()
-        if not self._ffmpeg:
-            raise RenderUnavailable(
-                "ไม่พบ ffmpeg — ติดตั้ง ffmpeg หรือตั้ง TELEMETRY_OCR_FFMPEG ให้ชี้ไปที่ ffmpeg.exe"
-            )
         directory = self.directory(render_id)
         with self._lock:
             self._poll_locked()
@@ -883,7 +718,6 @@ class RenderManager:
                 "model_path": str(model_path),
                 "output_dir": str(directory),
                 "settings": asdict(settings),
-                "ffmpeg": self._ffmpeg,
                 "fresh": fresh,
                 "meta": {
                     "render_id": render_id,
@@ -965,52 +799,40 @@ class RenderManager:
             found.append(described)
         return found
 
-    def stream(self, render_id: str) -> dict[str, Any] | None:
-        """The segments of a render to play, or how to play a render made before segments."""
+    def tracks(
+        self, render_id: str, from_ms: float = 0.0, to_ms: float | None = None
+    ) -> dict[str, Any] | None:
+        """How far a render has got, and the boxes of the frames between two times.
+
+        A window rather than the whole file: a 25-minute render is several
+        megabytes of boxes, and the page needs the next half-minute of them.
+        """
         directory = self.directory(render_id)
         with self._lock:
             active = self._active_render_locked()
             job = self._job if active == render_id else None
             written_per_s = float(job.get("fps") or 0.0) if job is not None else 0.0
         meta = read_meta(directory)
-        if meta is None:
+        if meta is None or not (directory / TRACKS_FILE).is_file():
             return None
-        if render_format(meta) == LEGACY_FORMAT:
-            if meta.get("status") != "complete" or not (directory / LEGACY_VIDEO_FILE).is_file():
-                return None
-            return {
-                "render_id": render_id,
-                "format": LEGACY_FORMAT,
-                "status": "complete",
-                "complete": True,
-                "duration_ms": meta.get("duration_ms"),
-                "processed_ms": meta.get("duration_ms"),
-                "runs": [],
-            }
-        index = stream_index(directory, meta)
-        index["render_id"] = render_id
-        if index["status"] == "running" and render_id != active:
-            index["status"] = "partial"
-        # Seconds of video made per second, averaged over the run: what the page
-        # works out how long to wait from. Steadier than its own polls, which see
-        # the render only in two-second steps.
-        source_fps = float(meta.get("source_fps") or 0.0)
-        stride = int(meta.get("stride") or 1)
-        index["rate"] = (
-            round(written_per_s * stride / source_fps, 4)
-            if index["status"] == "running" and source_fps > 0
+        state = render_state(directory, meta)
+        state["render_id"] = render_id
+        if state["status"] == "running" and render_id != active:
+            state["status"] = "partial"
+        # Seconds of video tracked per second, averaged over the run: what the
+        # page works out how long to wait from.
+        state["rate"] = (
+            round(written_per_s * state["stride"] / state["source_fps"], 4)
+            if state["status"] == "running"
             else None
         )
-        return index
-
-    def segment_path(self, render_id: str, run: str, file: str) -> Path | None:
-        """One file of one run, if the names are ones a render writes and it exists."""
-        if not _RUN_DIR.fullmatch(run):
-            return None
-        if file != INIT_FILE and not _SEGMENT_NAME.fullmatch(file):
-            return None
-        path = self.directory(render_id) / run / file
-        return path if path.is_file() else None
+        fps = state["source_fps"]
+        first = max(0, int(from_ms * fps / 1000.0))
+        # One frame past the window: a box at its edge is placed toward it.
+        last = int(to_ms * fps / 1000.0) + 1 if to_ms is not None else None
+        state["from_frame"] = first
+        state["frames"] = self._index(render_id, directory).between(first, last)
+        return state
 
     def delete(self, render_id: str) -> None:
         directory = self.directory(render_id)
@@ -1027,8 +849,14 @@ class RenderManager:
             shutil.rmtree(directory)
 
     def detections_at(self, render_id: str, frame_index: int) -> list[dict[str, Any]] | None:
-        """The boxes a render drew on one source frame, or None if it has not got to it."""
-        path = self.directory(render_id) / TRACKS_FILE
+        """The boxes a render found on one source frame, or None if it has not got to it."""
+        index = self._index(render_id, self.directory(render_id))
+        try:
+            return index.at(frame_index)
+        except OSError:
+            return None
+
+    def _index(self, render_id: str, directory: Path) -> TrackIndex:
         with self._lock:
             index = self._tracks.get(render_id)
             if index is None:
@@ -1036,50 +864,35 @@ class RenderManager:
                 # last couple rather than one per render ever opened.
                 if len(self._tracks) >= 2:
                     self._tracks.pop(next(iter(self._tracks)))
-                index = TrackIndex(path)
+                index = TrackIndex(directory / TRACKS_FILE)
                 self._tracks[render_id] = index
-            try:
+            with suppress(OSError):
                 index.refresh()
-                return index.at(frame_index)
-            except OSError:
-                return None
+            return index
 
     # -- helpers ----------------------------------------------------------------
 
     def _describe(self, directory: Path, active: str | None) -> dict[str, Any] | None:
         meta = read_meta(directory)
-        if meta is None:
+        if meta is None or not (directory / TRACKS_FILE).is_file():
             return None
-        if render_format(meta) == LEGACY_FORMAT:
-            if meta.get("status") != "complete" or not (directory / LEGACY_VIDEO_FILE).is_file():
-                return None
-            size = _file_size(directory / LEGACY_VIDEO_FILE)
-            return {
-                **meta,
-                "format": LEGACY_FORMAT,
-                "processed_ms": meta.get("duration_ms"),
-                "size_bytes": size,
-            }
         status = str(meta.get("status") or "")
         if status == "running" and directory.name != active:
             # Left "running" by a render that did not get to say otherwise.
             status = "partial"
         if status not in {"complete", "partial", "running"}:
             return None
-        index = stream_index(directory, meta)
-        if not index["runs"] and status != "running":
+        state = render_state(directory, meta)
+        if state["last_frame"] is None and status != "running":
             return None
-        # What an MP4 of it would weigh: the segments are the stream, copied.
-        size = sum(
-            _file_size(directory / run["run"] / name)
-            for run in index["runs"]
-            for name in [INIT_FILE, *(segment["file"] for segment in run["segments"])]
-        )
         return {
             **meta,
+            "format": render_format(meta),
             "status": status,
-            "processed_ms": index["processed_ms"],
-            "size_bytes": size,
+            "processed_ms": state["processed_ms"],
+            # Everything in the folder, the video of older renders included: what
+            # deleting it would give back.
+            "size_bytes": _folder_size(directory),
         }
 
     def _active_render_locked(self) -> str | None:
@@ -1123,8 +936,6 @@ class RenderManager:
                 job["fps"] = float(message.get("fps", 0.0))
                 if isinstance(message.get("stages_ms"), dict):
                     job["stages_ms"] = message["stages_ms"]
-            elif kind == "encoder":
-                job["encoder"] = str(message.get("name") or "")
             elif kind == "complete":
                 job["status"] = "complete"
                 job["done"] = job["total"] = int(message["meta"].get("source_frames", job["total"]))
@@ -1191,6 +1002,9 @@ class TrackIndex:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._offsets: dict[int, int] = {}
+        # The same frames in file order, which is frame order: what a range
+        # lookup bisects.
+        self._frames: list[int] = []
         self._end = 0
         self._identity: tuple[int, int] | None = None
 
@@ -1199,6 +1013,7 @@ class TrackIndex:
         identity = (int(stat.st_ino), int(stat.st_dev))
         if identity != self._identity or stat.st_size < self._end:
             self._offsets.clear()
+            self._frames.clear()
             self._end = 0
             self._identity = identity
         if stat.st_size == self._end:
@@ -1215,7 +1030,10 @@ class TrackIndex:
                 # much avoids parsing forty thousand detection lists up front.
                 match = _FRAME_INDEX.match(line)
                 if match:
-                    self._offsets[int(match.group(1))] = offset
+                    frame = int(match.group(1))
+                    self._offsets[frame] = offset
+                    if not self._frames or frame > self._frames[-1]:
+                        self._frames.append(frame)
                 offset += len(line)
         self._end = offset
 
@@ -1228,6 +1046,40 @@ class TrackIndex:
             record = json.loads(stream.readline())
         detections = record.get("detections")
         return detections if isinstance(detections, list) else []
+
+    def between(self, first: int, last: int | None = None) -> list[list[Any]]:
+        """Every frame from ``first`` to ``last`` inclusive, as [frame, boxes], compactly.
+
+        A box is [x1, y1, x2, y2, confidence, class_id, track_id, label]: the page
+        draws thousands of them, and keys repeated on each would be most of the
+        bytes.
+        """
+        start = bisect.bisect_left(self._frames, first)
+        stop = len(self._frames) if last is None else bisect.bisect_right(self._frames, last)
+        if start >= stop:
+            return []
+        found: list[list[Any]] = []
+        with self._path.open("rb") as stream:
+            stream.seek(self._offsets[self._frames[start]])
+            for _ in range(stop - start):
+                line = stream.readline()
+                if not line.endswith(b"\n"):
+                    break
+                record = json.loads(line)
+                found.append(
+                    [
+                        int(record["frame_index"]),
+                        [
+                            [
+                                box["x1"], box["y1"], box["x2"], box["y2"],
+                                box.get("confidence"), box.get("class_id"),
+                                box.get("track_id"), box.get("label"),
+                            ]
+                            for box in record.get("detections") or []
+                        ],
+                    ]
+                )
+        return found
 
 
 def _averages(spans: dict[str, float], frames: int) -> dict[str, float]:
@@ -1262,11 +1114,13 @@ def with_track_ids(boxes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return labelled
 
 
-def _file_size(path: Path) -> int:
-    try:
-        return int(path.stat().st_size)
-    except OSError:
-        return 0
+def _folder_size(directory: Path) -> int:
+    total = 0
+    for path in directory.rglob("*"):
+        with suppress(OSError):
+            if path.is_file():
+                total += int(path.stat().st_size)
+    return total
 
 
 def _now() -> str:

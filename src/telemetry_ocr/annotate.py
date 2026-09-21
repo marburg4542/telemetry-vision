@@ -59,21 +59,23 @@ def annotate_frame(
         (text_w, text_h), baseline = cv2.getTextSize(
             label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
         )
-        # Above the box, unless that would be off the top of the frame.
+        # Above the box, unless that would be off the top of the frame; pulled
+        # back in at the right edge rather than cut off.
         top = y1 - text_h - baseline
         if top < 0:
             top = y2
+        left = max(0, min(x1, width - text_w - 6))
         cv2.rectangle(
             annotated,
-            (x1, top),
-            (x1 + text_w + 6, top + text_h + baseline + 4),
+            (left, top),
+            (left + text_w + 6, top + text_h + baseline + 4),
             colour,
             -1,
         )
         cv2.putText(
             annotated,
             label,
-            (x1 + 3, top + text_h + 2),
+            (left + 3, top + text_h + 2),
             cv2.FONT_HERSHEY_SIMPLEX,
             font_scale,
             (16, 16, 16),

@@ -57,22 +57,15 @@ def write_fake_render(
     fps: float = FPS,
     status: str = "complete",
     processed: int | None = None,
-    legacy: bool = False,
+    segmented: bool = False,
 ) -> Path:
     """A render on disk, as the render child would have left it.
 
     ``processed`` stops the recorded frames short of ``frames``, for a render
-    that is partial or still being made. ``legacy`` writes the single-MP4 layout
-    of renders made before segments.
+    that is partial or still being made. ``segmented`` also leaves the video
+    segments renders wrote before the page drew the boxes itself.
     """
-    from telemetry_ocr.render_job import (
-        INIT_FILE,
-        LEGACY_VIDEO_FILE,
-        META_FILE,
-        PLAYLIST_FILE,
-        TRACKS_FILE,
-        fingerprint,
-    )
+    from telemetry_ocr.render_job import META_FILE, TRACKS_FILE, fingerprint
 
     directory = renders_root / render_id
     directory.mkdir(parents=True, exist_ok=True)
@@ -108,23 +101,20 @@ def write_fake_render(
         "created_at": "2026-09-15T12:00:00+07:00",
         "tracks_file": TRACKS_FILE,
     }
-    if legacy:
-        (directory / LEGACY_VIDEO_FILE).write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64)
-        meta["video_file"] = LEGACY_VIDEO_FILE
-    else:
+    if segmented:
         run = directory / "run-000"
         run.mkdir(exist_ok=True)
-        (run / INIT_FILE).write_bytes(b"\x00\x00\x00\x18ftypiso5" + b"\x00" * 16)
+        (run / "init.mp4").write_bytes(b"\x00\x00\x00\x18ftypiso5" + b"\x00" * 16)
         (run / "seg_00000.m4s").write_bytes(b"\x00\x00\x00\x10moof" + b"\x00" * 8)
-        seconds = len(recorded) * stride / fps
-        (run / PLAYLIST_FILE).write_text(
-            f'#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI="{INIT_FILE}"\n'
-            f"#EXTINF:{seconds:.6f},\nseg_00000.m4s\n",
-            encoding="utf-8",
-        )
         meta.update(
             format="hls",
             runs=[{"dir": "run-000", "start_frame": 0, "track_id_offset": 0}],
+            next_frame=done,
+        )
+    else:
+        meta.update(
+            format="tracks",
+            runs=[{"start_frame": 0, "track_id_offset": 0}],
             next_frame=done,
         )
     (directory / META_FILE).write_text(json.dumps(meta), encoding="utf-8")
@@ -161,81 +151,25 @@ class FakeDetector:
         return [Detection(x, 2.0, x + 10.0, 12.0, 0.9, 0, "car", 7)]
 
 
-class FakeEncoder:
-    """Leaves what ffmpeg's HLS muxer leaves, with placeholder bytes.
+class FakeWriter:
+    """Stands in for ffmpeg in an export: keeps the frames, writes a stand-in file."""
 
-    An init segment, a numbered segment every ``segment_frames`` frames, and a
-    playlist that names each one once it is finished. Closing finishes the last
-    short segment; aborting does not, like an ffmpeg that was killed.
-    """
+    instances: ClassVar[list[FakeWriter]] = []
 
-    instances: ClassVar[list[FakeEncoder]] = []
-    segment_frames = 4
-
-    def __init__(self, run_dir: Path, width: int, height: int, fps: float) -> None:
-        self.run_dir = Path(run_dir)
-        self.width, self.height, self.fps = width, height, fps
-        self.shapes: list[tuple[int, ...]] = []
-        self.closed_with_abort: bool | None = None
-        self._pending = 0
-        self._segments: list[float] = []
-        (self.run_dir / "init.mp4").write_bytes(b"\x00\x00\x00\x18ftypiso5" + b"\x00" * 16)
-        FakeEncoder.instances.append(self)
-
-    @property
-    def frames(self) -> int:
-        return len(self.shapes)
+    def __init__(self, target: Path, width: int, height: int, fps: float, quality: str) -> None:
+        self.target = Path(target)
+        self.width, self.height, self.fps, self.quality = width, height, fps, quality
+        self.frames: list[Any] = []
+        self.aborted = False
+        FakeWriter.instances.append(self)
 
     def write(self, frame: Any) -> None:
-        self.shapes.append(tuple(frame.shape))
-        self._pending += 1
-        if self._pending == self.segment_frames:
-            self._finish_segment()
+        self.frames.append(frame.copy())
 
     def close(self, abort: bool = False) -> None:
-        self.closed_with_abort = abort
-        if not abort and self._pending:
-            self._finish_segment()
-        self._write_playlist(ended=not abort)
-
-    def _finish_segment(self) -> None:
-        name = f"seg_{len(self._segments):05d}.m4s"
-        (self.run_dir / name).write_bytes(b"\x00\x00\x00\x10moof" + b"\x00" * 8)
-        self._segments.append(self._pending / self.fps)
-        self._pending = 0
-        self._write_playlist(ended=False)
-
-    def _write_playlist(self, ended: bool) -> None:
-        lines = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:7",
-            "#EXT-X-TARGETDURATION:2",
-            "#EXT-X-MEDIA-SEQUENCE:0",
-            "#EXT-X-PLAYLIST-TYPE:EVENT",
-            "#EXT-X-INDEPENDENT-SEGMENTS",
-            '#EXT-X-MAP:URI="init.mp4"',
-        ]
-        for number, duration in enumerate(self._segments):
-            lines += [f"#EXTINF:{duration:.6f},", f"seg_{number:05d}.m4s"]
-        if ended:
-            lines.append("#EXT-X-ENDLIST")
-        (self.run_dir / "index.m3u8").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def copying_export_runner(command: list[str], duration_s: float, progress: Any) -> None:
-    """Stands in for ffmpeg in an export: writes the joined inputs out as the file."""
-    output = Path(command[-1])
-    if "concat" in command:
-        listing = Path(command[command.index("-i") + 1])
-        inputs = [
-            Path(line.split("'")[1])
-            for line in listing.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    else:
-        inputs = [Path(command[command.index("-i") + 1])]
-    progress(50.0)
-    output.write_bytes(b"".join(path.read_bytes() for path in inputs))
+        self.aborted = abort
+        if not abort:
+            self.target.write_bytes(b"mp4" * max(1, len(self.frames)))
 
 
 class ThreadHandle:
@@ -258,7 +192,7 @@ def thread_launcher(
     entered: threading.Event | None = None,
     detector_factory: Any = None,
 ):
-    """Runs a render in a thread with a fake detector and encoder, for tests."""
+    """Runs a render in a thread with a fake detector, for tests."""
     from telemetry_ocr.render_job import run_render
 
     def launch(job: dict[str, Any]):
@@ -273,7 +207,6 @@ def thread_launcher(
                     settings=job["settings"],
                     meta=job["meta"],
                     detector=(detector_factory or FakeDetector)(gate, entered),
-                    encoder_factory=FakeEncoder,
                     publish=progress.put,
                     cancelled=cancel.is_set,
                     fresh=bool(job.get("fresh")),

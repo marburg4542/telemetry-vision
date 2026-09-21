@@ -451,6 +451,12 @@ summary:focus-visible, label:has(input:focus-visible) {
 .check-control input { accent-color: var(--blue); }
 
 .render-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--blue); }
+.box-overlay {
+  position: absolute;
+  /* Placed over the <video> by the overlay itself; clicks go through to its
+     controls. */
+  pointer-events: none;
+}
 .render-wait {
   position: absolute;
   left: 50%;
