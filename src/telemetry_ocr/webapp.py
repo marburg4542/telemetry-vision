@@ -1276,6 +1276,38 @@ def create_app(
         if item.data_type == "dms" and item.dms_decimal_places is not None
     }
 
+    # The reverse geocoder and its disk cache, built on the first send that has a
+    # key to build it with. The settings are re-read each time so that adding the
+    # key does not need a restart, and the geocoder is kept as long as the key is
+    # the same one: it is where the cache and the day's call count live.
+    geocode_state: dict[str, Any] = {"geocoder": None, "key": ""}
+
+    async def places_for(shots: list[Any]) -> list[Any]:
+        """What each shot's TAG coordinate is on the ground, as far as it is known.
+
+        An empty list when no key is configured, which is the ordinary state and
+        the one where the messages read exactly as they did before.
+        """
+        from .geocode import Geocoder, load_geocode_config
+        from .line_client import tag_position
+
+        settings = await asyncio.to_thread(load_geocode_config)
+        if settings is None:
+            return []
+        geocoder = geocode_state["geocoder"]
+        if geocoder is None or geocode_state["key"] != settings.api_key:
+            geocoder = await asyncio.to_thread(
+                Geocoder, settings, Path(output_dir) / "geocode-cache.json"
+            )
+            geocode_state.update({"geocoder": geocoder, "key": settings.api_key})
+        places = []
+        for shot in shots:
+            position = tag_position(shot)
+            # A frame whose TAG could not be read has no link either; the block
+            # for it simply carries no address.
+            places.append(await geocoder.place(*position) if position else None)
+        return places
+
     async def line_send(request: Any) -> Any:
         """Push one captured shot to LINE as text.
 
@@ -1387,7 +1419,9 @@ def create_app(
             )
         line_state["last_sent"] = now
 
-        text = format_capture_digest(shots, dms_decimals=dms_decimals_by_field)
+        text = format_capture_digest(
+            shots, dms_decimals=dms_decimals_by_field, places=await places_for(shots)
+        )
 
         # Images only when a public base URL is configured. Without one there is
         # nowhere LINE could fetch from, and the message goes as text.

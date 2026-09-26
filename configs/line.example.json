@@ -4,7 +4,10 @@
   "_token": "LINE Developers Console -> your channel -> Messaging API tab -> Channel access token (long-lived)",
   "_to": "The user, group or room id to push to. A user id starts with U, a group id with C. It is NOT the LINE display name or the @handle of the Official Account.",
   "_public_base_url": "OPTIONAL. Leave empty to send telemetry as text only, which exposes nothing. Set it to a Cloudflare Tunnel hostname (see scripts/setup_cloudflare_tunnel.ps1) to also send the captured picture. Doing so puts that frame within reach of anyone holding the URL while it lives, and LINE keeps its own copy afterwards.",
+  "_google_maps_api_key": "OPTIONAL. A Google API key with the Geocoding API enabled. With it, every message carries the road, tambon, district and province of the TAG coordinate, and the nearest landmark with its distance and direction, under the map link. Without it the messages read exactly as before. Answers are cached in output/geocode-cache.json per ~11 m and capped by geocode_daily_limit (default 500 calls a day; Geocoding costs about $5 per 1000).",
   "channel_access_token": "",
   "to": "",
-  "public_base_url": ""
+  "public_base_url": "",
+  "google_maps_api_key": "",
+  "geocode_daily_limit": 500
 }

@@ -407,17 +407,12 @@ def describe_verification(
     return "\n".join(parts)
 
 
-def format_capture_message(
-    shot: Any,
-    dms_decimals: dict[str, int] | None = None,
-) -> str:
-    """Turn one shot into the text that gets pushed.
+def _capture_values(shot: Any) -> tuple[dict[str, Any], int]:
+    """The reading to print for each field, and how many came from voting.
 
-    The readings first, with nothing above them. The message used to open with
-    the time of the capture and the session and frame it came from, and to close
-    with the path of the picture on the machine that sent it -- three lines that
-    spent a phone notification's preview on a picture attached to the same
-    message and a path the reader has no way to open.
+    Pulled out of the message builder so that anything else needing the shot's
+    own numbers -- looking up the address of the target, say -- asks the same
+    question and gets the same answer.
     """
     values: dict[str, Any] = {}
     for record in getattr(shot, "records", []) or []:
@@ -463,6 +458,43 @@ def format_capture_message(
             # The image could not be validated; voting had an answer. Keeping the
             # live record is what stops raw OCR text reaching the message.
             rescued += 1
+    return values, rescued
+
+
+def tag_position(shot: Any) -> tuple[float, float] | None:
+    """Where the camera was pointing, or None when either half is missing.
+
+    The same pair the map link is built from, so an address looked up with this
+    can never describe a different point than the link beside it.
+    """
+    values, _ = _capture_values(shot)
+    latitude = (values.get("tag_lat_dms") or {}).get("value")
+    longitude = (values.get("tag_lon_dms") or {}).get("value")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return None
+    return float(latitude), float(longitude)
+
+
+def format_capture_message(
+    shot: Any,
+    dms_decimals: dict[str, int] | None = None,
+    place: Any = None,
+) -> str:
+    """Turn one shot into the text that gets pushed.
+
+    The readings first, with nothing above them. The message used to open with
+    the time of the capture and the session and frame it came from, and to close
+    with the path of the picture on the machine that sent it -- three lines that
+    spent a phone notification's preview on a picture attached to the same
+    message and a path the reader has no way to open.
+
+    `place` is what the TAG coordinate turned out to be on the ground, when it
+    could be looked up; see geocode.py for why it is printed under the link
+    rather than instead of it.
+    """
+    # The rescue count goes with describe_verification, which the message does
+    # not currently carry.
+    values, _ = _capture_values(shot)
 
     lines: list[str] = []
     for label, field_ids in _LAYOUT:
@@ -484,6 +516,12 @@ def format_capture_message(
         # the block look like a sixth telemetry row.
         lines.append("")
         lines.append(f"      TAG on map: {tag_link}")
+        # The address below the link, because the link is what gets tapped and
+        # the address is what gets read out. A failed lookup says so here too:
+        # someone configured this expecting an address, and silence would look
+        # like a coordinate nobody could name.
+        if place is not None:
+            lines.extend(place.lines())
 
     lines.append("")
     lines.append(describe_detections(getattr(shot, "detections", None)))
@@ -601,6 +639,7 @@ _DIGEST_RULE = "\n\n" + "\u2014" * 8 + "\n\n"
 def format_capture_digest(
     shots: list[Any],
     dms_decimals: dict[str, int] | None = None,
+    places: list[Any] | None = None,
 ) -> str:
     """The text for several shots sent together.
 
@@ -611,12 +650,19 @@ def format_capture_digest(
     """
     if not shots:
         return ""
+    # One place per shot, in the order the shots are in; a short list or none at
+    # all simply means those frames have no address to print.
+    found = list(places or [])
+    found += [None] * (len(shots) - len(found))
     if len(shots) == 1:
-        return format_capture_message(shots[0], dms_decimals=dms_decimals)
+        return format_capture_message(shots[0], dms_decimals=dms_decimals, place=found[0])
     # Kept for several frames, where it is the only line saying how many blocks
     # of readings follow. One frame needs no such line.
     header = f"[Capture x{len(shots)}]\n\n"
-    blocks = [format_capture_message(shot, dms_decimals=dms_decimals) for shot in shots]
+    blocks = [
+        format_capture_message(shot, dms_decimals=dms_decimals, place=place)
+        for shot, place in zip(shots, found, strict=True)
+    ]
     text = header + _DIGEST_RULE.join(blocks)
     if len(text) <= MAX_TEXT:
         return text

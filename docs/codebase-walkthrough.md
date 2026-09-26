@@ -125,6 +125,7 @@ src/telemetry_ocr/                       (26 ไฟล์ · 9,793 บรรท�
 ├─ render_job.py      1,137    ★ รันวิดีโอทั้งไฟล์ผ่าน YOLO+BoT-SORT · เขียนกรอบลง tracks.jsonl · ทำต่อได้
 ├─ render_export.py     463    วาดกรอบลงต้นฉบับทุกเฟรมเป็น MP4 ไฟล์เดียว (เต็ม / 720p) ไว้ส่งต่อ
 ├─ auto_capture.py      372    เลือกวัตถุจาก tracks ระหว่างประมวลผล → Capture/ส่งไลน์อัตโนมัติ
+├─ geocode.py          507    พิกัด TAG → ที่อยู่จริง (Google Geocoding) สำหรับข้อความไลน์
 ├─ training_export.py   385    เลือกเฟรมจาก render ไปทำ label เทรนโมเดล (YOLOv8 dataset)
 ├─ annotate.py           97    วาดกรอบลงสำเนาภาพ (ใช้ร่วม capture กับ render ไม่ import OCR)
 ├─ detection_worker.py  527    โปรเซสลูก + คิวรับส่งเฟรม/ผล (ใช้กับ CLI run --detect-model)
@@ -423,6 +424,18 @@ GMC เป็น 1/4 (`GMC_DOWNSCALE`) หลังเฟรมแรกที�
 `scripts/compare_models.py` เทียบ checkpoint บนชุดทดสอบ (`YOLO.val`) และบนวิดีโอจริงด้วย
 `UltralyticsDetector` + `tracker_config` ของแอป
 `scripts/train_local.py` เทรนบน GPU เครื่องนี้จาก 14th_opt และ/หรือ yolov8m-visdrone (สูตร GTX 1650: batch 2, ปิด AMP)
+
+### `geocode.py` — พิกัด TAG → ถนน/ตำบล/หมุดอ้างอิง สำหรับข้อความไลน์
+
+| ส่วน | ทำอะไร |
+|---|---|
+| `load_geocode_config()` | คีฯจาก env ก่อน แล้วค่อย `configs/line.json` · ไม่มีคีฯ = ปิดคุณสมบัตินี้เงียบๆ |
+| `Geocoder.place()` | cache บนดิสก์ต่อพิกัดปัดเศษ 4 ตำแหน่ง (~11 ม.) · เพดานวันละ 500 ครั้ง · คำตอบที่ผิดพลาดไม่ถูกจำ |
+| `parse_response()` | อ่าน address_components หลายชั้น (ที่ไทยคืนไม่คงที่) และหยิบสถานที่ในคำตอบเดิมมาเป็นหมุดอ้างอิง |
+| `Place.lines()` | สองหรือสามบรรทัดใต้ลิงก์แผนที่ · ไม่มีชื่อถนนก็บอกว่าไม่มี |
+
+`webapp.deliver()` เรียก `places_for(shots)` ก่อนสร้างข้อความ จึงใช้ทั้งกดส่งเองและส่งอัตโนมัติ
+พิกัดมาจาก `line_client.tag_position(shot)` ที่อ่านค่าเดียวกันกับลิงก์แผนที่
 
 ### `choose_encoder(ffmpeg)`
 ลอง `h264_nvenc` → `h264_qsv` → `libx264` ด้วยการ encode จริงสองเฟรม ใช้ตอนบันทึก MP4 เท่านั้น

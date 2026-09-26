@@ -29,13 +29,32 @@ TOKEN = "secret-line-token-must-not-leak"
 
 @unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
 class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
+    # What the overlay is pretending to show. A subclass that needs coordinates
+    # on screen -- the address lookup does -- overrides both of these.
+    def fields(self) -> list[Any]:
+        from telemetry_ocr.config import FieldConfig
+
+        return [
+            FieldConfig(
+                field_id="lrf_m",
+                box=(0.1, 0.1, 0.4, 0.4),
+                allowed_chars="0123456789",
+                regex=r"^\d+$",
+                data_type="integer",
+                profile="fast",
+            )
+        ]
+
+    def readings(self) -> list[str]:
+        return ["128"]
+
     async def asyncSetUp(self) -> None:
         import cv2
         import numpy as np
         from aiohttp import web
         from aiohttp.test_utils import TestClient, TestServer
 
-        from telemetry_ocr.config import AppConfig, FieldConfig, RuntimeConfig
+        from telemetry_ocr.config import AppConfig, RuntimeConfig
         from telemetry_ocr.ocr import OCRResult
         from telemetry_ocr.webapp import GUARD_HEADER, create_app
 
@@ -66,7 +85,13 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         env_patch = mock.patch.dict(
             "os.environ",
-            {"TELEMETRY_OCR_LINE_TOKEN": TOKEN, "TELEMETRY_OCR_LINE_TO": "U1234567890"},
+            {
+                "TELEMETRY_OCR_LINE_TOKEN": TOKEN,
+                "TELEMETRY_OCR_LINE_TO": "U1234567890",
+                # Emptied rather than left alone: a key in the developer's own
+                # environment would send these tests to Google.
+                "TELEMETRY_OCR_GOOGLE_MAPS_KEY": "",
+            },
         )
         env_patch.start()
         self.addCleanup(env_patch.stop)
@@ -82,24 +107,30 @@ class LineEndpointTests(unittest.IsolatedAsyncioTestCase):
         path_patch.start()
         self.addCleanup(path_patch.stop)
 
+        # The address lookup reads a config file of its own, so it needs its own
+        # redirection: a Google key in the developer's configs/line.json would
+        # otherwise put this suite on the network and on their bill.
+        geocode_patch = mock.patch(
+            "telemetry_ocr.geocode.DEFAULT_CONFIG_PATH", self.root / "absent-line.json"
+        )
+        geocode_patch.start()
+        self.addCleanup(geocode_patch.stop)
+
+        readings = self.readings()
+
         class FakeRecognizer:
             def recognize(self, images: Any) -> Any:
-                return [OCRResult("128", 0.99) for _ in images]
+                # One reading per crop, in the order the fields are configured.
+                return [
+                    OCRResult(readings[index % len(readings)], 0.99)
+                    for index in range(len(images))
+                ]
 
         config = AppConfig(
             runtime=RuntimeConfig(
                 enable_fallback=False, confidence_threshold=0.5, warmup_iterations=0
             ),
-            fields=[
-                FieldConfig(
-                    field_id="lrf_m",
-                    box=(0.1, 0.1, 0.4, 0.4),
-                    allowed_chars="0123456789",
-                    regex=r"^\d+$",
-                    data_type="integer",
-                    profile="fast",
-                )
-            ],
+            fields=self.fields(),
         )
         from _video_fixture import write_test_video
         from telemetry_ocr.video_library import VideoLibrary
@@ -537,3 +568,107 @@ class UnreachableUrlTests(LineEndpointTests):
         body = await (await self._send()).json()
         self.assertEqual(body["images"], 0)
         self.assertIn("URL", body["share_error"])
+
+
+@unittest.skipUnless(HAS_WEB_DEPS, "aiohttp/NumPy/OpenCV not installed")
+class AddressSendTests(LineEndpointTests):
+    """The road and the landmark reaching the chat, not just the coordinate.
+
+    What an officer can act on is "ถ.304 ต.หินดาด", so the TAG coordinate is put
+    through Google's reverse geocoder on the way out. Google is stood in for
+    here: these tests are about the wiring and about what the message says, and
+    a real lookup would cost money and need a network.
+    """
+
+    # The overlay is showing a target at 14°51'03.60"N 102°01'12.00"E.
+    def fields(self) -> list[Any]:
+        from telemetry_ocr.config import FieldConfig
+
+        def coordinate(field_id: str, digits: int, hemisphere: str) -> Any:
+            return FieldConfig(
+                field_id=field_id,
+                box=(0.1, 0.1, 0.4, 0.4),
+                allowed_chars="0123456789.°'\"",
+                regex=rf"^\d{{1,{digits}}}°\d{{2}}'\d{{2}}\.\d{{2}}\"$",
+                data_type="dms",
+                normalizer="dms",
+                dms_degrees_digits=digits,
+                dms_decimal_places=2,
+                hemisphere=hemisphere,
+                profile="fast",
+            )
+
+        # The range finder stays, so every test this class inherits still has
+        # the field it was written against.
+        return [
+            *super().fields(),
+            coordinate("tag_lat_dms", 2, "N"),
+            coordinate("tag_lon_dms", 3, "E"),
+        ]
+
+    def readings(self) -> list[str]:
+        return [*super().readings(), "14°51'03.60\"", "102°01'12.00\""]
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        from test_geocode import response
+
+        self.lookups: list[dict[str, str]] = []
+        self.payload: dict[str, Any] = response()
+
+        async def fetch(url: str, params: dict[str, str], timeout_s: float) -> dict[str, Any]:
+            self.lookups.append(params)
+            return self.payload
+
+        patch = mock.patch("telemetry_ocr.geocode._fetch", fetch)
+        patch.start()
+        self.addCleanup(patch.stop)
+        env = mock.patch.dict("os.environ", {"TELEMETRY_OCR_GOOGLE_MAPS_KEY": "test-key"})
+        env.start()
+        self.addCleanup(env.stop)
+
+    async def text_of_a_send(self) -> str:
+        await self._shot()
+        await self._send()
+        return str(self.pushes[0]["body"]["messages"][0]["text"])
+
+    async def test_the_address_travels_with_the_coordinate(self) -> None:
+        text = await self.text_of_a_send()
+        self.assertIn("google.com/maps?q=14.8510000,102.0200000", text)
+        self.assertIn("ที่อยู่: ทางหลวง 304 ต.หินดาด อ.ห้วยแถลง จ.นครราชสีมา", text)
+        self.assertIn("ห่างจาก วัดหินดาด", text)
+        # Looked up for the point the link points at, nothing else.
+        self.assertEqual(len(self.lookups), 1)
+        self.assertEqual(self.lookups[0]["latlng"], "14.851000,102.020000")
+
+    async def test_the_address_sits_under_the_link_not_instead_of_it(self) -> None:
+        lines = (await self.text_of_a_send()).splitlines()
+        link = next(index for index, line in enumerate(lines) if "maps?q=" in line)
+        self.assertIn("ที่อยู่:", lines[link + 1])
+
+    async def test_a_failed_lookup_does_not_hold_up_the_message(self) -> None:
+        """The coordinate is the part someone is waiting for.
+
+        A message withheld because Google was down would be the lookup deciding
+        whether a report gets made, which is backwards.
+        """
+        self.payload = {"status": "REQUEST_DENIED", "error_message": "API key not valid"}
+        text = await self.text_of_a_send()
+        self.assertIn("google.com/maps?q=", text)
+        self.assertIn("หาที่อยู่ไม่ได้", text)
+        self.assertIn("API key not valid", text)
+
+    async def test_the_google_key_is_never_in_the_message(self) -> None:
+        text = await self.text_of_a_send()
+        self.assertNotIn("test-key", text)
+        self.assertNotIn("test-key", json.dumps(self.pushes[0]["body"], ensure_ascii=False))
+
+    async def test_without_a_key_the_message_is_exactly_as_it_was(self) -> None:
+        # Not having set this up is the ordinary state, and it must cost nothing
+        # and add nothing -- no line, and no call to Google.
+        with mock.patch.dict("os.environ", {"TELEMETRY_OCR_GOOGLE_MAPS_KEY": ""}):
+            text = await self.text_of_a_send()
+        self.assertIn("google.com/maps?q=", text)
+        self.assertNotIn("ที่อยู่", text)
+        self.assertNotIn("หาที่อยู่ไม่ได้", text)
+        self.assertEqual(self.lookups, [])
