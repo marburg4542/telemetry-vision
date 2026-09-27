@@ -167,6 +167,7 @@ class Place:
     landmark: str = ""
     landmark_m: float = 0.0
     landmark_bearing: str = ""
+    plus_code: str = ""
     note: str = ""
 
     @property
@@ -204,6 +205,13 @@ class Place:
                 f"      ห่างจาก {self.landmark} {_distance_text(self.landmark_m)} "
                 f"ไปทางทิศ{self.landmark_bearing}"
             )
+        elif not self.road and self.plus_code:
+            # Neither a road nor anything named: three of the five points tried
+            # over this flight area. The plus code is the one thing left that a
+            # person can type into Maps and be taken to the spot, and it is in
+            # the answer already.
+            where = self.province or self.district
+            lines.append(f"      รหัสพิกัด (Plus Code): {self.plus_code} {where}".rstrip())
         if self.note:
             lines.append(f"      ({self.note})")
         return lines
@@ -413,6 +421,7 @@ def parse_response(payload: dict[str, Any], latitude: float, longitude: float) -
 
     landmark, distance, bearing = _landmark(results, latitude, longitude)
     return Place(
+        plus_code=_plus_code(payload),
         house_number=found.get("house_number", ""),
         road=found.get("road", ""),
         subdistrict=found.get("subdistrict", ""),
@@ -422,6 +431,25 @@ def parse_response(payload: dict[str, Any], latitude: float, longitude: float) -
         landmark_m=distance,
         landmark_bearing=bearing,
     )
+
+
+def _plus_code(payload: dict[str, Any]) -> str:
+    """The short plus code, e.g. V2CC+8F.
+
+    Google gives it as a compound code whose tail repeats the address the lines
+    above already carry, so only the code itself is kept; the province is put
+    back beside it, which is what Maps needs to place a short code. The global
+    code is the fallback because it stands on its own anywhere.
+    """
+    block = payload.get("plus_code")
+    if not isinstance(block, dict):
+        return ""
+    compound = str(block.get("compound_code") or "").strip()
+    if compound:
+        head = compound.split()[0]
+        if _PLUS_CODE.match(head):
+            return head
+    return str(block.get("global_code") or "").strip()
 
 
 def _landmark(

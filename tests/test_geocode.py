@@ -142,6 +142,10 @@ def upcountry() -> dict:
     ]
     return {
         "status": "OK",
+        "plus_code": {
+            "compound_code": "V2CC+8F ตำบล สุรนารี อำเภอเมืองนครราชสีมา นครราชสีมา ประเทศไทย",
+            "global_code": "7P64V2CC+8F",
+        },
         "results": [
             {
                 "types": ["premise", "street_address"],
@@ -191,9 +195,29 @@ class RealAnswerTests(unittest.TestCase):
         place = parse_response(upcountry(), 14.870783, 102.021236)
         self.assertEqual(place.road, "")
         self.assertEqual(
-            place.lines(),
-            ["      ที่อยู่: ต.สุรนารี อ.เมืองนครราชสีมา จ.นครราชสีมา (ไม่มีชื่อถนนในฐานข้อมูล)"],
+            place.lines()[0],
+            "      ที่อยู่: ต.สุรนารี อ.เมืองนครราชสีมา จ.นครราชสีมา (ไม่มีชื่อถนนในฐานข้อมูล)",
         )
+
+    def test_with_no_road_and_nothing_named_the_plus_code_is_what_is_left(self) -> None:
+        """Three of the five points tried over this flight area end up here.
+
+        A tambon alone cannot be driven to. The code is already in the answer,
+        and it is typed into Maps the same way an address is.
+        """
+        place = parse_response(upcountry(), 14.870783, 102.021236)
+        self.assertEqual(
+            place.lines()[1], "      รหัสพิกัด (Plus Code): V2CC+8F นครราชสีมา"
+        )
+        # The compound code's tail repeats the address above it; only the code
+        # itself is kept.
+        self.assertNotIn("ตำบล สุรนารี อำเภอ", place.lines()[1])
+
+    def test_a_named_road_leaves_the_plus_code_out(self) -> None:
+        # It is a fallback, not a second address line.
+        payload = upcountry()
+        payload["results"][1]["address_components"][0]["long_name"] = "ทางหลวงชนบท นม.1020"
+        self.assertEqual(len(parse_response(payload, 14.858, 102.016).lines()), 1)
 
     def test_a_plus_code_is_not_offered_as_a_landmark(self) -> None:
         """It is a locator, not a place anyone can be told to drive towards.
