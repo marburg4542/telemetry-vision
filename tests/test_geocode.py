@@ -126,6 +126,93 @@ class ParseTests(unittest.TestCase):
         self.assertIn("API key not valid", parse_response(payload, *TARGET).lines()[0])
 
 
+def upcountry() -> dict:
+    """A real answer, trimmed: the flight area north-west of Nakhon Ratchasima.
+
+    Kept because every assumption this file started with was wrong about it.
+    The tambon arrives as `locality` with the amphoe's `administrative_area_
+    level_2` behind it in the same result, the road is "Unnamed Road" even in a
+    Thai response, and the nearest thing to a landmark is a plus code.
+    """
+    areas = [
+        {"long_name": "ตำบล สุรนารี", "types": ["locality", "political"]},
+        {"long_name": "อำเภอเมืองนครราชสีมา", "types": ["administrative_area_level_2", "political"]},
+        {"long_name": "นครราชสีมา", "types": ["administrative_area_level_1", "political"]},
+        {"long_name": "ประเทศไทย", "types": ["country", "political"]},
+    ]
+    return {
+        "status": "OK",
+        "results": [
+            {
+                "types": ["premise", "street_address"],
+                "formatted_address": "V2CC+MQP ตำบล สุรนารี อำเภอเมืองนครราชสีมา นครราชสีมา 30000",
+                "geometry": {"location": {"lat": 14.870783, "lng": 102.021236}},
+                "address_components": [
+                    {"long_name": "V2CC+MQP", "types": ["plus_code"]},
+                    *areas,
+                ],
+            },
+            {
+                "types": ["route"],
+                "formatted_address": "Unnamed Road, ตำบล สุรนารี อำเภอเมืองนครราชสีมา นครราชสีมา",
+                "geometry": {"location": {"lat": 14.870783, "lng": 102.021236}},
+                "address_components": [
+                    {"long_name": "Unnamed Road", "types": ["route"]},
+                    *areas,
+                ],
+            },
+            {
+                "types": ["administrative_area_level_3", "political"],
+                "formatted_address": "สุรนารี อำเภอเมืองนครราชสีมา นครราชสีมา",
+                "geometry": {"location": {"lat": 14.87, "lng": 102.02}},
+                "address_components": [
+                    {"long_name": "สุรนารี", "types": ["administrative_area_level_3", "political"]},
+                    *areas[1:],
+                ],
+            },
+        ],
+    }
+
+
+class RealAnswerTests(unittest.TestCase):
+    def test_the_tambon_does_not_end_up_in_the_amphoes_place(self) -> None:
+        """`locality` and `administrative_area_level_2` sit in the same result.
+
+        Taking whichever component came first gave "ต.สุรนารี อ.สุรนารี", which
+        reads as a real address and names the wrong amphoe.
+        """
+        place = parse_response(upcountry(), 14.870783, 102.021236)
+        self.assertEqual(place.subdistrict, "สุรนารี")
+        self.assertEqual(place.district, "เมืองนครราชสีมา")
+        self.assertEqual(place.province, "นครราชสีมา")
+
+    def test_an_unnamed_road_is_no_road(self) -> None:
+        # Printing Google's placeholder gave the line "ถ.Unnamed Road".
+        place = parse_response(upcountry(), 14.870783, 102.021236)
+        self.assertEqual(place.road, "")
+        self.assertEqual(
+            place.lines(),
+            ["      ที่อยู่: ต.สุรนารี อ.เมืองนครราชสีมา จ.นครราชสีมา (ไม่มีชื่อถนนในฐานข้อมูล)"],
+        )
+
+    def test_a_plus_code_is_not_offered_as_a_landmark(self) -> None:
+        """It is a locator, not a place anyone can be told to drive towards.
+
+        The premise result carries one, and the fallback that read the head of
+        `formatted_address` turned it into "ห่างจาก V2CC+MQP ตำบล สุรนารี
+        อำเภอเมืองนครราชสีมา ... 130 ม."
+        """
+        place = parse_response(upcountry(), 14.870783, 102.021236)
+        self.assertEqual(place.landmark, "")
+
+    def test_a_named_road_still_comes_through(self) -> None:
+        # The same flight, 1.4 km south: ทางหลวงชนบท นม.1020.
+        payload = upcountry()
+        payload["results"][1]["address_components"][0]["long_name"] = "ทางหลวงชนบท นม.1020"
+        place = parse_response(payload, 14.858, 102.016)
+        self.assertIn("ทางหลวงชนบท นม.1020 ต.สุรนารี", place.address())
+
+
 class MathTests(unittest.TestCase):
     def test_distance_and_bearing(self) -> None:
         self.assertAlmostEqual(distance_m(*TARGET, *TEMPLE), 420, delta=15)

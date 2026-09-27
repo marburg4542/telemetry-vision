@@ -26,6 +26,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
@@ -112,6 +113,11 @@ _PREFIXES = (
     "ทางหลวงหมายเลข",
     "ซอย",
 )
+
+_PLACEHOLDER_NAMES = frozenset({"unnamed road", "ถนนไม่มีชื่อ", "ไม่มีชื่อ"})
+
+# A plus code, e.g. V2CC+MQP: Google's fallback where nothing is named.
+_PLUS_CODE = re.compile(r"^[0-9A-Z]{4,8}\+[0-9A-Z]{2,3}\b")
 
 _COMPASS = (
     "เหนือ",
@@ -378,26 +384,32 @@ def parse_response(payload: dict[str, Any], latitude: float, longitude: float) -
         message = str(payload.get("error_message") or "").strip()
         return Place(note=f"{note} · {message}" if message else note)
 
+    # The preferred type for a slot wins over a later one wherever it appears,
+    # which is why the types are the outer loop. Around Nakhon Ratchasima one
+    # result carries both `locality` ("ตำบล สุรนารี") and
+    # `administrative_area_level_2` ("อำเภอเมืองนครราชสีมา"), with the locality
+    # first; taking whichever came first in the component list put the tambon's
+    # name in the amphoe's place.
     found: dict[str, str] = {}
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        components = result.get("address_components")
-        if not isinstance(components, list):
-            continue
-        for slot, types in _SLOTS:
-            if found.get(slot):
-                continue
-            for component in components:
-                if not isinstance(component, dict):
+    for slot, types in _SLOTS:
+        for wanted in types:
+            for result in results:
+                if not isinstance(result, dict):
                     continue
-                kinds = component.get("types") or []
-                if not isinstance(kinds, list) or not set(kinds) & set(types):
-                    continue
-                name = _strip_prefix(str(component.get("long_name") or "").strip())
-                if name:
-                    found[slot] = name
+                for component in result.get("address_components") or []:
+                    if not isinstance(component, dict):
+                        continue
+                    kinds = component.get("types") or []
+                    if not isinstance(kinds, list) or wanted not in kinds:
+                        continue
+                    name = _strip_prefix(str(component.get("long_name") or "").strip())
+                    if name and not _is_placeholder(name):
+                        found[slot] = name
+                        break
+                if found.get(slot):
                     break
+            if found.get(slot):
+                break
 
     landmark, distance, bearing = _landmark(results, latitude, longitude)
     return Place(
@@ -443,17 +455,22 @@ def _landmark(
 
 
 def _landmark_name(result: dict[str, Any]) -> str:
-    """The name Google gave the place, not the address it sits at."""
+    """The name Google gave the place, or nothing.
+
+    Only a component Google itself marks as a place counts. The fallback used
+    to be the head of `formatted_address`, which outside town is a plus code
+    followed by the whole address -- "V2CC+MQP ตำบล สุรนารี อำเภอเมือง..." was
+    being offered as the landmark to drive to.
+    """
     for component in result.get("address_components") or []:
         if not isinstance(component, dict):
             continue
         kinds = set(component.get("types") or [])
         if kinds & _LANDMARK_TYPES:
             name = str(component.get("long_name") or "").strip()
-            if name:
+            if name and not _is_placeholder(name):
                 return name
-    formatted = str(result.get("formatted_address") or "").strip()
-    return formatted.split(",")[0].strip()
+    return ""
 
 
 def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -498,6 +515,20 @@ def _road_label(road: str) -> str:
     if road[:1].isdigit():
         return f"ทางหลวง {road}"
     return f"ถ.{road}"
+
+
+def _is_placeholder(name: str) -> bool:
+    """Google's way of saying it has no name for this, dressed as a name.
+
+    "Unnamed Road" is what a route with no name comes back as, even in a Thai
+    response, and printing it gives "ถ.Unnamed Road". A plus code is a real
+    locator but not something to drive towards by name; it is the map link's
+    job, and the link is already in the message.
+    """
+    stripped = name.strip()
+    if stripped.lower() in _PLACEHOLDER_NAMES:
+        return True
+    return bool(_PLUS_CODE.match(stripped))
 
 
 def _strip_prefix(name: str) -> str:
